@@ -165,4 +165,4 @@ Linux builds are maintained separately at [MysteriousJose/ScorePlus-Linux](https
 
 ---
 
-<sub>ScorePlus · Developer Guide · Operator Manual: <a href="https://github.com/LHUltimate/ScorePlus/wiki">github.com/LHUltimate/ScorePlus/wiki</a></sub>
+<sub>ScorePlus · Developer Guide · [Operator Manual](https://github.com/LHUltimate/ScorePlus/wiki)
