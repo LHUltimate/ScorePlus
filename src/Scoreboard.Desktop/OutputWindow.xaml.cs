@@ -30,9 +30,9 @@ public partial class OutputWindow : Window
     Grid? _annotationSurface;
     Border? _annotationToolbar;
     Border? _annotationColorSwatch;
-    TextBlock? _annotationStatus;
     TextBox? _annotationWidthBox;
     ComboBox? _annotationFadePicker;
+    Button? _penToolButton, _highlighterToolButton, _lineToolButton, _arrowToolButton, _eraserToolButton;
     DispatcherTimer? _annotationFadeTimer;
     bool _highlighter;
     bool _eraser;
@@ -108,7 +108,7 @@ public partial class OutputWindow : Window
     {
         if (_annotationLayer is not null) _annotationLayer.Visibility = Visibility.Collapsed;
         if (_annotationToolbar is not null) _annotationToolbar.Visibility = Visibility.Collapsed;
-        ClearAnnotations();
+        ClearAnnotationsImmediately();
         UpdateAnnotationTitle();
     }
 
@@ -192,11 +192,16 @@ public partial class OutputWindow : Window
         };
         _annotationToolbar = bar;
         var panel = (StackPanel)bar.Child;
-        panel.Children.Add(ToolbarButton("Pen", (_, _) => SetAnnotationTool(highlighter: false)));
-        panel.Children.Add(ToolbarButton("Highlighter", (_, _) => SetAnnotationTool(highlighter: true)));
-        panel.Children.Add(ToolbarButton("Line", (_, _) => SetAnnotationShape(AnnotationToolMode.Line)));
-        panel.Children.Add(ToolbarButton("Arrow", (_, _) => SetAnnotationShape(AnnotationToolMode.Arrow)));
-        panel.Children.Add(ToolbarButton("Eraser", (_, _) => SetAnnotationEraser()));
+        _penToolButton = ToolbarButton("Pen", (_, _) => SetAnnotationTool(highlighter: false));
+        _highlighterToolButton = ToolbarButton("Highlighter", (_, _) => SetAnnotationTool(highlighter: true));
+        _lineToolButton = ToolbarButton("Line", (_, _) => SetAnnotationShape(AnnotationToolMode.Line));
+        _arrowToolButton = ToolbarButton("Arrow", (_, _) => SetAnnotationShape(AnnotationToolMode.Arrow));
+        _eraserToolButton = ToolbarButton("Eraser", (_, _) => SetAnnotationEraser());
+        panel.Children.Add(_penToolButton);
+        panel.Children.Add(_highlighterToolButton);
+        panel.Children.Add(_lineToolButton);
+        panel.Children.Add(_arrowToolButton);
+        panel.Children.Add(_eraserToolButton);
         panel.Children.Add(ToolbarSeparator());
 
         var colour = ToolbarButton("Colour", (_, _) => ChooseAnnotationColour());
@@ -216,8 +221,8 @@ public partial class OutputWindow : Window
         _annotationWidthBox = new TextBox
         {
             Text = _annotationWidth.ToString("0.#", CultureInfo.InvariantCulture),
-            Width = 44, MinWidth = 44, MaxWidth = 44, Height = 24,
-            FontSize = 11, Padding = new Thickness(2, 0, 2, 0),
+            Width = 50, MinWidth = 50, MaxWidth = 50, Height = 32,
+            FontSize = 13, Padding = new Thickness(2, 0, 2, 0),
             Margin = new Thickness(2, 0, 2, 0), TextAlignment = TextAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
             Background = new SolidColorBrush(Color.FromRgb(11, 17, 24)),
@@ -231,7 +236,7 @@ public partial class OutputWindow : Window
                 || width < 1 || width > 24) return;
             _annotationWidth = width;
             ApplyAnnotationDrawingAttributes();
-            RefreshAnnotationStatus();
+            RefreshToolButtonSelection();
             SaveAnnotationPreferences();
         };
         _annotationWidthBox.LostFocus += (_, _) => CommitAnnotationWidth();
@@ -251,7 +256,7 @@ public partial class OutputWindow : Window
         });
         _annotationFadePicker = new ComboBox
         {
-            Width = 82, Height = 24, MinHeight = 24, FontSize = 10,
+            Width = 92, Height = 32, MinHeight = 32, FontSize = 11,
             Padding = new Thickness(3, 0, 3, 0), Margin = new Thickness(2, 0, 2, 0),
             VerticalContentAlignment = VerticalAlignment.Center,
             ItemsSource = new[] { "0.5 s", "1 s", "1.5 s", "2 s", "3 s", "5 s", "10 s", "Permanent" },
@@ -273,14 +278,7 @@ public partial class OutputWindow : Window
         panel.Children.Add(ToolbarButton("Undo", (_, _) => UndoAnnotation()));
         panel.Children.Add(ToolbarButton("Clear", (_, _) => ClearAnnotations()));
         panel.Children.Add(ToolbarButton("Done", (_, _) => CloseAnnotationTools()));
-        _annotationStatus = new TextBlock
-        {
-            Foreground = new SolidColorBrush(Color.FromRgb(147, 160, 178)),
-            FontSize = 10, Margin = new Thickness(10, 0, 2, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        panel.Children.Add(_annotationStatus);
-        RefreshAnnotationStatus();
+        RefreshToolButtonSelection();
         _annotationLayer.Children.Add(bar);
         SyncAnnotationSurface();
         root.Children.Add(_annotationLayer);
@@ -288,9 +286,40 @@ public partial class OutputWindow : Window
 
     Button ToolbarButton(string text, RoutedEventHandler click)
     {
-        var button = new Button { Content = text, FontSize = 11, Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(2, 0, 2, 0) };
+        var button = new Button
+        {
+            Content = text, FontSize = 13, FontWeight = FontWeights.SemiBold,
+            MinWidth = 38, MinHeight = 34, Padding = new Thickness(11, 5, 11, 5),
+            Margin = new Thickness(3, 0, 3, 0),
+            Background = new SolidColorBrush(Color.FromRgb(25, 34, 46)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(58, 69, 82)),
+            BorderThickness = new Thickness(1), Foreground = new SolidColorBrush(Color.FromRgb(226, 233, 242))
+        };
         button.Click += click;
         return button;
+    }
+
+    /// <summary>Highlights the tool that will draw the next stroke, and dims the others.</summary>
+    void RefreshToolButtonSelection()
+    {
+        void Set(Button? button, bool selected)
+        {
+            if (button is null) return;
+            button.Background = new SolidColorBrush(selected
+                ? Color.FromRgb(11, 107, 80)
+                : Color.FromRgb(25, 34, 46));
+            button.BorderBrush = new SolidColorBrush(selected
+                ? Color.FromRgb(56, 215, 163)
+                : Color.FromRgb(58, 69, 82));
+            // Keep the border width and weight fixed so selecting a tool never shifts the toolbar.
+            button.BorderThickness = new Thickness(1);
+            button.FontWeight = FontWeights.SemiBold;
+        }
+        Set(_penToolButton, !_eraser && !_highlighter && _annotationMode == AnnotationToolMode.Freehand);
+        Set(_highlighterToolButton, !_eraser && _highlighter && _annotationMode == AnnotationToolMode.Freehand);
+        Set(_lineToolButton, !_eraser && _annotationMode == AnnotationToolMode.Line);
+        Set(_arrowToolButton, !_eraser && _annotationMode == AnnotationToolMode.Arrow);
+        Set(_eraserToolButton, _eraser);
     }
 
     Border ToolbarSeparator() => new()
@@ -309,7 +338,7 @@ public partial class OutputWindow : Window
         // Custom strokes keep the shared collection live. The eraser still uses InkCanvas hit-testing.
         _ink.EditingMode = eraser ? InkCanvasEditingMode.EraseByStroke : InkCanvasEditingMode.None;
         if (!eraser) ApplyAnnotationDrawingAttributes();
-        RefreshAnnotationStatus();
+        RefreshToolButtonSelection();
     }
 
     void Ink_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -337,9 +366,13 @@ public partial class OutputWindow : Window
         var point = e.GetPosition(_ink);
         if (_annotationMode != AnnotationToolMode.Freehand)
         {
-            _activeStroke.StylusPoints.Clear();
-            _activeStroke.StylusPoints.Add(new StylusPoint(_shapeStart.X, _shapeStart.Y));
-            _activeStroke.StylusPoints.Add(new StylusPoint(point.X, point.Y));
+            // A Stroke's attached StylusPointCollection must never be emptied: WPF throws
+            // "StylusPointCollection cannot be empty when attached to a stroke". The live shape
+            // already starts with its anchor point, so add the moving end once and then replace it.
+            if (_activeStroke.StylusPoints.Count < 2)
+                _activeStroke.StylusPoints.Add(new StylusPoint(point.X, point.Y));
+            else
+                _activeStroke.StylusPoints[1] = new StylusPoint(point.X, point.Y);
             _lastAnnotationPoint = point;
             e.Handled = true;
             return;
@@ -367,7 +400,7 @@ public partial class OutputWindow : Window
         if (_ink?.IsMouseCaptured == true) _ink.ReleaseMouseCapture();
         _annotationBoard.EndStroke();
         RestartAnnotationHold();
-        _annotationMode = AnnotationToolMode.Freehand;
+        // Keep the chosen tool active: the operator usually draws several lines or arrows in a row.
     }
 
     /// <summary>
@@ -458,24 +491,6 @@ public partial class OutputWindow : Window
         }
     }
 
-    void RefreshAnnotationStatus()
-    {
-        if (_annotationStatus is null) return;
-        _annotationStatus.Text = _eraser
-            ? "ERASER · click a stroke"
-            : _annotationMode == AnnotationToolMode.Arrow
-                ? $"ARROW · {_annotationWidth:0.#} px"
-                : _annotationMode == AnnotationToolMode.Line
-                    ? $"LINE · {_annotationWidth:0.#} px"
-            : _highlighter
-                ? $"HIGHLIGHTER · {_annotationWidth:0.#} px · {AnnotationFadeLabel}"
-                : $"PEN · {_annotationWidth:0.#} px · {AnnotationFadeLabel}";
-    }
-
-    string AnnotationFadeLabel => _annotationBoard.Hold <= TimeSpan.Zero
-        ? "permanent"
-        : $"{_annotationBoard.Hold.TotalSeconds:0.#} s fade";
-
     static TimeSpan AnnotationHoldFromSeconds(double seconds) =>
         !double.IsFinite(seconds) || seconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(Math.Clamp(seconds, 0.5, 10));
 
@@ -496,7 +511,7 @@ public partial class OutputWindow : Window
         if (_annotationFadeTimer is not null) _annotationFadeTimer.Interval = _annotationBoard.Hold;
         SyncAnnotationFadePicker();
         RestartAnnotationHold();
-        RefreshAnnotationStatus();
+        RefreshToolButtonSelection();
     }
 
     void SaveAnnotationPreferences()
@@ -521,7 +536,7 @@ public partial class OutputWindow : Window
         if (_ink is null) return;
         SetAnnotationTool(highlighter: false);
         _annotationMode = mode;
-        RefreshAnnotationStatus();
+        RefreshToolButtonSelection();
     }
 
     void ChooseAnnotationColour()
@@ -534,7 +549,9 @@ public partial class OutputWindow : Window
             {
                 _annotationColor = colour;
                 if (_annotationColorSwatch is not null) _annotationColorSwatch.Background = new SolidColorBrush(colour);
-                SetAnnotationTool(_highlighter);
+                // The colour is a setting, not a tool change: keep Line or Arrow selected.
+                ApplyAnnotationDrawingAttributes();
+                RefreshToolButtonSelection();
             }
         }
         catch { }
@@ -545,7 +562,7 @@ public partial class OutputWindow : Window
         _annotationWidth = Math.Clamp(_annotationWidth + delta, 1, 24);
         SyncAnnotationWidthBox();
         ApplyAnnotationDrawingAttributes();
-        RefreshAnnotationStatus();
+        RefreshToolButtonSelection();
         SaveAnnotationPreferences();
     }
 
@@ -556,7 +573,7 @@ public partial class OutputWindow : Window
             _annotationWidth = Math.Clamp(width, 1, 24);
         SyncAnnotationWidthBox();
         ApplyAnnotationDrawingAttributes();
-        RefreshAnnotationStatus();
+        RefreshToolButtonSelection();
         SaveAnnotationPreferences();
     }
 
@@ -568,7 +585,15 @@ public partial class OutputWindow : Window
         finally { _settingAnnotationWidth = false; }
     }
 
+    /// <summary>The Clear button fades the ink out just like the end of the hold timer.</summary>
     void ClearAnnotations()
+    {
+        if (_ink is null || _ink.Strokes.Count == 0) return;
+        BeginAnnotationFade();
+    }
+
+    /// <summary>Used when the drawing layer is closing: there is nothing left to watch fade.</summary>
+    void ClearAnnotationsImmediately()
     {
         _annotationFadeTimer?.Stop();
         _annotationFading = true;

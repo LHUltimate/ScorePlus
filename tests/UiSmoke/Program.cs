@@ -3504,8 +3504,34 @@ internal static class Program
                 throw new Exception($"FAIL: the draw window is titled {annotateOutput.Title}");
             var arrowTool = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Arrow")
                 ?? throw new Exception("FAIL: the drawing tools have no arrow tool");
-            if (!FindAll<Button>(annotateOutput).Any(button => (button.Content as string) == "Line"))
-                throw new Exception("FAIL: the drawing tools have no line tool");
+            var lineTool = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Line")
+                ?? throw new Exception("FAIL: the drawing tools have no line tool");
+            var penTool = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Pen")
+                ?? throw new Exception("FAIL: the drawing tools have no pen tool");
+            if (arrowTool.ActualHeight < 32 || arrowTool.FontSize < 13)
+                throw new Exception($"FAIL: drawing tools are too small ({arrowTool.ActualHeight:0}px, {arrowTool.FontSize:0}pt)");
+            bool ToolSelected(Button button) => button.BorderBrush is SolidColorBrush brush
+                && brush.Color == Color.FromRgb(56, 215, 163);
+            arrowTool.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            annotateOutput.UpdateLayout();
+            if (!ToolSelected(arrowTool) || ToolSelected(lineTool))
+                throw new Exception("FAIL: the arrow tool does not show that it is selected");
+            if (FindAll<TextBlock>(annotateOutput).Any(text => text.Text.StartsWith("PEN ·", StringComparison.Ordinal)))
+                throw new Exception("FAIL: the drawing toolbar still prints its status beside Done");
+            penTool.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            annotateOutput.UpdateLayout();
+            if (!ToolSelected(penTool) || ToolSelected(arrowTool))
+                throw new Exception("FAIL: selecting the pen does not clear the arrow selection");
+            // The arrow must survive a completed stroke, ready for the next one.
+            arrowTool.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            typeof(OutputWindow).GetField("_drawingStroke", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(annotateOutput, true);
+            typeof(OutputWindow).GetMethod("FinishLiveStroke", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(annotateOutput, null);
+            if (typeof(OutputWindow).GetField("_annotationMode", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(annotateOutput)?.ToString() != "Arrow")
+                throw new Exception("FAIL: drawing one arrow reset the tool back to the pen");
+            penTool.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             DependencyObject toolbarOwner = arrowTool;
             while (toolbarOwner is not null and not Border) toolbarOwner = VisualTreeHelper.GetParent(toolbarOwner);
             if (toolbarOwner is not Border annotationBar || annotationBar.VerticalAlignment != VerticalAlignment.Bottom)
@@ -3537,6 +3563,14 @@ internal static class Program
             Pump(TimeSpan.FromMilliseconds(1200));
             if (ink.Strokes.Count != 1)
                 throw new Exception("FAIL: permanent ink was cleared by the fade timer");
+            var clearInk = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Clear")
+                ?? throw new Exception("FAIL: the drawing toolbar has no Clear button");
+            clearInk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            if (ink.Strokes.Count != 1)
+                throw new Exception("FAIL: Clear removed the ink immediately instead of fading it out");
+            Pump(TimeSpan.FromMilliseconds(300));
+            if (ink.Strokes.Count != 0)
+                throw new Exception("FAIL: Clear did not remove the ink after its fade");
             fadePicker.SelectedItem = "0.5 s";
             Pump(TimeSpan.FromMilliseconds(900));
             if (ink.Strokes.Count != 0)
