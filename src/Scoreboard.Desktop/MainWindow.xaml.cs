@@ -139,6 +139,12 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     public MainWindow(LaunchMode? mode = null, string? gamePath = null, bool waitForLaunch = false)
     {
         InitializeComponent();
+        // A 720p laptop or a portrait panel must still be able to open the window. The console
+        // reflows and scrolls when it is short; this keeps the outer frame from insisting on a
+        // minimum height the monitor does not have.
+        var work = SystemParameters.WorkArea;
+        MinWidth = Math.Min(MinWidth, Math.Max(720, work.Width - 24));
+        MinHeight = Math.Min(MinHeight, Math.Max(520, work.Height - 48));
         // Follow the window onto portrait monitors and laptops at 150% scaling instead of hanging
         // the console off the screen; the console itself is reflowable down to its minimum width.
         ScreenFit.Track(this);

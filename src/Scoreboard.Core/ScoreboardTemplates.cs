@@ -19,8 +19,8 @@ public static class ScoreboardTemplates
     /// </summary>
     static readonly Regex SportToken = new(@"\{\{SPORT:(?<id>[^}]+)\}\}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public static string Bind(string content, GameState state, string? periodFormat = null, bool downCaps = false, bool playClockColon = false, bool gameClockLeadingZero = true, int clockDecimals = 0) =>
-        PlayerToken.Replace(StatToken.Replace(SportToken.Replace(ReplaceFixed(content, state, periodFormat, downCaps, playClockColon, gameClockLeadingZero, clockDecimals), match =>
+    public static string Bind(string content, GameState state, string? periodFormat = null, bool downCaps = false, bool playClockColon = false, bool gameClockLeadingZero = true, int clockDecimals = 0, bool recordIncludesDivision = false) =>
+        PlayerToken.Replace(StatToken.Replace(SportToken.Replace(ReplaceFixed(content, state, periodFormat, downCaps, playClockColon, gameClockLeadingZero, clockDecimals, recordIncludesDivision), match =>
         {
             var control = SportValues.FindControl(state, match.Groups["id"].Value.Trim());
             return control is null ? string.Empty : SportValues.Display(state, control);
@@ -48,7 +48,7 @@ public static class ScoreboardTemplates
             return player?.Field(field) ?? string.Empty;
         });
 
-    static string ReplaceFixed(string content, GameState state, string? periodFormat, bool downCaps, bool playClockColon, bool gameClockLeadingZero, int clockDecimals = 0) => content
+    static string ReplaceFixed(string content, GameState state, string? periodFormat, bool downCaps, bool playClockColon, bool gameClockLeadingZero, int clockDecimals = 0, bool recordIncludesDivision = false) => content
         // Team names render exactly as the operator typed them: full text, original case.
         .Replace("{{HOME_TEAM}}", state.HomeTeam)
         .Replace("{{AWAY_TEAM}}", state.AwayTeam)
@@ -56,9 +56,10 @@ public static class ScoreboardTemplates
         .Replace("{{AWAY_ABBR}}", state.AwayAbbreviation)
         .Replace("{{HOME_MASCOT}}", state.HomeMascot)
         .Replace("{{AWAY_MASCOT}}", state.AwayMascot)
-        // Season record from team details, e.g. 8-2. A division record prints in brackets after it.
-        .Replace("{{HOME_RECORD}}", state.HomeRecordDisplay)
-        .Replace("{{AWAY_RECORD}}", state.AwayRecordDisplay)
+        // Season record from team details, e.g. 8-2. A division record is optional per element,
+        // so the default record item prints just 8-2 and the operator can ask for 8-2 (2-1).
+        .Replace("{{HOME_RECORD}}", recordIncludesDivision ? state.HomeRecordDisplay : state.HomeRecord)
+        .Replace("{{AWAY_RECORD}}", recordIncludesDivision ? state.AwayRecordDisplay : state.AwayRecord)
         .Replace("{{HOME_DIVISION_RECORD}}", state.HomeDivisionRecord)
         .Replace("{{AWAY_DIVISION_RECORD}}", state.AwayDivisionRecord)
         .Replace("{{HOME_RANKING}}", state.HomeRanking)

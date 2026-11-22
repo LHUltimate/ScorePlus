@@ -167,6 +167,11 @@ public sealed class ScorebugElement
     /// <summary>Corner radius for a rectangle shape, in design pixels. Zero gives square corners.</summary>
     public double CornerRadius { get; set; } = 8;
     public string Content { get; set; } = "TEXT";
+    /// <summary>
+    /// For a team record token: show the division record in parentheses after the overall record.
+    /// Off by default, so a record item prints the regular record unless the operator asks for both.
+    /// </summary>
+    public bool RecordIncludesDivision { get; set; }
     public string? ImagePath { get; set; }
 
     /// <summary>

@@ -901,7 +901,7 @@ public partial class RosterPanel : UserControl
     public void CreateRoster()
     {
         if (_engine is null) return;
-        var name = TextPromptWindow.Ask(Window.GetWindow(this), "New roster", "Roster name",
+        var name = TextPromptWindow.Ask(Window.GetWindow(this), "New roster", "Roster Name",
             _home ? "Home roster" : "Visitors roster");
         if (name is null) return;
         var roster = RosterStore.Book.Add(name);
@@ -916,7 +916,7 @@ public partial class RosterPanel : UserControl
     void RenameRoster_Click(object sender, RoutedEventArgs e)
     {
         if (_engine is null || _roster is null) return;
-        var name = TextPromptWindow.Ask(Window.GetWindow(this), "Rename roster", "Roster name", _roster.Name);
+        var name = TextPromptWindow.Ask(Window.GetWindow(this), "Rename roster", "Roster Name", _roster.Name);
         if (name is null || name == _roster.Name) return;
         _roster.Name = name;
         SaveAndReload();

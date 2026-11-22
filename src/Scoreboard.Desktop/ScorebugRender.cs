@@ -149,7 +149,7 @@ internal static class ScorebugRender
         // after the graphic was built appears immediately instead of waiting for a rebuild.
         if (item.Kind == ScorebugElementKind.Logo) return new ScorebugLogoView(item, state?.Invoke(), showVideoPlaceholder);
         if (item.Kind == ScorebugElementKind.Shape) return CreateShape(item, state?.Invoke());
-        var text = state is null ? item.Content : ScoreboardTemplates.Bind(item.Content, state(), item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals);
+        var text = state is null ? item.Content : ScoreboardTemplates.Bind(item.Content, state(), item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision);
         return MakeText(item, text, state?.Invoke());
     }
 
@@ -425,7 +425,7 @@ public sealed class TickerView : Grid, IDisposable
             return;
         }
         if (_rotationActive) StopRotation();
-        var raw = game is null ? item.Content : ScoreboardTemplates.Bind(item.Content, game, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals);
+        var raw = game is null ? item.Content : ScoreboardTemplates.Bind(item.Content, game, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision);
         raw = System.Text.RegularExpressions.Regex.Replace(raw ?? "", @"\s+", " ").Trim();
         var display = raw.Length == 0 ? " " : raw + "   \u2022   ";
         var foreground = Paint.Text(item, game);
@@ -2122,7 +2122,7 @@ public sealed class ScorebugIconView : Grid
         // value is set again.
         if (!string.IsNullOrWhiteSpace(_item.IconToken))
         {
-            var bound = _state is null ? string.Empty : ScoreboardTemplates.Bind(_item.IconToken, _state(), _item.PeriodFormat, _item.DownCaps, _item.PlayClockColon, _item.GameClockLeadingZero, _item.ClockDecimals);
+            var bound = _state is null ? string.Empty : ScoreboardTemplates.Bind(_item.IconToken, _state(), _item.PeriodFormat, _item.DownCaps, _item.PlayClockColon, _item.GameClockLeadingZero, _item.ClockDecimals, _item.RecordIncludesDivision);
             var showing = !string.IsNullOrWhiteSpace(bound)
                 && !string.Equals(bound.Trim(), "0", StringComparison.Ordinal)
                 && !bound.Trim().Equals("false", StringComparison.OrdinalIgnoreCase)

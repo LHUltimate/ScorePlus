@@ -236,6 +236,15 @@
             <CheckBox x:Name="CustomDeltaBox" Content="Add to the current value instead of replacing it"
                       Foreground="{DynamicResource MacroMutedBrush}" FontSize="10" Margin="0,6,0,0"/>
           </StackPanel>
+          <StackPanel x:Name="CopyValuePanel">
+            <TextBlock Text="CUSTOM VALUE TO UPDATE" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="CopyTargetBox" Style="{StaticResource MacroCombo}"/>
+            <TextBlock Text="VALUE TO COPY" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="CopySourceBox" Style="{StaticResource MacroCombo}"
+                      ToolTip="Any live game value: clocks, score, down, records, sport values, custom values or selected-player stats"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="For example, copy the Game clock into “Last ball snapped” when the snap happens. A custom-value clock also accepts a clock reading."/>
+          </StackPanel>
           <StackPanel x:Name="SidePanel">
             <TextBlock Text="SIDE" Style="{StaticResource MacroLabel}"/>
             <ComboBox x:Name="SideBox" Style="{StaticResource MacroCombo}" SelectionChanged="Side_Changed"/>

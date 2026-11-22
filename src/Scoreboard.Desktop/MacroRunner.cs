@@ -182,6 +182,8 @@ public sealed class MacroRunner
                 return true;
             case MacroActionKind.CustomValue:
                 return ChangeCustomValue(action);
+            case MacroActionKind.CopyValue:
+                return CopyValueToCustom(action);
             case MacroActionKind.ClockControl:
                 return ControlClock(action);
             case MacroActionKind.ClockMessage:
@@ -397,6 +399,25 @@ public sealed class MacroRunner
         if (stat is null) return false;
         if (action.Delta) _engine.AdjustStat(stat.Id, action.Value);
         else _engine.SetStat(stat.Id, action.Value);
+        return true;
+    }
+
+    /// <summary>
+    /// Copies a live game value into a custom value. The source is any binding offered by the
+    /// macro editor, so "last ball snapped" is simply {{GAME_CLOCK}} copied when the snap happens.
+    /// A clock destination accepts the clock text and keeps its own running state.
+    /// </summary>
+    bool CopyValueToCustom(MacroAction action)
+    {
+        var stat = _engine.State.Stats.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, action.Path, StringComparison.OrdinalIgnoreCase)
+            || (string.IsNullOrWhiteSpace(action.Path)
+                && string.Equals(candidate.Name, action.Label, StringComparison.OrdinalIgnoreCase)));
+        if (stat is null || string.IsNullOrWhiteSpace(action.Text)) return false;
+        var value = ScoreboardTemplates.Bind(action.Text, _engine.State,
+            recordIncludesDivision: true).Trim();
+        if (value.Length == 0) return false;
+        _engine.SetStatText(stat.Id, value);
         return true;
     }
 

@@ -443,6 +443,14 @@
             <ComboBox x:Name="PeriodFormatInput" Margin="10,0,10,4" SelectionChanged="Property_Changed"
                       ToolTip="How {{PERIOD}} prints on this element — Quarter 1, Q1, 1 or 1st"/>
           </StackPanel>
+          <StackPanel x:Name="TeamRecordSection">
+            <TextBlock Text="TEAM RECORD" Style="{StaticResource SectionTitle}"/>
+            <CheckBox x:Name="RecordDivisionInput" Content="Include the division record in parentheses" FontSize="11"
+                      Margin="10,2,10,2" Checked="Property_Changed" Unchecked="Property_Changed"
+                      ToolTip="Off prints 8-2. On prints 8-2 (2-1) when a division record is set in team details."/>
+            <TextBlock Text="Off by default. Use on an element that prints {{HOME_RECORD}} or {{AWAY_RECORD}}."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap" Margin="10,0,10,4"/>
+          </StackPanel>
           <StackPanel x:Name="DownFormatSection">
             <TextBlock Text="Down and distance for this element" Style="{StaticResource FieldLabel}"/>
             <CheckBox x:Name="DownCapsInput" Content="Print the down words in full caps" FontSize="11" Margin="10,2,10,2"

@@ -1149,7 +1149,7 @@ public sealed class ScorebugCanvasView : Grid
             if(!PrintsAClock(item.Content))continue;
             if(!_visuals.TryGetValue(item.Id,out var visual))continue;
             if(visual.Content is not ScorebugTextBlock block)continue;
-            var text=ScoreboardTemplates.Bind(item.Content,state,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals);
+            var text=ScoreboardTemplates.Bind(item.Content,state,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision);
             block.UpdateClockText(text);
             _shownText[item.Id]=text;
         }
@@ -1221,7 +1221,7 @@ public sealed class ScorebugCanvasView : Grid
             }
             if(visual.Content is ScorebugTextBlock block)
             {
-                var text=ScoreboardTemplates.Bind(item.Content,state,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals);
+                var text=ScoreboardTemplates.Bind(item.Content,state,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision);
                 block.ApplyStyle(item,state);
                 ShowValue(item,block,text);
             }

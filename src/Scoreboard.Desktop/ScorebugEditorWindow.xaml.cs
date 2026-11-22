@@ -1212,7 +1212,7 @@ public partial class ScorebugEditorWindow : Window
         {
             if(!_visuals.TryGetValue(item.Id,out var visual))continue;
             if(visual.Content is ScorebugTextBlock block)
-                ScorebugRender.ApplyToContent(block,item,_engine.State,ScoreboardTemplates.Bind(item.Content,_engine.State,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals));
+                ScorebugRender.ApplyToContent(block,item,_engine.State,ScoreboardTemplates.Bind(item.Content,_engine.State,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision));
             else if(visual.Content is ScorebugIconView iconView)
                 iconView.Update();
             else if(visual.Content is VideoSurface videoSurface)
@@ -1250,7 +1250,7 @@ public partial class ScorebugEditorWindow : Window
             else if(visual.Content is ScorebugTextBlock block)
             {
                 block.ApplyStyle(item,_engine.State);
-                block.UpdateText(ScoreboardTemplates.Bind(item.Content,_engine.State,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals),item.Transition,item.TransitionSeconds);
+                block.UpdateText(ScoreboardTemplates.Bind(item.Content,_engine.State,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision),item.Transition,item.TransitionSeconds);
             }
             else if(visual.Content is TickerView tickerView)
                 tickerView.Update(item,_engine.State);
@@ -1354,7 +1354,7 @@ public partial class ScorebugEditorWindow : Window
             PlayerBindingHint.Text="This text is not tied to a player yet. Pick a team, player and value above, or type any binding in CONTENT.";
             return;
         }
-        var printed=ScoreboardTemplates.Bind(ContentInput.Text,_engine.State,Selected?.PeriodFormat,DownCapsInput.IsChecked==true,PlayClockColonInput.IsChecked==true,GameClockLeadingZeroInput.IsChecked==true,Math.Max(0,ClockDecimalsInput.SelectedIndex));
+        var printed=ScoreboardTemplates.Bind(ContentInput.Text,_engine.State,Selected?.PeriodFormat,DownCapsInput.IsChecked==true,PlayClockColonInput.IsChecked==true,GameClockLeadingZeroInput.IsChecked==true,Math.Max(0,ClockDecimalsInput.SelectedIndex),Selected?.RecordIncludesDivision==true);
         PlayerBindingHint.Text=printed.Length==0
             ? "Prints nothing: that player or value is empty right now."
             : $"Prints now: \"{printed}\"";
@@ -1379,7 +1379,7 @@ public partial class ScorebugEditorWindow : Window
     {
         _loading=true;
         var e=Selected; var has=e is not null;
-        foreach(var control in new Control[]{NameInput,ContentInput,XInput,YInput,WidthInput,HeightInput,FontInput,FontInputSize,RotationInput,ColorInput,BackgroundInput,BorderWidthInput,BorderColorInput,BorderSourceInput,AnimationInput,TransitionInput,TransitionSpeedInput,ShapeInput,CornerRadiusInput,VisibleInput,TransparentBackgroundInput,MediaTagInput,PeriodFormatInput,DownCapsInput,PlayClockColonInput,GameClockLeadingZeroInput,ClockDecimalsInput,IconInput,IconCustomInput,IconTokenInput,IconOffsetXInput,IconOffsetYInput,IconColorInput,IconVisitorsInput,IconFlipInput,IconRotationInput,IconScaleInput,IconVerticalInput,IconFillInput,IconFillSourceInput,IconBorderWidthInput,IconBorderColorInput,IconBackgroundInput,IconUsedColorInput,IconOpacitySlider,TransitionShrinkInput,TransitionJumpHeightInput,TransitionJumpDirectionInput,ForegroundSourceInput,BackgroundSourceInput,LogoInput,PlayerPhotoSideInput,BoldInput,ItalicInput,UnderlineInput,StrikeInput,PreserveAspectInput,AspectInput,VideoCropLeftInput,VideoCropTopInput,VideoCropRightInput,VideoCropBottomInput,ChromaKeyInput,ChromaKeyToleranceInput,AudioDeviceInput,GradientInput,GradientSourceInput,GradientColorInput,GradientAngleInput,OpacitySlider,TextOpacitySlider,BackgroundOpacitySlider,BorderOpacitySlider,TextShadowInput,TextShadowColorInput,TextShadowOffsetInput,TextShadowSoftnessInput,TextShadowAngleInput,TextAlignInput,NestedLayoutInput,NestedAspectInput,TickerInput,TickerSpeedInput,TickerReverseInput})
+        foreach(var control in new Control[]{NameInput,ContentInput,XInput,YInput,WidthInput,HeightInput,FontInput,FontInputSize,RotationInput,ColorInput,BackgroundInput,BorderWidthInput,BorderColorInput,BorderSourceInput,AnimationInput,TransitionInput,TransitionSpeedInput,ShapeInput,CornerRadiusInput,VisibleInput,TransparentBackgroundInput,MediaTagInput,PeriodFormatInput,RecordDivisionInput,DownCapsInput,PlayClockColonInput,GameClockLeadingZeroInput,ClockDecimalsInput,IconInput,IconCustomInput,IconTokenInput,IconOffsetXInput,IconOffsetYInput,IconColorInput,IconVisitorsInput,IconFlipInput,IconRotationInput,IconScaleInput,IconVerticalInput,IconFillInput,IconFillSourceInput,IconBorderWidthInput,IconBorderColorInput,IconBackgroundInput,IconUsedColorInput,IconOpacitySlider,TransitionShrinkInput,TransitionJumpHeightInput,TransitionJumpDirectionInput,ForegroundSourceInput,BackgroundSourceInput,LogoInput,PlayerPhotoSideInput,BoldInput,ItalicInput,UnderlineInput,StrikeInput,PreserveAspectInput,AspectInput,VideoCropLeftInput,VideoCropTopInput,VideoCropRightInput,VideoCropBottomInput,ChromaKeyInput,ChromaKeyToleranceInput,AudioDeviceInput,GradientInput,GradientSourceInput,GradientColorInput,GradientAngleInput,OpacitySlider,TextOpacitySlider,BackgroundOpacitySlider,BorderOpacitySlider,TextShadowInput,TextShadowColorInput,TextShadowOffsetInput,TextShadowSoftnessInput,TextShadowAngleInput,TextAlignInput,NestedLayoutInput,NestedAspectInput,TickerInput,TickerSpeedInput,TickerReverseInput})
             control.IsEnabled=has;
         if(has)
         {
@@ -1404,6 +1404,7 @@ public partial class ScorebugEditorWindow : Window
             PlayClockColonInput.IsChecked=e.PlayClockColon;
             GameClockLeadingZeroInput.IsChecked=e.GameClockLeadingZero;
             ClockDecimalsInput.SelectedIndex=Math.Clamp(e.ClockDecimals,0,2);
+            RecordDivisionInput.IsChecked=e.RecordIncludesDivision;
             TransitionShrinkInput.Text=Math.Clamp(e.TransitionShrink,0.2,1).ToString("0.##");
             TransitionJumpHeightInput.Text=Math.Clamp(e.TransitionJumpHeight,0,300).ToString("0.#");
             TransitionJumpDirectionInput.SelectedIndex=(int)Math.Clamp((int)e.TransitionJumpDirection,0,JumpDirectionLabels.Length-1);
@@ -1577,11 +1578,13 @@ public partial class ScorebugEditorWindow : Window
         // The host paints the backdrop and the outline for every kind, shapes included.
         BackgroundSection.Visibility=any?Visibility.Visible:Visibility.Collapsed;
         BorderSection.Visibility=any?Visibility.Visible:Visibility.Collapsed;
+        var boundSource=$"{e?.Content} {e?.IconToken}";
         PeriodSection.Visibility=text&&e!.Content.Contains("{{PERIOD}}",StringComparison.OrdinalIgnoreCase)?Visibility.Visible:Visibility.Collapsed;
+        TeamRecordSection.Visibility=any&&(boundSource.Contains("{{HOME_RECORD}}",StringComparison.OrdinalIgnoreCase)
+            ||boundSource.Contains("{{AWAY_RECORD}}",StringComparison.OrdinalIgnoreCase))?Visibility.Visible:Visibility.Collapsed;
         // Down caps and the play-clock colon belong to the element, so each one can choose its
         // own typography without changing every other value on every display. Icons and HTML can
         // carry the same tokens as a text block, so their options stay reachable too.
-        var boundSource=$"{e?.Content} {e?.IconToken}";
         var downContent=any&&(boundSource.Contains("{{DOWNS}}",StringComparison.OrdinalIgnoreCase)
             ||boundSource.Contains("{{DOWN}}",StringComparison.OrdinalIgnoreCase)
             ||boundSource.Contains("{{TO_GO}}",StringComparison.OrdinalIgnoreCase)
@@ -1937,6 +1940,7 @@ public partial class ScorebugEditorWindow : Window
         var playClockColon=PlayClockColonInput.IsChecked==true;
         var gameClockLeadingZero=GameClockLeadingZeroInput.IsChecked==true;
         var clockDecimals=Math.Clamp(ClockDecimalsInput.SelectedIndex,0,2);
+        var recordDivision=RecordDivisionInput.IsChecked==true;
         var transitionShrinkOk=double.TryParse(TransitionShrinkInput.Text,out var transitionShrinkRaw);
         var transitionShrink=Math.Clamp(transitionShrinkOk?transitionShrinkRaw:0.82,0.2,1);
         var transitionJumpOk=double.TryParse(TransitionJumpHeightInput.Text,out var transitionJumpRaw);
@@ -2003,7 +2007,7 @@ public partial class ScorebugEditorWindow : Window
             &&(shape is null||item.Shape==shape)&&(!cornerRadiusOk||Math.Abs(item.CornerRadius-cornerRadius)<0.001)
             &&item.Visible==visible&&item.TransparentBackground==transparent
             &&item.MediaTag==mediaTag&&(periodFormat is null||item.PeriodFormat==periodFormat)
-            &&item.DownCaps==downCaps&&item.PlayClockColon==playClockColon&&item.GameClockLeadingZero==gameClockLeadingZero&&item.ClockDecimals==clockDecimals
+            &&item.DownCaps==downCaps&&item.PlayClockColon==playClockColon&&item.GameClockLeadingZero==gameClockLeadingZero&&item.ClockDecimals==clockDecimals&&item.RecordIncludesDivision==recordDivision
             &&(!transitionShrinkOk||Math.Abs(item.TransitionShrink-transitionShrink)<0.001)
             &&(!transitionJumpOk||Math.Abs(item.TransitionJumpHeight-transitionJump)<0.001)
             &&item.TransitionJumpDirection==transitionJumpDirection
@@ -2081,6 +2085,7 @@ public partial class ScorebugEditorWindow : Window
         if(item.PlayClockColon!=playClockColon)Group(t=>t.PlayClockColon=playClockColon);
         if(item.GameClockLeadingZero!=gameClockLeadingZero)Group(t=>t.GameClockLeadingZero=gameClockLeadingZero);
         if(item.ClockDecimals!=clockDecimals)Group(t=>t.ClockDecimals=clockDecimals);
+        if(item.RecordIncludesDivision!=recordDivision)Group(t=>t.RecordIncludesDivision=recordDivision);
         if(transitionShrinkOk&&Math.Abs(item.TransitionShrink-transitionShrink)>0.001)Group(t=>t.TransitionShrink=transitionShrink);
         if(transitionJumpOk&&Math.Abs(item.TransitionJumpHeight-transitionJump)>0.001)Group(t=>t.TransitionJumpHeight=transitionJump);
         if(item.TransitionJumpDirection!=transitionJumpDirection)Group(t=>t.TransitionJumpDirection=transitionJumpDirection);
@@ -3532,7 +3537,7 @@ public partial class ScorebugEditorWindow : Window
                     Canvas.SetLeft(visual.Host,target.X); Canvas.SetTop(visual.Host,target.Y);
                     visual.Content.Width=double.NaN; visual.Content.Height=double.NaN;
                     ScorebugRender.ApplyToContent(visual.Content,target,_engine.State,
-                        ScoreboardTemplates.Bind(target.Content,_engine.State,target.PeriodFormat,target.DownCaps,target.PlayClockColon,target.GameClockLeadingZero,target.ClockDecimals));
+                        ScoreboardTemplates.Bind(target.Content,_engine.State,target.PeriodFormat,target.DownCaps,target.PlayClockColon,target.GameClockLeadingZero,target.ClockDecimals,target.RecordIncludesDivision));
                 }
             }
             UpdateGroupSelectionAdorners();
@@ -3556,7 +3561,7 @@ public partial class ScorebugEditorWindow : Window
                     visual.Host.Width=target.Width; visual.Host.Height=target.Height;
                     visual.Content.Width=double.NaN; visual.Content.Height=double.NaN;
                     ScorebugRender.ApplyToContent(visual.Content,target,_engine.State,
-                        ScoreboardTemplates.Bind(target.Content,_engine.State,target.PeriodFormat,target.DownCaps,target.PlayClockColon,target.GameClockLeadingZero,target.ClockDecimals));
+                        ScoreboardTemplates.Bind(target.Content,_engine.State,target.PeriodFormat,target.DownCaps,target.PlayClockColon,target.GameClockLeadingZero,target.ClockDecimals,target.RecordIncludesDivision));
                 }
             }
             if(ctrl)RefreshAllVisuals();

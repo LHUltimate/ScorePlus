@@ -395,7 +395,7 @@ internal static class Program
             var unsavedPrompt = new UnsavedChangesWindow("Dark", "detail");
             ShowForSmoke(unsavedPrompt);
             unsavedPrompt.UpdateLayout();
-            if (FindAll<Button>(unsavedPrompt).Count(b => (b.Content as string) is "Keep editing" or "Exit without saving" or "Save & exit") != 3)
+            if (FindAll<Button>(unsavedPrompt).Count(b => (b.Content as string) is "Keep Editing" or "Exit Without Saving" or "Save & Exit") != 3)
                 throw new Exception("FAIL: the unsaved-game prompt does not offer keep, discard and save");
             // No score card: the prompt explains the risk, it does not repeat the game summary.
             if (FindAll<TextBlock>(unsavedPrompt).Any(t => t.FontFamily.Source == "Consolas"))
@@ -978,6 +978,8 @@ internal static class Program
             var macroSession = new MediaSession(PreferencesStore.Load());
             try
             {
+                var lastSnap = macroEngine.AddStat("Last ball snapped");
+                macroEngine.SetClock(754);
                 var macro = new SavedMacro
                 {
                     Label = "Smoke drive",
@@ -986,14 +988,16 @@ internal static class Program
                         new MacroAction { Kind = MacroActionKind.Score, Home = true, Amount = 3 },
                         new MacroAction { Kind = MacroActionKind.SetDown, Value = 1 },
                         new MacroAction { Kind = MacroActionKind.Wait, WaitSeconds = 0.02 },
-                        new MacroAction { Kind = MacroActionKind.SetTimeouts, Home = false, Value = 2 }
+                        new MacroAction { Kind = MacroActionKind.SetTimeouts, Home = false, Value = 2 },
+                        new MacroAction { Kind = MacroActionKind.CopyValue, Path = lastSnap.Id, Label = lastSnap.Name, Text = "{{GAME_CLOCK}}" }
                     ]
                 };
                 macroEngine.StoreMacros([macro]);
                 var result = RunMacro(new MacroRunner(macroEngine, macroSession), macroEngine.State.Macros[0]);
                 if (macroEngine.State.HomeScore != 3 || macroEngine.State.Down != 1 || macroEngine.State.AwayTimeouts != 2
-                    || !result.Contains("4 steps run", StringComparison.Ordinal))
-                    throw new Exception($"FAIL: macro steps did not run in order ({result})");
+                    || macroEngine.State.Stats.First(stat => stat.Id == lastSnap.Id).Display != "12:34"
+                    || !result.Contains("5 steps run", StringComparison.Ordinal))
+                    throw new Exception($"FAIL: macro steps did not run in order, or the copy step lost the game clock ({result} / {macroEngine.State.Stats.First(stat => stat.Id == lastSnap.Id).Display})");
 
                 // A speaker bus is a live source, not a file. A media macro must switch it on
                 // without trying to open it as a clip or replacing another camera/microphone.
@@ -2277,11 +2281,8 @@ internal static class Program
             var view = fitPanel.Panel;
             view.UpdateLayout();
             double Left(FrameworkElement element) => element.TransformToAncestor(view).Transform(new Point(0, 0)).X;
-            Rect Bounds(FrameworkElement element)
-            {
-                var topLeft = element.TransformToAncestor(view).Transform(new Point(0, 0));
-                return new Rect(topLeft, new Size(element.ActualWidth, element.ActualHeight));
-            }
+            Rect Bounds(FrameworkElement element) => element.TransformToAncestor(view)
+                .TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
             Border FootballCardFor(DependencyObject node)
             {
                 var cardStyle = (Style)view.FindResource("Card");
@@ -2413,7 +2414,7 @@ internal static class Program
                 if (card.ActualHeight + 0.5 < card.DesiredSize.Height)
                     throw new Exception($"FAIL: a section is squeezed ({card.ActualHeight:0} of {card.DesiredSize.Height:0} needed)");
             var updateButton = (Button)view.FindName("UpdateButton")!;
-            var updateBottom = updateButton.TransformToAncestor(view).Transform(new Point(0, updateButton.ActualHeight)).Y;
+            var updateBottom = Bounds(updateButton).Bottom;
             if (updateBottom > view.ActualHeight + 0.5)
                 throw new Exception($"FAIL: Update Output is off the page ({updateBottom:0} of {view.ActualHeight:0})");
             var scrollers = FindAll<ScrollViewer>(view).Where(s => s.IsVisible && s.ScrollableHeight > 0).ToArray();
@@ -2449,19 +2450,42 @@ internal static class Program
                 throw new Exception("FAIL: timeout clock is missing");
             if (view.FindName("ShotClockValue") is not TextBox)
                 throw new Exception("FAIL: the shot clock is not an editable text box");
-            // A long stat list must not push the page: it scrolls inside its own card.
+            // A long stat list must not push the page: it pages inside its own card.
             engine.AddStat("Red zone trips");
             engine.AddStat("Explosive plays");
+            for (var extra = 0; extra < 6; extra++) engine.AddStat($"Page test {extra}");
             view.UpdateLayout();
             var statsScroller = (ScrollViewer)view.FindName("StatsScroller")!;
-            var afterStats = updateButton.TransformToAncestor(view).Transform(new Point(0, updateButton.ActualHeight)).Y;
+            var afterStats = Bounds(updateButton).Bottom;
             if (afterStats > view.ActualHeight + 0.5)
                 throw new Exception($"FAIL: extra stats pushed Update Output off the page ({afterStats:0} of {view.ActualHeight:0})");
-            if (statsScroller.ScrollableHeight <= 0)
-                throw new Exception("FAIL: extra stats did not stay inside their card");
+            if (statsScroller.ScrollableHeight > 0.5)
+                throw new Exception($"FAIL: custom values still scroll ({statsScroller.ScrollableHeight:0.#}px)");
+            var pageLabel = (TextBlock)view.FindName("StatsPageLabel")!;
+            var nextPage = (Button)view.FindName("StatsNextButton")!;
+            if (pageLabel.Text != "1 / 3" || !nextPage.IsEnabled)
+                throw new Exception($"FAIL: custom values did not page ({pageLabel.Text})");
+            // A full page is six values in three rows; none may be clipped by the card background.
+            var consoleStatsHost = (Panel)view.FindName("StatsHost")!;
+            var statsViewportBottom = Bounds(statsScroller).Bottom;
+            foreach (FrameworkElement statRow in consoleStatsHost.Children)
+                if (Bounds(statRow).Bottom > statsViewportBottom + 0.5)
+                    throw new Exception($"FAIL: a custom value is clipped into the card background " +
+                        $"({Bounds(statRow).Bottom:0.#} below {statsViewportBottom:0.#})");
+            nextPage.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            view.UpdateLayout();
+            if (pageLabel.Text != "2 / 3")
+                throw new Exception($"FAIL: the next page did not open ({pageLabel.Text})");
+            var firstStat = engine.State.Stats.First();
+            engine.SetStatPinned(firstStat.Id, true);
+            ((Button)view.FindName("StatsPrevButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            view.UpdateLayout();
+            var pinnedRow = (Grid)consoleStatsHost.Children[0];
+            if ((string?)pinnedRow.ToolTip != firstStat.Name)
+                throw new Exception("FAIL: a pinned custom value did not move to the first page");
             fitPanel.Close();
             Console.WriteLine($"PASS: football console fits {view.ActualWidth:0}x{view.ActualHeight:0} with no scrolling, visitors left of home");
-            Console.WriteLine("PASS: a long stat list scrolls inside its card without moving the page");
+            Console.WriteLine("PASS: a long custom-value list pages inside its card without moving the page");
 
             // The ball spot names the half of the field it sits on, and the console flips it.
             var ballEngine = new GameEngine();
@@ -3478,6 +3502,14 @@ internal static class Program
                 throw new Exception("FAIL: the audience annotation toolbar did not open");
             if (!annotateOutput.Title.StartsWith("Operator Draw Window", StringComparison.Ordinal))
                 throw new Exception($"FAIL: the draw window is titled {annotateOutput.Title}");
+            var arrowTool = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Arrow")
+                ?? throw new Exception("FAIL: the drawing tools have no arrow tool");
+            if (!FindAll<Button>(annotateOutput).Any(button => (button.Content as string) == "Line"))
+                throw new Exception("FAIL: the drawing tools have no line tool");
+            DependencyObject toolbarOwner = arrowTool;
+            while (toolbarOwner is not null and not Border) toolbarOwner = VisualTreeHelper.GetParent(toolbarOwner);
+            if (toolbarOwner is not Border annotationBar || annotationBar.VerticalAlignment != VerticalAlignment.Bottom)
+                throw new Exception("FAIL: the drawing tools are not at the bottom of the audience window");
             var widthBox = FindAll<TextBox>(annotateOutput).FirstOrDefault(box =>
                 (box.ToolTip as string ?? "").StartsWith("Pen width", StringComparison.Ordinal))
                 ?? throw new Exception("FAIL: the annotation toolbar has no typeable pen-width box");
@@ -3976,7 +4008,7 @@ internal static class Program
             }
             Console.WriteLine("PASS: reopening a saved game restores its text, score and team logo");
 
-            // Closing a changed game opens the app's own prompt; Keep editing leaves it open.
+            // Closing a changed game opens the app's own prompt; Keep Editing leaves it open.
             MainWindow.PromptOnExit = true;
             var dirty = new MainWindow(LaunchMode.New);
             ShowForSmoke(dirty);
@@ -3988,8 +4020,8 @@ internal static class Program
                 var prompt = Application.Current.Windows.OfType<UnsavedChangesWindow>().FirstOrDefault();
                 if (prompt is null) return;
                 promptTimer.Stop();
-                var keep = FindAll<Button>(prompt).FirstOrDefault(b => (b.Content as string) == "Keep editing")
-                    ?? throw new Exception("FAIL: the exit prompt has no Keep editing action");
+                var keep = FindAll<Button>(prompt).FirstOrDefault(b => (b.Content as string) == "Keep Editing")
+                    ?? throw new Exception("FAIL: the exit prompt has no Keep Editing action");
                 keep.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             };
             promptTimer.Start();
@@ -4103,7 +4135,7 @@ internal static class Program
                 Console.WriteLine("PASS: End Game applies a tie after the clock has already marked the game final");
             }
 
-            // Choosing Exit without saving must actually close, and must do so after OnClosing
+            // Choosing Exit Without Saving must actually close, and must do so after OnClosing
             // has finished (calling Close from inside it is what raised the WPF error).
             MainWindow.PromptOnExit = true;
             var discarding = new MainWindow(LaunchMode.New);
@@ -4116,7 +4148,7 @@ internal static class Program
                 var prompt = Application.Current.Windows.OfType<UnsavedChangesWindow>().FirstOrDefault();
                 if (prompt is null) return;
                 discardTimer.Stop();
-                var discard = FindAll<Button>(prompt).FirstOrDefault(b => (b.Content as string) == "Exit without saving")
+                var discard = FindAll<Button>(prompt).FirstOrDefault(b => (b.Content as string) == "Exit Without Saving")
                     ?? throw new Exception("FAIL: the exit prompt has no discard action");
                 discard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             };
@@ -4124,9 +4156,9 @@ internal static class Program
             discarding.Close();
             Pump(TimeSpan.FromMilliseconds(250));
             if (discarding.IsVisible)
-                throw new Exception("FAIL: Exit without saving left the game window open");
+                throw new Exception("FAIL: Exit Without Saving left the game window open");
             MainWindow.PromptOnExit = false;
-            Console.WriteLine("PASS: closing a changed game asks first, Keep editing returns, and Exit without saving closes cleanly");
+            Console.WriteLine("PASS: closing a changed game asks first, Keep Editing returns, and Exit Without Saving closes cleanly");
 
             // The studio's working surface keeps the navy artwork backdrop in both themes: it is
             // the same surface the audience graphic is designed on, not an operator panel.

@@ -36,6 +36,7 @@ public partial class OutputWindow : Window
     DispatcherTimer? _annotationFadeTimer;
     bool _highlighter;
     bool _eraser;
+    AnnotationToolMode _annotationMode = AnnotationToolMode.Freehand;
     Color _annotationColor = Color.FromRgb(255, 230, 0);
     double _annotationWidth = 3;
     bool _annotationFading;
@@ -43,8 +44,11 @@ public partial class OutputWindow : Window
     bool _settingAnnotationFade;
     bool _drawingStroke;
     Stroke? _activeStroke;
+    Point _shapeStart;
     Point _lastAnnotationPoint;
     const double AnnotationFadeMilliseconds = 180;
+
+    enum AnnotationToolMode { Freehand, Line, Arrow }
     public OutputWindow(GameEngine engine, ScorebugCatalog catalog,string broadcastTheme="Dark",MediaPlayback? playback=null,string? displayId=null, AutomationRuntime? automation=null, bool annotations=false, AnnotationBoard? annotationBoard=null)
     {
         InitializeComponent(); _broadcastTheme=broadcastTheme; _engine = engine; _catalog=catalog; _displayState=engine.CloneState();
@@ -180,14 +184,18 @@ public partial class OutputWindow : Window
             CornerRadius = new CornerRadius(9),
             Padding = new Thickness(7, 5, 8, 5),
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(12, 12, 12, 0),
+            // The drawing tools live at the bottom of the audience window, out of the way of the
+            // scorebug's top line and under the operator's hand.
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(12, 0, 12, 12),
             Child = new StackPanel { Orientation = Orientation.Horizontal }
         };
         _annotationToolbar = bar;
         var panel = (StackPanel)bar.Child;
         panel.Children.Add(ToolbarButton("Pen", (_, _) => SetAnnotationTool(highlighter: false)));
         panel.Children.Add(ToolbarButton("Highlighter", (_, _) => SetAnnotationTool(highlighter: true)));
+        panel.Children.Add(ToolbarButton("Line", (_, _) => SetAnnotationShape(AnnotationToolMode.Line)));
+        panel.Children.Add(ToolbarButton("Arrow", (_, _) => SetAnnotationShape(AnnotationToolMode.Arrow)));
         panel.Children.Add(ToolbarButton("Eraser", (_, _) => SetAnnotationEraser()));
         panel.Children.Add(ToolbarSeparator());
 
@@ -297,6 +305,7 @@ public partial class OutputWindow : Window
         if (_drawingStroke) FinishLiveStroke();
         _highlighter = highlighter;
         _eraser = eraser;
+        _annotationMode = AnnotationToolMode.Freehand;
         // Custom strokes keep the shared collection live. The eraser still uses InkCanvas hit-testing.
         _ink.EditingMode = eraser ? InkCanvasEditingMode.EraseByStroke : InkCanvasEditingMode.None;
         if (!eraser) ApplyAnnotationDrawingAttributes();
@@ -314,6 +323,7 @@ public partial class OutputWindow : Window
         var stroke = new Stroke(new StylusPointCollection { new StylusPoint(point.X, point.Y) },
             _ink.DefaultDrawingAttributes.Clone());
         _activeStroke = stroke;
+        _shapeStart = point;
         _lastAnnotationPoint = point;
         _drawingStroke = true;
         _ink.Strokes.Add(stroke);
@@ -325,6 +335,15 @@ public partial class OutputWindow : Window
     {
         if (!_drawingStroke || _activeStroke is null || _ink is null) return;
         var point = e.GetPosition(_ink);
+        if (_annotationMode != AnnotationToolMode.Freehand)
+        {
+            _activeStroke.StylusPoints.Clear();
+            _activeStroke.StylusPoints.Add(new StylusPoint(_shapeStart.X, _shapeStart.Y));
+            _activeStroke.StylusPoints.Add(new StylusPoint(point.X, point.Y));
+            _lastAnnotationPoint = point;
+            e.Handled = true;
+            return;
+        }
         if ((point - _lastAnnotationPoint).Length < 0.75) return;
         _activeStroke.StylusPoints.Add(new StylusPoint(point.X, point.Y));
         _lastAnnotationPoint = point;
@@ -334,6 +353,8 @@ public partial class OutputWindow : Window
     void Ink_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (!_drawingStroke) return;
+        if (_annotationMode != AnnotationToolMode.Freehand && _activeStroke is not null && _ink is not null)
+            FinishShape(e.GetPosition(_ink));
         FinishLiveStroke();
         e.Handled = true;
     }
@@ -346,6 +367,45 @@ public partial class OutputWindow : Window
         if (_ink?.IsMouseCaptured == true) _ink.ReleaseMouseCapture();
         _annotationBoard.EndStroke();
         RestartAnnotationHold();
+        _annotationMode = AnnotationToolMode.Freehand;
+    }
+
+    /// <summary>
+    /// Replaces the two preview points with the finished line. The arrowhead is part of the same
+    /// stroke, so it scales, fades and travels to every audience window with the line.
+    /// </summary>
+    void FinishShape(Point end)
+    {
+        if (_activeStroke is null) return;
+        var dx = end.X - _shapeStart.X;
+        var dy = end.Y - _shapeStart.Y;
+        var length = Math.Sqrt(dx * dx + dy * dy);
+        if (length < 2)
+        {
+            // A click with the line or arrow tool should leave no invisible empty stroke behind.
+            _ink?.Strokes.Remove(_activeStroke);
+            _activeStroke = null;
+            return;
+        }
+        var points = new StylusPointCollection
+        {
+            new StylusPoint(_shapeStart.X, _shapeStart.Y),
+            new StylusPoint(end.X, end.Y)
+        };
+        if (_annotationMode == AnnotationToolMode.Arrow)
+        {
+            var head = Math.Clamp(_annotationWidth * 4.5, 10, 48);
+            head = Math.Min(head, length * 0.65);
+            var ux = dx / length;
+            var uy = dy / length;
+            var baseX = end.X - ux * head;
+            var baseY = end.Y - uy * head;
+            var half = head * 0.42;
+            points.Add(new StylusPoint(baseX - uy * half, baseY + ux * half));
+            points.Add(new StylusPoint(end.X, end.Y));
+            points.Add(new StylusPoint(baseX + uy * half, baseY - ux * half));
+        }
+        _activeStroke.StylusPoints = points;
     }
 
     void ApplyAnnotationDrawingAttributes()
@@ -403,6 +463,10 @@ public partial class OutputWindow : Window
         if (_annotationStatus is null) return;
         _annotationStatus.Text = _eraser
             ? "ERASER · click a stroke"
+            : _annotationMode == AnnotationToolMode.Arrow
+                ? $"ARROW · {_annotationWidth:0.#} px"
+                : _annotationMode == AnnotationToolMode.Line
+                    ? $"LINE · {_annotationWidth:0.#} px"
             : _highlighter
                 ? $"HIGHLIGHTER · {_annotationWidth:0.#} px · {AnnotationFadeLabel}"
                 : $"PEN · {_annotationWidth:0.#} px · {AnnotationFadeLabel}";
@@ -450,6 +514,15 @@ public partial class OutputWindow : Window
     }
 
     void SetAnnotationEraser() => SetAnnotationTool(highlighter: false, eraser: true);
+
+    /// <summary>Draws a straight line, or a line with an arrowhead at the tip.</summary>
+    void SetAnnotationShape(AnnotationToolMode mode)
+    {
+        if (_ink is null) return;
+        SetAnnotationTool(highlighter: false);
+        _annotationMode = mode;
+        RefreshAnnotationStatus();
+    }
 
     void ChooseAnnotationColour()
     {

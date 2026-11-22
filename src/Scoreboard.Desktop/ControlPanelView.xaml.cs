@@ -71,6 +71,9 @@ public partial class ControlPanelView : UserControl
     string? _homeLogoLoaded;
     string _scoreSignature = "";
     string _statsSignature = "";
+    string _statsPageRendered = "";
+    int _statPage;
+    const int StatPageSize = 6;
     bool _syncingLive;
     bool _clockMessageSync;
     bool _loadingNames;
@@ -703,16 +706,39 @@ public partial class ControlPanelView : UserControl
     void RefreshStats()
     {
         var stats = _engine.State.Stats;
-        var signature = string.Join("|", stats.Select(s => $"{s.Id}:{s.Name}"));
-        if (signature != _statsSignature)
+        // Pinned values lead the first page, then the rest keep their normal order.
+        var ordered = stats.OrderByDescending(stat => stat.Pinned).ToList();
+        var pages = Math.Max(1, (ordered.Count + StatPageSize - 1) / StatPageSize);
+        _statPage = Math.Clamp(_statPage, 0, pages - 1);
+        var signature = string.Join("|", ordered.Select(s => $"{s.Id}:{s.Name}:{s.Pinned}:{s.IsClock}:{s.ClockCountsUp}"));
+        var pageSignature = $"{signature}|{_statPage}";
+        if (pageSignature != _statsPageRendered)
         {
             _statsSignature = signature;
+            _statsPageRendered = pageSignature;
             StatsHost.Children.Clear();
             _statValues.Clear();
-            foreach (var stat in stats) StatsHost.Children.Add(BuildStatRow(stat));
+            foreach (var stat in ordered.Skip(_statPage * StatPageSize).Take(StatPageSize))
+                StatsHost.Children.Add(BuildStatRow(stat));
         }
         foreach (var stat in stats)
             if (_statValues.TryGetValue(stat.Id, out var value) && !value.IsKeyboardFocused) value.Text = stat.Display;
+        StatsPageLabel.Text = $"{_statPage + 1} / {pages}";
+        StatsPrevButton.IsEnabled = _statPage > 0;
+        StatsNextButton.IsEnabled = _statPage < pages - 1;
+    }
+
+    void StatsPrev_Click(object sender, RoutedEventArgs e)
+    {
+        if (_statPage <= 0) return;
+        _statPage--;
+        RefreshStats();
+    }
+
+    void StatsNext_Click(object sender, RoutedEventArgs e)
+    {
+        _statPage++;
+        RefreshStats();
     }
 
     /// <summary>
@@ -721,9 +747,7 @@ public partial class ControlPanelView : UserControl
     /// </summary>
     FrameworkElement BuildStatRow(GameStat stat)
     {
-        // The row grows to its content: a fixed 36px row clipped the value boxes because the
-        // caption and the implicit button margins together need 37px. The list still reserves
-        // equal cells, and the ScrollViewer handles anything that no longer fits the card.
+        // The row grows to its content. Paging, not scrolling, keeps the list inside the card.
         var host = new Grid { MinHeight = 37, Margin = new Thickness(0, 0, 3, 2), HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Top, ClipToBounds = true, ToolTip = stat.Name };
         host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -739,6 +763,21 @@ public partial class ControlPanelView : UserControl
         };
         host.Children.Add(caption);
 
+        var rowActions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var pin = new Button
+        {
+            Content = stat.Pinned ? "★" : "☆", Width = 16, Height = 14, MinWidth = 0, MinHeight = 0,
+            Padding = new Thickness(0), Margin = new Thickness(0),
+            FontSize = 10, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Foreground = stat.Pinned ? new SolidColorBrush(Color.FromRgb(0xFF, 0xD1, 0x66)) : new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E)),
+            ToolTip = stat.Pinned ? $"Unpin {stat.Name} from the first page" : $"Pin {stat.Name} to the first page"
+        };
+        pin.Click += (_, _) =>
+        {
+            _engine.SetStatPinned(stat.Id, !stat.Pinned);
+            if (!stat.Pinned) { _statPage = 0; RefreshStats(); }
+        };
+        rowActions.Children.Add(pin);
         var remove = new Button
         {
             Content = "×", Width = 14, Height = 14, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
@@ -747,8 +786,9 @@ public partial class ControlPanelView : UserControl
             Background = Brushes.Transparent, BorderThickness = new Thickness(0), ToolTip = $"Remove {stat.Name}"
         };
         remove.Click += (_, _) => _engine.RemoveStat(stat.Id);
-        Grid.SetColumn(remove, 1);
-        host.Children.Add(remove);
+        rowActions.Children.Add(remove);
+        Grid.SetColumn(rowActions, 1);
+        host.Children.Add(rowActions);
 
         var controls = new Grid { Margin = new Thickness(0, 1, 0, 0) };
         controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -758,26 +798,45 @@ public partial class ControlPanelView : UserControl
         Grid.SetColumnSpan(controls, 2);
         host.Children.Add(controls);
 
-        Button Step(string text, int delta)
+        Button Step(string text, int delta, string tip, Action? action = null)
         {
             var button = new Button
             {
                 Content = text, Width = 20, Height = 22, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
                 Margin = new Thickness(0),
-                FontSize = 13, FontWeight = FontWeights.Bold, ToolTip = $"{stat.Name} {(delta > 0 ? "+1" : "−1")}"
+                FontSize = 12, FontWeight = FontWeights.Bold, ToolTip = tip
             };
-            button.Click += (_, _) => _engine.AdjustStat(stat.Id, delta);
+            button.Click += (_, _) =>
+            {
+                if (action is null) _engine.AdjustStat(stat.Id, delta);
+                else action();
+            };
             return button;
         }
 
-        var minus = Step("−", -1);
-        var plus = Step("+", 1);
+        Button minus;
+        Button plus;
+        if (stat.IsClock)
+        {
+            minus = Step(stat.ClockRunning ? "■" : "▶", 0,
+                stat.ClockRunning ? $"Stop {stat.Name}" : $"Start {stat.Name}",
+                () => _engine.ToggleStatClock(stat.Id));
+            plus = Step("↺", 0, $"Reset {stat.Name} to {ClockFormat.Format(stat.ClockStartSeconds)}",
+                () => _engine.ResetStatClock(stat.Id));
+        }
+        else
+        {
+            minus = Step("−", -1, $"{stat.Name} −1");
+            plus = Step("+", 1, $"{stat.Name} +1");
+        }
         var box = new TextBox
         {
             Text = stat.Display, Height = 22, MinHeight = 22, FontSize = 12, FontWeight = FontWeights.SemiBold,
             TextAlignment = TextAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
             Padding = new Thickness(0), Margin = new Thickness(2, 0, 2, 0),
-            ToolTip = $"{stat.Name}: type a number or text, then press Enter"
+            ToolTip = stat.IsClock
+                ? $"{stat.Name}: type MM:SS or seconds, then press Enter"
+                : $"{stat.Name}: type a number or text, then press Enter"
         };
         box.GotKeyboardFocus += (_, _) => box.SelectAll();
         void Commit()
@@ -881,7 +940,8 @@ public partial class ControlPanelView : UserControl
     {
         var dialog = new AddStatDialog(_engine.State.Stats.Select(s => s.Name).ToArray()) { Owner = Window.GetWindow(this) };
         ThemeManager.Apply(dialog, PreferencesStore.Load().Theme);
-        if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.StatName)) _engine.AddStat(dialog.StatName);
+        if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.StatName))
+            _engine.AddStat(dialog.StatName, dialog.IsClock, dialog.ClockCountsUp, dialog.ClockSeconds, dialog.Pinned);
     }
 
     // ---------- horn ----------

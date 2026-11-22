@@ -79,6 +79,11 @@ public partial class MacroDock : UserControl
         public override string ToString() => Label;
     }
 
+    sealed record ValueSourceChoice(MacroValueSource Source)
+    {
+        public override string ToString() => Source.Label;
+    }
+
     sealed record MediaChoice(string Path, string Label)
     {
         public override string ToString() => Label;
@@ -189,6 +194,7 @@ public partial class MacroDock : UserControl
             new KindChoice(MacroActionKind.SetFootballBallSpot, "Football — set ball spot"),
             new KindChoice(MacroActionKind.SetPossession, "Possession — set the team with the ball"),
             new KindChoice(MacroActionKind.CustomValue, "Custom value — set a value on the console"),
+            new KindChoice(MacroActionKind.CopyValue, "Custom value — copy a live game value into it"),
             new KindChoice(MacroActionKind.Wait, "Wait — pause before the next step"),
             new KindChoice(MacroActionKind.ClockControl, "Clock — start, stop, toggle or reset a clock"),
             new KindChoice(MacroActionKind.ClockMessage, "Clock message — the time, Final or End of Reg."),
@@ -599,6 +605,7 @@ public partial class MacroDock : UserControl
         CommandPanel.Visibility = kind == MacroActionKind.Control ? Visibility.Visible : Visibility.Collapsed;
         SportValuePanel.Visibility = kind == MacroActionKind.SportValue ? Visibility.Visible : Visibility.Collapsed;
         CustomValuePanel.Visibility = kind == MacroActionKind.CustomValue ? Visibility.Visible : Visibility.Collapsed;
+        CopyValuePanel.Visibility = kind == MacroActionKind.CopyValue ? Visibility.Visible : Visibility.Collapsed;
         ClockPanel.Visibility = kind == MacroActionKind.ClockControl ? Visibility.Visible : Visibility.Collapsed;
         ClockMessagePanel.Visibility = kind == MacroActionKind.ClockMessage ? Visibility.Visible : Visibility.Collapsed;
         VolumePanel.Visibility = kind == MacroActionKind.MediaVolume ? Visibility.Visible : Visibility.Collapsed;
@@ -630,6 +637,7 @@ public partial class MacroDock : UserControl
         if (kind is MacroActionKind.Control) RefreshCommandChoices();
         if (kind is MacroActionKind.SportValue) RefreshSportValueChoices();
         if (kind is MacroActionKind.CustomValue) RefreshCustomValueChoices();
+        if (kind is MacroActionKind.CopyValue) RefreshCopyValueChoices();
         if (kind is MacroActionKind.PenaltyFlag) RefreshFlagChoices();
         if (kind is MacroActionKind.SwitchLayout) RefreshLayoutChoices();
         if (kind is MacroActionKind.MediaVolume) RefreshVolumeChoices();
@@ -786,6 +794,28 @@ public partial class MacroDock : UserControl
         CustomValueBox.ItemsSource = choices;
         var match = choices.FirstOrDefault(choice => string.Equals(choice.Id, selected, StringComparison.OrdinalIgnoreCase));
         CustomValueBox.SelectedItem = match ?? choices.FirstOrDefault();
+    }
+
+    /// <summary>Target custom values and every live value the copy step can read.</summary>
+    void RefreshCopyValueChoices()
+    {
+        var selectedTarget = (CopyTargetBox.SelectedItem as CustomValueChoice)?.Id;
+        var targets = _engine.State.Stats
+            .Select(stat => new CustomValueChoice(stat.Id, stat.Name))
+            .ToList();
+        CopyTargetBox.ItemsSource = targets;
+        CopyTargetBox.SelectedItem = targets.FirstOrDefault(choice =>
+            string.Equals(choice.Id, selectedTarget, StringComparison.OrdinalIgnoreCase)) ?? targets.FirstOrDefault();
+
+        var selectedToken = (CopySourceBox.SelectedItem as ValueSourceChoice)?.Source.Token;
+        var sources = MacroValueSources.Build(_engine.State)
+            .Select(source => new ValueSourceChoice(source))
+            .ToList();
+        CopySourceBox.ItemsSource = sources;
+        CopySourceBox.SelectedItem = sources.FirstOrDefault(choice =>
+            string.Equals(choice.Source.Token, selectedToken, StringComparison.OrdinalIgnoreCase))
+            ?? sources.FirstOrDefault(choice => choice.Source.Token == "{{GAME_CLOCK}}")
+            ?? sources.FirstOrDefault();
     }
 
     void RefreshSportValueChoices()
@@ -1277,6 +1307,8 @@ public partial class MacroDock : UserControl
         var command = CommandBox.SelectedItem as CommandChoice;
         var sportValue = SportValueBox.SelectedItem as SportValueChoice;
         var customValue = CustomValueBox.SelectedItem as CustomValueChoice;
+        var copyTarget = CopyTargetBox.SelectedItem as CustomValueChoice;
+        var copySource = CopySourceBox.SelectedItem as ValueSourceChoice;
         var media = MediaBox.SelectedItem as MediaChoice;
         var volumeMedia = VolumeMediaBox.SelectedItem as MediaChoice;
         var chained = MacroChoiceBox.SelectedItem as MacroPick;
@@ -1300,6 +1332,7 @@ public partial class MacroDock : UserControl
         {
             MacroActionKind.TickerNews => TickerTextBox.Text.Trim(),
             MacroActionKind.Note => NoteTextBox.Text.Trim(),
+            MacroActionKind.CopyValue => copySource?.Source.Token ?? "",
             _ => ""
         };
         return new MacroAction
@@ -1319,6 +1352,7 @@ public partial class MacroDock : UserControl
                 MacroActionKind.Control => command?.Id ?? "",
                 MacroActionKind.SportValue => sportValue?.Id ?? "",
                 MacroActionKind.CustomValue => customValue?.Id ?? "",
+                MacroActionKind.CopyValue => copyTarget?.Id ?? "",
                 MacroActionKind.ClockControl => clock?.Id ?? "game",
                 MacroActionKind.MediaVolume => volumeMedia?.Path ?? "",
                 MacroActionKind.RunMacro => chained?.Id ?? "",
@@ -1328,6 +1362,7 @@ public partial class MacroDock : UserControl
             Label = kind == MacroActionKind.Control ? command?.Label ?? ""
                 : kind == MacroActionKind.SportValue ? sportValue?.Label ?? ""
                 : kind == MacroActionKind.CustomValue ? customValue?.Label ?? ""
+                : kind == MacroActionKind.CopyValue ? copyTarget?.Label ?? ""
                 : kind == MacroActionKind.SwitchLayout ? layout?.Label ?? ""
                 : kind == MacroActionKind.PenaltyFlag ? flagType
                 : kind == MacroActionKind.MediaVolume ? volumeMedia?.Label ?? ""
@@ -1427,6 +1462,14 @@ public partial class MacroDock : UserControl
                 CustomValueBox.SelectedItem = CustomValueBox.Items.OfType<CustomValueChoice>()
                     .FirstOrDefault(choice => string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase));
                 CustomDeltaBox.IsChecked = action.Delta;
+            }
+            if (action.Kind == MacroActionKind.CopyValue)
+            {
+                RefreshCopyValueChoices();
+                CopyTargetBox.SelectedItem = CopyTargetBox.Items.OfType<CustomValueChoice>()
+                    .FirstOrDefault(choice => string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase));
+                CopySourceBox.SelectedItem = CopySourceBox.Items.OfType<ValueSourceChoice>()
+                    .FirstOrDefault(choice => string.Equals(choice.Source.Token, action.Text, StringComparison.OrdinalIgnoreCase));
             }
             if (action.Kind == MacroActionKind.RosterStat)
             {
