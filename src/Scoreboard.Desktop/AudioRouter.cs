@@ -65,7 +65,14 @@ public sealed class AudioRouter : IDisposable
                 if (target < reader.TotalTime) reader.CurrentTime = target;
             }
             enumerator = new MMDeviceEnumerator();
-            var device = Resolve(enumerator, deviceId);
+            MMDevice? device = null;
+            if (!string.IsNullOrWhiteSpace(deviceId))
+            {
+                device = Resolve(enumerator, deviceId);
+                // A speaker the operator picked that is not connected must not quietly fall back to
+                // the default output: that made a switched-off speaker look like it was playing.
+                if (device is null) throw new InvalidOperationException("that speaker is not connected");
+            }
             var output = device is null
                 ? new WasapiOut(AudioClientShareMode.Shared, true, 100)
                 : new WasapiOut(device, AudioClientShareMode.Shared, true, 100);

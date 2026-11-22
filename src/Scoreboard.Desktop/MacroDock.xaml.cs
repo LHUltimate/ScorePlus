@@ -197,6 +197,7 @@ public partial class MacroDock : UserControl
             new KindChoice(MacroActionKind.CopyValue, "Custom value — copy a live game value into it"),
             new KindChoice(MacroActionKind.Wait, "Wait — pause before the next step"),
             new KindChoice(MacroActionKind.ClockControl, "Clock — start, stop, toggle or reset a clock"),
+            new KindChoice(MacroActionKind.CustomClock, "Custom clock — start, stop, toggle or reset a custom value clock"),
             new KindChoice(MacroActionKind.ClockMessage, "Clock message — the time, Final or End of Reg."),
             new KindChoice(MacroActionKind.MediaVolume, "Level — set a clip's level, or mute a speaker bus"),
             new KindChoice(MacroActionKind.TickerNews, "Ticker — replace the news headlines"),
@@ -229,6 +230,8 @@ public partial class MacroDock : UserControl
         ClockBox.SelectedIndex = 0;
         ClockActionBox.ItemsSource = new[] { "Start", "Stop", "Toggle", "Reset" };
         ClockActionBox.SelectedIndex = 0;
+        CustomClockActionBox.ItemsSource = new[] { "Start", "Stop", "Toggle", "Reset" };
+        CustomClockActionBox.SelectedIndex = 0;
         ClockMessageBox.ItemsSource = new[] { "The time", "Final", "End of regulation" };
         ClockMessageBox.SelectedIndex = 0;
         VolumeModeBox.ItemsSource = new[] { "Set level", "Mute", "Unmute" };
@@ -607,6 +610,7 @@ public partial class MacroDock : UserControl
         CustomValuePanel.Visibility = kind == MacroActionKind.CustomValue ? Visibility.Visible : Visibility.Collapsed;
         CopyValuePanel.Visibility = kind == MacroActionKind.CopyValue ? Visibility.Visible : Visibility.Collapsed;
         ClockPanel.Visibility = kind == MacroActionKind.ClockControl ? Visibility.Visible : Visibility.Collapsed;
+        CustomClockPanel.Visibility = kind == MacroActionKind.CustomClock ? Visibility.Visible : Visibility.Collapsed;
         ClockMessagePanel.Visibility = kind == MacroActionKind.ClockMessage ? Visibility.Visible : Visibility.Collapsed;
         VolumePanel.Visibility = kind == MacroActionKind.MediaVolume ? Visibility.Visible : Visibility.Collapsed;
         TickerPanel.Visibility = kind == MacroActionKind.TickerNews ? Visibility.Visible : Visibility.Collapsed;
@@ -637,6 +641,7 @@ public partial class MacroDock : UserControl
         if (kind is MacroActionKind.Control) RefreshCommandChoices();
         if (kind is MacroActionKind.SportValue) RefreshSportValueChoices();
         if (kind is MacroActionKind.CustomValue) RefreshCustomValueChoices();
+        if (kind is MacroActionKind.CustomClock) RefreshCustomClockChoices();
         if (kind is MacroActionKind.CopyValue) RefreshCopyValueChoices();
         if (kind is MacroActionKind.PenaltyFlag) RefreshFlagChoices();
         if (kind is MacroActionKind.SwitchLayout) RefreshLayoutChoices();
@@ -794,6 +799,19 @@ public partial class MacroDock : UserControl
         CustomValueBox.ItemsSource = choices;
         var match = choices.FirstOrDefault(choice => string.Equals(choice.Id, selected, StringComparison.OrdinalIgnoreCase));
         CustomValueBox.SelectedItem = match ?? choices.FirstOrDefault();
+    }
+
+    /// <summary>Every custom value that runs as a clock, so a step can start or stop it.</summary>
+    void RefreshCustomClockChoices()
+    {
+        var selected = (CustomClockBox.SelectedItem as CustomValueChoice)?.Id;
+        var choices = _engine.State.Stats
+            .Where(stat => stat.IsClock)
+            .Select(stat => new CustomValueChoice(stat.Id, $"{stat.Name} · {stat.Display}"))
+            .ToList();
+        CustomClockBox.ItemsSource = choices;
+        CustomClockBox.SelectedItem = choices.FirstOrDefault(choice =>
+            string.Equals(choice.Id, selected, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
     }
 
     /// <summary>Target custom values and every live value the copy step can read.</summary>
@@ -1313,12 +1331,14 @@ public partial class MacroDock : UserControl
         var volumeMedia = VolumeMediaBox.SelectedItem as MediaChoice;
         var chained = MacroChoiceBox.SelectedItem as MacroPick;
         var clock = ClockBox.SelectedItem as ClockChoice;
+        var customClock = CustomClockBox.SelectedItem as CustomValueChoice;
         var flagType = FlagTypeBox.SelectedItem as string ?? "";
         var layout = LayoutBox.SelectedItem as LayoutChoice;
         var value = int.TryParse(ValueBox.Text, out var parsedValue) ? parsedValue : 0;
         if (kind == MacroActionKind.SetGameClock && TryParseClock(ValueBox.Text, out var clockSeconds)) value = clockSeconds;
         if (kind == MacroActionKind.PenaltyFlag) value = ClearFlagBox.IsChecked == true ? 0 : 1;
         if (kind == MacroActionKind.ClockControl) value = Math.Clamp(ClockActionBox.SelectedIndex, 0, 3);
+        if (kind == MacroActionKind.CustomClock) value = Math.Clamp(CustomClockActionBox.SelectedIndex, 0, 3);
         if (kind == MacroActionKind.ClockMessage) value = Math.Clamp(ClockMessageBox.SelectedIndex, 0, 2);
         if (kind == MacroActionKind.MediaVolume)
             value = Math.Clamp(int.TryParse(VolumePercentBox.Text, out var percent) ? percent : 100, 0, 100);
@@ -1354,12 +1374,14 @@ public partial class MacroDock : UserControl
                 MacroActionKind.CustomValue => customValue?.Id ?? "",
                 MacroActionKind.CopyValue => copyTarget?.Id ?? "",
                 MacroActionKind.ClockControl => clock?.Id ?? "game",
+                MacroActionKind.CustomClock => customClock?.Id ?? "",
                 MacroActionKind.MediaVolume => volumeMedia?.Path ?? "",
                 MacroActionKind.RunMacro => chained?.Id ?? "",
                 MacroActionKind.Replay => ReplayPath(ReplayActionBox.SelectedIndex),
                 _ => ""
             },
             Label = kind == MacroActionKind.Control ? command?.Label ?? ""
+                : kind == MacroActionKind.CustomClock ? customClock?.Label ?? ""
                 : kind == MacroActionKind.SportValue ? sportValue?.Label ?? ""
                 : kind == MacroActionKind.CustomValue ? customValue?.Label ?? ""
                 : kind == MacroActionKind.CopyValue ? copyTarget?.Label ?? ""
@@ -1496,6 +1518,14 @@ public partial class MacroDock : UserControl
                 ClockBox.SelectedItem = clocks.FirstOrDefault(choice =>
                     string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase)) ?? clocks.FirstOrDefault();
                 ClockActionBox.SelectedIndex = Math.Clamp(action.Value, 0, 3);
+            }
+            if (action.Kind == MacroActionKind.CustomClock)
+            {
+                RefreshCustomClockChoices();
+                var customClocks = CustomClockBox.Items.OfType<CustomValueChoice>().ToList();
+                CustomClockBox.SelectedItem = customClocks.FirstOrDefault(choice =>
+                    string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase)) ?? customClocks.FirstOrDefault();
+                CustomClockActionBox.SelectedIndex = Math.Clamp(action.Value, 0, 3);
             }
             if (action.Kind == MacroActionKind.ClockMessage)
                 ClockMessageBox.SelectedIndex = Math.Clamp(action.Value, 0, 2);

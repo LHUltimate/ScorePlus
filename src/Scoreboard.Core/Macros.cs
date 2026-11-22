@@ -41,6 +41,8 @@ public enum MacroActionKind
     PenaltyFlag,
     /// <summary>Start, stop, toggle or reset one of the game's clocks.</summary>
     ClockControl,
+    /// <summary>Start, stop, toggle or reset a custom value that is a clock.</summary>
+    CustomClock,
     /// <summary>The words the audience clock prints instead of a time: the clock, Final, or End of Reg.</summary>
     ClockMessage,
     /// <summary>Set a library item's own level, or mute and unmute a speaker bus.</summary>
@@ -169,6 +171,7 @@ public sealed class MacroAction
             ? $"Clear flag · {(Home ? "Home" : "Visitors")}"
             : $"Flag down · {(Home ? "Home" : "Visitors")} · {(string.IsNullOrWhiteSpace(Path) ? "flag" : Path)}",
         MacroActionKind.ClockControl => $"{ClockTitle} · {ClockVerb}{(ClockVerb == "reset" && Amount > 0 ? $" to {Amount}s" : "")}",
+        MacroActionKind.CustomClock => $"Custom clock · {(string.IsNullOrWhiteSpace(Label) ? "custom value" : Label)} · {ClockVerb}",
         MacroActionKind.ClockMessage => Math.Clamp(Value, 0, 2) switch
         {
             1 => "Clock message · Final",

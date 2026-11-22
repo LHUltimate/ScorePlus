@@ -186,6 +186,8 @@ public sealed class MacroRunner
                 return CopyValueToCustom(action);
             case MacroActionKind.ClockControl:
                 return ControlClock(action);
+            case MacroActionKind.CustomClock:
+                return ControlCustomClock(action);
             case MacroActionKind.ClockMessage:
                 _engine.SetClockMessage((GameClockMessage)Math.Clamp(action.Value, 0, 2));
                 return true;
@@ -299,6 +301,35 @@ public sealed class MacroRunner
             default:
                 if (operation == 3) { _engine.SetClock(resetSeconds); return true; }
                 if (operation == 2 || (operation == 0) != state.ClockRunning) _engine.ToggleClock();
+                return true;
+        }
+    }
+
+    /// <summary>
+    /// Starts, stops, toggles or resets one custom value that is a clock. Start and stop check the
+    /// clock's own state first, exactly like the game clocks, so pressing the macro twice cannot
+    /// flip a running clock back on.
+    /// </summary>
+    bool ControlCustomClock(MacroAction action)
+    {
+        var stat = _engine.State.Stats.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, action.Path, StringComparison.OrdinalIgnoreCase)
+            || (string.IsNullOrWhiteSpace(action.Path)
+                && string.Equals(candidate.Name, action.Label, StringComparison.OrdinalIgnoreCase)));
+        if (stat is null || !stat.IsClock) return false;
+        switch (Math.Clamp(action.Value, 0, 3))
+        {
+            case 0:
+                if (!stat.ClockRunning) _engine.ToggleStatClock(stat.Id);
+                return true;
+            case 1:
+                if (stat.ClockRunning) _engine.ToggleStatClock(stat.Id);
+                return true;
+            case 2:
+                _engine.ToggleStatClock(stat.Id);
+                return true;
+            default:
+                _engine.ResetStatClock(stat.Id);
                 return true;
         }
     }

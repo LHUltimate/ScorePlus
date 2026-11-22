@@ -19,6 +19,16 @@ public sealed class AudiencePreview : Grid
 
     readonly ComboBox _displayPicker = new() { FontSize = 11, MinHeight = 26, Margin = new Thickness(0, 0, 0, 4) };
     readonly ContentControl _host = new();
+    // The on-air layout of the monitored display, printed under the picture so an operator can
+    // tell at a glance which artwork the audience is watching.
+    readonly TextBlock _layoutLabel = new()
+    {
+        FontSize = 10,
+        FontWeight = FontWeights.Bold,
+        Foreground = Muted,
+        Margin = new Thickness(0, 4, 0, 0),
+        TextTrimming = TextTrimming.CharacterEllipsis
+    };
     readonly ScorebugCatalog _catalog;
     readonly GameEngine _publishedEngine;
     readonly MediaPlayback? _playback;
@@ -38,6 +48,7 @@ public sealed class AudiencePreview : Grid
         RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         var header = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
         var live = new TextBlock { Text = "● LIVE", Foreground = Accent, FontSize = 9, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
@@ -56,6 +67,8 @@ public sealed class AudiencePreview : Grid
 
         SetRow(_host, 2);
         Children.Add(_host);
+        SetRow(_layoutLabel, 3);
+        Children.Add(_layoutLabel);
         _catalog.Changed += CatalogChanged;
         SyncDisplays(displayId);
     }
@@ -79,6 +92,7 @@ public sealed class AudiencePreview : Grid
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(Refresh); return; }
         _view?.Rebuild();
+        RefreshLayoutLabel();
     }
 
     void CatalogChanged()
@@ -103,8 +117,18 @@ public sealed class AudiencePreview : Grid
             if (_displayPicker.SelectedIndex != index) _displayPicker.SelectedIndex = index;
             if (_view is null || !_host.Content.Equals(_view)) BuildView();
             else _view.Rebuild();
+            RefreshLayoutLabel();
         }
         finally { _sync = false; }
+    }
+
+    /// <summary>Prints the layout the monitored display is actually on air with.</summary>
+    void RefreshLayoutLabel()
+    {
+        var display = _catalog.FindDisplay(_displayId);
+        if (display is null || display.Layouts.Count == 0) { _layoutLabel.Text = ""; return; }
+        var index = Math.Clamp(display.PublishedIndex, 0, display.Layouts.Count - 1);
+        _layoutLabel.Text = $"LAYOUT · {index + 1} · {display.Layouts[index].Name}";
     }
 
     /// <summary>
@@ -126,5 +150,6 @@ public sealed class AudiencePreview : Grid
         if (_sync || _displayPicker.SelectedIndex < 0 || _displayPicker.SelectedIndex >= _catalog.Displays.Count) return;
         _displayId = _catalog.Displays[_displayPicker.SelectedIndex].Id;
         _view?.Rebuild();
+        RefreshLayoutLabel();
     }
 }

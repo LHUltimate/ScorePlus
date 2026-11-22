@@ -309,6 +309,15 @@
             <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
                        Text="Start and stop check whether the clock is already running, so pressing the macro twice cannot flip it the other way."/>
           </StackPanel>
+          <StackPanel x:Name="CustomClockPanel">
+            <TextBlock Text="CUSTOM CLOCK" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="CustomClockBox" Style="{StaticResource MacroCombo}"
+                      ToolTip="Every custom value on the console that is a clock"/>
+            <TextBlock Text="ACTION" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="CustomClockActionBox" Style="{StaticResource MacroCombo}"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="Start and stop check whether the clock is already running, so pressing the macro twice cannot flip it the other way. Reset returns it to the time it was created with."/>
+          </StackPanel>
           <StackPanel x:Name="ClockMessagePanel">
             <TextBlock Text="CLOCK READS" Style="{StaticResource MacroLabel}"/>
             <ComboBox x:Name="ClockMessageBox" Style="{StaticResource MacroCombo}"/>

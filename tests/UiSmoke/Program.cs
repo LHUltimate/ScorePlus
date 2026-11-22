@@ -1172,6 +1172,31 @@ internal static class Program
                         throw new Exception($"FAIL: detailed macro steps did not run ({detailedResult}, clock {extendedEngine.State.ClockRunning}, message {extendedEngine.State.ClockMessage}, away {extendedEngine.State.AwayScore}, headlines {extendedEngine.State.TickerNews.Count}, level {mutedSpeaker.VolumePercent}, muted {mutedSpeaker.SpeakerMuted})");
                     extendedEngine.ClearMacroOutputHold();
 
+                    // A custom value that is a clock can be started and stopped from a macro. Start
+                    // twice must not flip it, and reset returns it to the time it was created with.
+                    var smokeClock = extendedEngine.AddStat("Smoke clock", clock: true, startSeconds: 45);
+                    SavedMacro ClockMacro(params int[] verbs) => new()
+                    {
+                        Label = "Custom clock",
+                        Actions = verbs.Select(verb => new MacroAction
+                        {
+                            Kind = MacroActionKind.CustomClock, Path = smokeClock.Id, Label = smokeClock.Name, Value = verb
+                        }).ToList()
+                    };
+                    bool SmokeClockRunning() => extendedEngine.State.Stats.First(stat => stat.Id == smokeClock.Id).ClockRunning;
+                    RunMacro(new MacroRunner(extendedEngine, extendedSession), ClockMacro(0, 0));
+                    if (!SmokeClockRunning()) throw new Exception("FAIL: a macro did not start a custom value clock, or a second start stopped it");
+                    extendedEngine.ClearMacroOutputHold();
+                    RunMacro(new MacroRunner(extendedEngine, extendedSession), ClockMacro(1));
+                    if (SmokeClockRunning()) throw new Exception("FAIL: a macro did not stop a custom value clock");
+                    extendedEngine.ClearMacroOutputHold();
+                    extendedEngine.AdjustStat(smokeClock.Id, -10);
+                    RunMacro(new MacroRunner(extendedEngine, extendedSession), ClockMacro(3));
+                    var resetSmokeClock = extendedEngine.State.Stats.First(stat => stat.Id == smokeClock.Id);
+                    if (resetSmokeClock.ClockRunning || resetSmokeClock.ClockSeconds != 45)
+                        throw new Exception($"FAIL: resetting a custom value clock left {resetSmokeClock.Display} {(resetSmokeClock.ClockRunning ? "running" : "stopped")}");
+                    extendedEngine.ClearMacroOutputHold();
+
                     // The macro clock field is typed as MM:SS, not as a raw second count.
                     var clockDock = new MacroDock(extendedEngine, extendedSession);
                     var clockKindBox = (ComboBox)clockDock.FindName("KindBox")!;
@@ -1185,6 +1210,26 @@ internal static class Program
                     if (clockAction.Value != 754
                         || ((TextBlock)clockDock.FindName("ValueLabel")!).Text != "GAME CLOCK (MM:SS)")
                         throw new Exception($"FAIL: the macro clock read {clockAction.Value} from 12:34");
+
+                    // A clip that names its own speaker keeps it even while a GLOBAL bus is on air:
+                    // the bus used to drag every clip onto its own output. A clip with no speaker
+                    // still follows the bus, so the routing fallback is unchanged.
+                    var anyBus = new MediaEntry(MediaLibrary.SpeakerPath(9), Tag: MediaLibrary.AnyTag,
+                        Name: "Smoke ANY bus", AudioDevice: "Smoke bus device");
+                    var ownSpeakerClip = new MediaEntry(@"C:\smoke\anthem.mp4", Tag: "Anthem", AudioDevice: "Smoke clip device");
+                    var busOnlyClip = new MediaEntry(@"C:\smoke\ad.mp4", Tag: "Ads");
+                    extendedSession.Library.Add(anyBus);
+                    try
+                    {
+                        var outputFor = typeof(MediaSession).GetMethod("OutputFor", BindingFlags.Instance | BindingFlags.NonPublic)
+                            ?? throw new Exception("FAIL: OutputFor is missing");
+                        var ownRoute = ((string? Device, double Gain))outputFor.Invoke(extendedSession, [ownSpeakerClip])!;
+                        var busRoute = ((string? Device, double Gain))outputFor.Invoke(extendedSession, [busOnlyClip])!;
+                        if (!string.Equals(ownRoute.Device, "Smoke clip device", StringComparison.OrdinalIgnoreCase) || ownRoute.Gain <= 0
+                            || !string.Equals(busRoute.Device, "Smoke bus device", StringComparison.OrdinalIgnoreCase))
+                            throw new Exception($"FAIL: a clip with its own speaker routed to {ownRoute.Device} (gain {ownRoute.Gain}) and a bus-only clip to {busRoute.Device} while a GLOBAL bus was on air");
+                    }
+                    finally { extendedSession.Library.Remove(anyBus); }
                 }
                 finally { if (File.Exists(extendedLayoutPath)) File.Delete(extendedLayoutPath); }
             }
@@ -5919,6 +5964,12 @@ internal static class Program
                     throw new Exception("FAIL: the audience monitor did not follow the layout after Update Output");
                 if (monitor.Layout is null || monitor.Layout.Id != monitorMain.Scorebug.PublishedLayoutOf(monitor.DisplayId).Id)
                     throw new Exception("FAIL: the audience monitor is not drawing the published layout");
+                // The small line under the picture names the layout the display is on air with.
+                var audienceName = monitorMain.Scorebug.PublishedLayoutOf(monitor.DisplayId).Name;
+                var layoutLabel = FindAll<TextBlock>((DependencyObject)monitor)
+                    .FirstOrDefault(text => text.Text.StartsWith("LAYOUT ·", StringComparison.Ordinal));
+                if (layoutLabel is null || !layoutLabel.Text.Contains(audienceName, StringComparison.Ordinal))
+                    throw new Exception($"FAIL: the audience monitor's layout line read '{layoutLabel?.Text ?? "nothing"}' instead of '{audienceName}'");
                 monitorMain.Close();
                 Console.WriteLine("PASS: the audience monitor mirrors the published display and only changes on Update Output");
             }

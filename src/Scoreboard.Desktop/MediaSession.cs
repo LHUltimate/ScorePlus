@@ -28,18 +28,19 @@ public sealed class MediaSession
     readonly MediaPlayer _background = new() { ScrubbingEnabled = true };
     MediaEntry? _backgroundAudio;
     bool _backgroundPlaying;
-    bool _backgroundRouted;
+    // True while the bed's sound is carried by its own speaker stream rather than the player.
+    bool BedRouted => _backgroundAudio is { } bed
+        && _clipRouters.TryGetValue(ClipKey(bed), out var routed) && routed.Router.IsPlaying;
     double _backgroundDuration;
     double? _backgroundPendingSeek;
     readonly DispatcherTimer _transport = new() { Interval = TimeSpan.FromMilliseconds(200) };
     // Scrub bursts are coalesced into a single seek: pause/seek/play on every pixel of a drag is
     // what made seeking feel laggy.
     readonly DispatcherTimer _seekApply = new() { Interval = TimeSpan.FromMilliseconds(80) };
-    // A clip sent to a chosen speaker plays its sound here, on that device, instead of in the
-    // MediaElement (which can only ever use the Windows default output).
-    readonly AudioRouter _audio = new();
-    // The device the router is playing on, so a level change moves the volume instead of restarting.
-    string? _audioDevice;
+    // One router per cue that is on air on a chosen speaker. Every cue keeps its own stream, so two
+    // videos on two tags are heard together on the same bus instead of the newer one cutting the
+    // older one off; WASAPI mixes the streams on the device. The key is the cue's tag and path.
+    readonly Dictionary<string, (AudioRouter Router, string? Device)> _clipRouters = new(StringComparer.OrdinalIgnoreCase);
     CameraFeed? _camera;
     // The live microphone, if one is cued. Like the camera it owns a capture device while on air.
     MicrophoneFeed? _microphone;
@@ -165,7 +166,7 @@ public sealed class MediaSession
             // Keep the shared playhead current so a rebuilt scorebug surface picks the clip up
             // where it is instead of restarting it from the first frame.
             if (Current is { IsCamera: false } && _player.Source is not null)
-                Playback.ReportPosition(_audio.IsPlaying ? _audio.Position : Position);
+                Playback.ReportPosition(RoutedRouterFor(Current) is { IsPlaying: true } routed ? routed.Position : Position);
             if (HasReplayPreview) TrackPreviewReplay(_previewReplay?.Position ?? 0);
             else if (IsReplaying) TrackPrimaryReplay();
             if (_scrubbing) return;
@@ -402,7 +403,7 @@ public sealed class MediaSession
             if (IsReplaying) return _replay.Position;
             if (Current is null && _backgroundAudio is not null)
             {
-                if (_backgroundRouted) return _audio.Position;
+                if (RoutedRouterFor(_backgroundAudio) is { IsPlaying: true } routed) return routed.Position;
                 try { return Math.Max(0, _background.Position.TotalSeconds); } catch { return 0; }
             }
             try { return Math.Max(0, _player.Position.TotalSeconds); } catch { return 0; }
@@ -542,7 +543,7 @@ public sealed class MediaSession
             }
             catch { }
         }
-        _audio.Seek(target);
+        RoutedRouterFor(Current)?.Seek(target);
         // The picture the operator watches is the scorebug video, not this muted transport player.
         Trace($"seek {target:0.00}s · publishing to the scorebug ({Playback.NowPlaying?.Label ?? "nothing"})");
         Playback.Seek(target);
@@ -909,19 +910,10 @@ public sealed class MediaSession
         if (SameClip(Selected, updated)) Selected = updated;
         Playback.UpdateEntry(updated);
         Save();
-        if (SameClip(Current, updated))
-        {
-            var (device, gain) = OutputFor(updated);
-            Playback.ReportAudio(device, gain);
-            // A live microphone is monitored by its feed, so its own level is set there.
-            if (updated.IsMicrophone) _microphone?.SetVolume(updated.Volume * gain);
-            else if (updated.IsVideo)
-            {
-                if (!string.IsNullOrWhiteSpace(device)) _audio.SetVolume(updated.Volume * gain);
-            }
-            else if (!updated.IsCamera)
-                _player.Volume = string.IsNullOrWhiteSpace(device) ? (float)Math.Clamp(updated.Volume * gain, 0, 1) : 0;
-        }
+        // A level change moves the level only: no cue is restarted and no playhead moves.
+        if (IsCueOnAir(updated)) SyncCueAudio(updated);
+        // A live microphone is monitored by its feed, so its own level is set there.
+        if (updated.IsMicrophone && SameClip(Current, updated)) _microphone?.SetVolume(updated.Volume * SpeakerGain(updated));
         // A speaker item is a bus: its slider is the house level for everything its tag carries.
         if (updated.IsSpeaker) ApplySpeakerGains();
         Playback.RefreshAudio();
@@ -949,21 +941,19 @@ public sealed class MediaSession
             Status?.Invoke($"OUTPUT · {updated.Label} → {updated.AudioLabel}");
             return;
         }
-        if (SameClip(Current, updated) && !updated.IsSpeaker && !updated.IsMicrophone)
+        string? failure = null;
+        if (IsCueOnAir(updated) && !updated.IsSpeaker && !updated.IsMicrophone)
         {
-            // Picking a speaker, or retagging the clip into another bus, moves the sound without
-            // touching the playhead.
-            Playback.ReportAudio(target, targetGain);
-            _audio.Stop();
-            _audioDevice = null;
-            RouteAudio(updated, target, updated.Volume * targetGain, Position);
-            // A speaker that cannot be opened must not silence the clip: the scorebug element takes
-            // the sound back over. A video's sound never comes from this transport player.
-            Playback.ReportRouting(updated.IsVideo && target is not null && _audio.LastError is not null);
+            // Picking another speaker moves the sound without touching the playhead. A speaker that
+            // is not connected leaves this clip silent and says why, instead of playing it on
+            // whichever other speaker happens to be switched on.
+            StopClipRouter(updated);
+            SyncCueAudio(updated);
+            if (_clipRouters.TryGetValue(ClipKey(updated), out var moved)) failure = moved.Router.LastError;
         }
         Playback.RefreshAudio();
         StateChanged?.Invoke();
-        Status?.Invoke(_audio.LastError is { } failure
+        Status?.Invoke(failure is not null
             ? $"OUTPUT ERROR · {failure}"
             : $"OUTPUT · {updated.Label} → {updated.AudioLabel}");
     }
@@ -1123,11 +1113,6 @@ public sealed class MediaSession
         _preferences.MediaMasterVolume = volume;
         PreferencesStore.Save(_preferences);
         ApplySpeakerGains();
-        if (Current is { IsSpeaker: false } current && !current.IsCamera)
-        {
-            var (device, gain) = OutputFor(current);
-            Playback.ReportAudio(device, gain);
-        }
         StateChanged?.Invoke();
         Status?.Invoke($"MASTER VOLUME {Math.Round(volume * 100)}%");
     }
@@ -1145,14 +1130,18 @@ public sealed class MediaSession
         if (entry.IsSpeaker)
         {
             if (entry.SpeakerMuted) return 0;
-            var carries = Current is { } current && !current.IsSpeaker && !current.IsMicrophone
-                && _playing && string.Equals(SpeakerBusFor(current)?.Path, entry.Path, StringComparison.OrdinalIgnoreCase);
+            // Every cue on the bus counts, not only the newest: two videos can share one speaker.
+            var carries = IsPlaying && OnAirCues().Any(cue => !cue.IsSpeaker && !cue.IsMicrophone
+                && string.Equals(SpeakerBusFor(cue)?.Path, entry.Path, StringComparison.OrdinalIgnoreCase));
             return carries ? SoundLevelMeter.ReadDevice(entry.AudioDevice) : 0;
         }
         // A microphone is an input, not an output. A loopback capture of a capture device reads
         // silence, which is why a camera's sound bar never moved. The feed that listens to the
         // microphone already measures its true input level, so read that instead.
         if (entry.IsMicrophone) return MicrophoneFeed.Get(entry.MicrophoneIndex).ReadLevel();
+        // A clip only has a level while it is playing. Reading its speaker's loopback when it is
+        // idle showed the rest of the machine's sound, which made a paused clip look live.
+        if (!IsOnAir(entry) || !IsPlaying) return 0;
         var bus = SpeakerBusFor(entry);
         return SoundLevelMeter.ReadDevice(bus?.AudioDevice ?? entry.AudioDevice);
     }
@@ -1227,44 +1216,140 @@ public sealed class MediaSession
     /// <summary>
     /// The bus level an item must pass through: 0 when its speaker is off air or no bus carries its
     /// tag, and 1 when the library has no buses at all, so a show without speakers is unchanged.
+    /// A clip that names its own speaker is not gated by another tag's bus.
     /// </summary>
     public double SpeakerGain(MediaEntry entry)
     {
         if (entry.IsSpeaker) return 0;
+        // A clip's own speaker is a deliberate choice: it plays there whatever other tags' buses do.
+        if (!string.IsNullOrWhiteSpace(entry.AudioDevice)) return MasterVolume;
         // The master scales everything: a show with no buses still has a master level to turn down.
         if (!HasSpeakerBuses) return MasterVolume;
         return SpeakerBusFor(entry) is { } bus ? Math.Clamp(bus.Volume, 0, 1) * MasterVolume : 0;
     }
 
-    /// <summary>Where an item's sound comes out: its bus's device, else its own, plus the bus level.</summary>
+    /// <summary>
+    /// Where an item's sound comes out. The clip's own speaker wins; a bus only carries clips that
+    /// do not name a device, so an ANY bus can no longer drag a clip off its chosen output.
+    /// </summary>
     (string? Device, double Gain) OutputFor(MediaEntry entry)
     {
+        if (!string.IsNullOrWhiteSpace(entry.AudioDevice)) return (entry.AudioDevice, SpeakerGain(entry));
         var bus = SpeakerBusFor(entry);
-        var device = string.IsNullOrWhiteSpace(bus?.AudioDevice) ? entry.AudioDevice : bus!.AudioDevice;
-        return (string.IsNullOrWhiteSpace(device) ? null : device, SpeakerGain(entry));
+        return (string.IsNullOrWhiteSpace(bus?.AudioDevice) ? null : bus!.AudioDevice, SpeakerGain(entry));
+    }
+
+    /// <summary>Identifies one cue: the same file under two tags is two independent cues.</summary>
+    static string ClipKey(MediaEntry entry) =>
+        $"{MediaLibrary.NormalizeTag(entry.Tag)}|{entry.Path}".ToLowerInvariant();
+
+    /// <summary>This cue's own speaker stream, when it has one that is playing.</summary>
+    AudioRouter? RoutedRouterFor(MediaEntry? entry) =>
+        entry is not null && _clipRouters.TryGetValue(ClipKey(entry), out var routed) ? routed.Router : null;
+
+    void StopClipRouter(MediaEntry entry) => StopClipRouter(ClipKey(entry));
+
+    void StopClipRouter(string key)
+    {
+        if (!_clipRouters.Remove(key, out var routed)) return;
+        routed.Router.Stop();
+    }
+
+    /// <summary>Stops every speaker stream, for a full stop of the show.</summary>
+    void StopAllClipRouters()
+    {
+        foreach (var routed in _clipRouters.Values) routed.Router.Stop();
+        _clipRouters.Clear();
+    }
+
+    /// <summary>Every clip currently on air, each cue once: the transport clip, the audio bed and
+    /// the tagged files that share the screen with them.</summary>
+    IEnumerable<MediaEntry> OnAirCues()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<MediaEntry>();
+        if (Current is { } current) candidates.Add(current);
+        if (_backgroundAudio is { } bed) candidates.Add(bed);
+        candidates.AddRange(Playback.ActiveFiles);
+        foreach (var entry in candidates)
+            if (!entry.IsCamera && !entry.IsSpeaker && !entry.IsMicrophone && !entry.IsScreen
+                && !entry.IsImage && seen.Add(ClipKey(entry)))
+                yield return entry;
+    }
+
+    bool IsCueOnAir(MediaEntry entry) =>
+        OnAirCues().Any(cue => string.Equals(ClipKey(cue), ClipKey(entry), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Sends one cue's sound to a chosen device on its own stream. Several cues can be routed at
+    /// once, so a second video on another tag is heard over the first instead of replacing it.
+    /// </summary>
+    void RouteClipAudio(MediaEntry entry, string device, double volume, double startSeconds = 0)
+    {
+        var key = ClipKey(entry);
+        if (_clipRouters.TryGetValue(key, out var existing)
+            && string.Equals(existing.Device, device, StringComparison.OrdinalIgnoreCase)
+            && existing.Router.IsPlaying)
+        {
+            existing.Router.SetVolume(volume);
+            return;
+        }
+        var router = existing.Router ?? new AudioRouter();
+        router.Play(entry.Path, device, volume, startSeconds);
+        _clipRouters[key] = (router, device);
     }
 
     /// <summary>
-    /// Plays a clip through the audio router on the speaker its tag decided, or hands it back to the
-    /// transport player on the default output. The device is remembered so a level change only moves
-    /// the volume instead of restarting the sound from the top.
+    /// Points one on-air cue's sound at its speaker without restarting the picture. Where it plays
+    /// comes from <see cref="OutputFor"/>: the clip's own speaker when it names one, else the bus
+    /// that carries its tag. With no speaker at all the cue stays on the player that owns it.
     /// </summary>
-    void RouteAudio(MediaEntry entry, string? device, double volume, double startSeconds = 0)
+    void SyncCueAudio(MediaEntry entry, double? startSeconds = null)
     {
+        if (!IsCueOnAir(entry)) return;
+        var (device, gain) = OutputFor(entry);
+        var volume = Math.Clamp(entry.Volume * gain, 0, 1);
+        var isCurrent = Current is { } current && ClipKey(current) == ClipKey(entry);
+        var isBed = _backgroundAudio is { } bed && ClipKey(bed) == ClipKey(entry);
         if (string.IsNullOrWhiteSpace(device))
         {
-            if (_audioDevice is not null) { _audio.Stop(); _audioDevice = null; }
-            _player.Volume = entry.IsVideo ? 0 : (float)Math.Clamp(volume, 0, 1);
+            StopClipRouter(entry);
+            Playback.ReportCueAudio(entry, null, entry.Volume, gain);
+            if (isCurrent) _player.Volume = entry.IsVideo ? 0 : (float)volume;
+            if (isBed) _background.Volume = (float)volume;
             return;
         }
-        _player.Volume = 0;
-        if (_audioDevice is not null && string.Equals(_audioDevice, device, StringComparison.OrdinalIgnoreCase) && _audio.IsPlaying)
+        // Start from where this cue actually is: the players know the transport clip, a routed
+        // video on another tag is followed by its own stream.
+        var from = startSeconds
+            ?? (isCurrent ? Position : isBed ? BackgroundPosition : RoutedRouterFor(entry)?.Position)
+            ?? 0;
+        RouteClipAudio(entry, device, volume, from);
+        var failed = _clipRouters.TryGetValue(ClipKey(entry), out var routed) && routed.Router.LastError is not null;
+        Playback.ReportCueAudio(entry, device, entry.Volume, gain, failed);
+        // A routed cue is silent in its player and video box; its stream is the sound.
+        if (isCurrent) _player.Volume = 0;
+        if (isBed) _background.Volume = 0;
+    }
+
+    double BackgroundPosition
+    {
+        get
         {
-            _audio.SetVolume(volume);
-            return;
+            try { return Math.Max(0, _background.Position.TotalSeconds); } catch { return 0; }
         }
-        _audio.Play(entry.Path, device, volume, startSeconds);
-        _audioDevice = device;
+    }
+
+    /// <summary>
+    /// Stops the stream of every cue that has left the air and forgets its mixer state. Runs after
+    /// any cue change, so a replaced clip goes quiet while the other tags keep playing.
+    /// </summary>
+    void PruneClipRouters()
+    {
+        var onAir = OnAirCues().ToArray();
+        var keys = onAir.Select(ClipKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in _clipRouters.Keys.Where(key => !keys.Contains(key)).ToArray()) StopClipRouter(key);
+        Playback.KeepCueAudio(onAir);
     }
 
     /// <summary>
@@ -1273,24 +1358,9 @@ public sealed class MediaSession
     /// </summary>
     void ApplySpeakerGains()
     {
-        // While the audio bed owns the router, speaker changes must follow the bed rather than
-        // re-routing the video that is merely sharing the screen with it.
-        if (_backgroundRouted && _backgroundAudio is { } bed)
-        {
-            var (device, gain) = OutputFor(bed);
-            Playback.ReportAudio(device, gain);
-            if (string.IsNullOrWhiteSpace(device)) _audio.SetVolume(0);
-            else if (_audioDevice is not null && string.Equals(_audioDevice, device, StringComparison.OrdinalIgnoreCase))
-                _audio.SetVolume(bed.Volume * gain);
-            else RouteAudio(bed, device, bed.Volume * gain, _audio.Position);
-        }
-        else if (Current is { IsSpeaker: false } current)
-        {
-            var (device, gain) = OutputFor(current);
-            Playback.ReportAudio(device, gain);
-            if (current.IsMicrophone) _microphone?.SetVolume(current.Volume * gain);
-            else if (!current.IsCamera) RouteAudio(current, device, current.Volume * gain, Position);
-        }
+        // Every cue on air is re-pointed at its own speaker, so a bus switching on or off moves
+        // only the clips that bus carries, in place, without restarting any of them.
+        foreach (var entry in OnAirCues()) SyncCueAudio(entry);
         foreach (var live in _liveMicrophones)
         {
             var entry = Resolve(live);
@@ -1412,17 +1482,12 @@ public sealed class MediaSession
     /// </summary>
     void PlayScreen(MediaEntry entry, MediaPlaylist? playlist, int index)
     {
-        var keepRoutedAudio = PreserveCurrentAudio();
+        PreserveCurrentAudio();
         try { _player.Stop(); _player.Close(); } catch { }
         _seekApply.Stop();
         _seekTarget = 0;
         _playlist = playlist;
         _playlistIndex = index;
-        if (!keepRoutedAudio)
-        {
-            _audio.Stop();
-            _audioDevice = null;
-        }
         ResetReplaySessions();
         _duration = 0;
         _pendingSeek = null;
@@ -1469,7 +1534,7 @@ public sealed class MediaSession
         RetireFilesWithTag(entry.Tag);
         // Other live sources stay on air. A camera cue adds this feed rather than replacing the
         // others, so several cameras and microphones can run together.
-        var keepRoutedAudio = PreserveCurrentAudio();
+        PreserveCurrentAudio();
         try { _player.Stop(); _player.Close(); } catch { }
         _seekApply.Stop();
         _seekTarget = 0;
@@ -1482,11 +1547,6 @@ public sealed class MediaSession
         ResetReplaySessions();
         _duration = 0;
         _pendingSeek = null;
-        if (!keepRoutedAudio)
-        {
-            _audio.Stop();
-            _audioDevice = null;
-        }
         var previous = _liveCameras.ToArray();
         var next = MediaLibrary.CueCamera(previous, entry);
         // Start the incoming feed before releasing the outgoing one. Surfaces keep the previous
@@ -1506,6 +1566,7 @@ public sealed class MediaSession
         }
         SetTransportPlaying(true);
         Playback.Start(entry);
+        PruneClipRouters();
         StateChanged?.Invoke();
         Status?.Invoke($"LIVE · {entry.Label} · tag {entry.Tag}");
     }
@@ -1743,11 +1804,6 @@ public sealed class MediaSession
         // and taking the selection over reset the tag, loop and speaker shown in the dock.
         _duration = segment.Seconds;
         _seekApply.Stop();
-        if (!_backgroundRouted)
-        {
-            _audio.Stop();
-            _audioDevice = null;
-        }
         _pendingSeek = null;
         // The clip is decoded to frames rather than handed to a media player — a camera clip is
         // recorded without sound, so there is no audio to open either.
@@ -2089,7 +2145,7 @@ public sealed class MediaSession
     void PlayMicrophone(MediaEntry entry)
     {
         _pendingQuickMedia = null;
-        var keepRoutedAudio = PreserveCurrentAudio();
+        PreserveCurrentAudio();
         try { _player.Stop(); _player.Close(); } catch { }
         _seekApply.Stop();
         _seekTarget = 0;
@@ -2098,11 +2154,6 @@ public sealed class MediaSession
         ResetReplaySessions();
         _duration = 0;
         _pendingSeek = null;
-        if (!keepRoutedAudio)
-        {
-            _audio.Stop();
-            _audioDevice = null;
-        }
         Current = entry;
         MicrophoneEntry = entry;
         // Each microphone is its own capture and its own speaker, so adding one never takes another
@@ -2241,6 +2292,8 @@ public sealed class MediaSession
         if (!SameAiringCue(Current, entry) && Playback.IsActive(entry))
         {
             Playback.Stop(entry);
+            // Only that cue's stream stops; anything else on the same speaker keeps playing.
+            PruneClipRouters();
             StateChanged?.Invoke();
             return false;
         }
@@ -2272,10 +2325,11 @@ public sealed class MediaSession
     {
         if (Current is not { IsVideo: false, IsCamera: false, IsMicrophone: false, IsSpeaker: false } audio) return false;
         if (!_playing) return false;
-        if (_audio.IsPlaying)
+        if (RoutedRouterFor(audio) is { IsPlaying: true })
         {
+            // Its sound is already coming out of a speaker bus. The stream simply keeps playing
+            // while the picture moves on, so only the bed's label has to move over.
             _backgroundAudio = audio;
-            _backgroundRouted = true;
             _backgroundPlaying = true;
             _backgroundDuration = 0;
             return true;
@@ -2289,7 +2343,6 @@ public sealed class MediaSession
         StopBackgroundAudio(silent: true);
         entry = Resolve(entry);
         _backgroundAudio = entry;
-        _backgroundRouted = false;
         _backgroundPlaying = true;
         _backgroundDuration = 0;
         _backgroundPendingSeek = startSeconds > 0.05 ? startSeconds : null;
@@ -2305,23 +2358,22 @@ public sealed class MediaSession
             _backgroundPlaying = false;
             Status?.Invoke($"AUDIO ERROR · {ex.Message}");
         }
+        // The bed follows the same speaker rules as anything else, including a stream of its own
+        // on a bus that already carries the picture's sound.
+        if (_backgroundAudio is not null) SyncCueAudio(_backgroundAudio, startSeconds);
         StateChanged?.Invoke();
     }
 
     void StopBackgroundAudio(bool silent = false)
     {
         var label = _backgroundAudio?.Label;
-        if (_backgroundRouted)
+        if (_backgroundAudio is { } bed)
         {
-            _audio.Stop();
-            _audioDevice = null;
+            StopClipRouter(bed);
+            Playback.ForgetCueAudio(bed);
         }
-        else
-        {
-            try { _background.Stop(); _background.Close(); } catch { }
-        }
+        try { _background.Stop(); _background.Close(); } catch { }
         _backgroundAudio = null;
-        _backgroundRouted = false;
         _backgroundPlaying = false;
         _backgroundDuration = 0;
         _backgroundPendingSeek = null;
@@ -2334,11 +2386,6 @@ public sealed class MediaSession
     void StopFileOnly(string? status = null)
     {
         try { _player.Stop(); _player.Close(); } catch { }
-        if (!_backgroundRouted)
-        {
-            _audio.Stop();
-            _audioDevice = null;
-        }
         _seekApply.Stop();
         _seekTarget = 0;
         _duration = 0;
@@ -2350,6 +2397,7 @@ public sealed class MediaSession
         Current = null;
         _playing = false;
         if (stopped is not null) Playback.Stop(stopped);
+        PruneClipRouters();
         StateChanged?.Invoke();
         TransportChanged?.Invoke();
         Status?.Invoke(status ?? "FILE OFF AIR · live cameras and microphones stay on");
@@ -2403,16 +2451,12 @@ public sealed class MediaSession
             Status?.Invoke($"PLAYING · AUDIO · {entry.Label} · alongside {Current!.Label}");
             return;
         }
-        // A video takes the picture; audio already on air moves to the background player.
-        var keepRoutedAudio = entry.IsVideo && PreserveCurrentAudio();
+        // A video takes the picture; audio already on air moves to the background player, or keeps
+        // its own speaker stream when it already has one. A video on another tag is left alone:
+        // both pictures stay on air, so both soundtracks have to stay audible.
+        if (entry.IsVideo) PreserveCurrentAudio();
         if (!entry.IsVideo) StopBackgroundAudio(silent: true);
         ResetReplaySessions();
-        // A clip sent to a speaker must not keep playing after the next clip is cued.
-        if (!keepRoutedAudio)
-        {
-            _audio.Stop();
-            _audioDevice = null;
-        }
         _playlist = playlist;
         _playlistIndex = index;
         try { _player.Close(); } catch { }
@@ -2444,21 +2488,11 @@ public sealed class MediaSession
             RetireCamerasWithTag(entry.Tag);
             Playback.Start(entry);
         }
-        // Routing comes after Start() so its success/failure is not reset by the new cue.
-        Playback.ReportAudio(output, gain);
-        if (!string.IsNullOrWhiteSpace(output) && !_backgroundRouted)
-        {
-            RouteAudio(entry, output, entry.Volume * gain);
-            if (entry.IsVideo) Playback.ReportRouting(_audio.LastError is not null);
-            else if (_audio.LastError is not null)
-            {
-                // A device WASAPI cannot open must not silence an audio clip: the transport player
-                // takes the sound back over.
-                _audio.Stop();
-                _audioDevice = null;
-                _player.Volume = (float)Math.Clamp(entry.Volume * gain, 0, 1);
-            }
-        }
+        // Routing comes after Start() so this cue is already on air when its speaker is picked.
+        // Only this cue's stream is opened (or reused); every other tag keeps the one it had, so
+        // two videos overlap on the same speaker instead of the newer one replacing the older.
+        SyncCueAudio(entry);
+        PruneClipRouters();
         StateChanged?.Invoke();
         var where = playlist is null ? "" : $" · {playlist.Name} {index + 1}/{playlist.Count}";
         Status?.Invoke($"PLAYING · {(entry.IsVideo ? "VIDEO" : "AUDIO")} · {entry.Label} · tag {entry.Tag}{where}");
@@ -2530,7 +2564,7 @@ public sealed class MediaSession
         if (_playing)
         {
             try { _player.Pause(); } catch { }
-            _audio.Pause();
+            foreach (var routed in _clipRouters.Values) routed.Router.Pause();
             SetTransportPlaying(false);
             Status?.Invoke($"PAUSED · {Current?.Label ?? "clip"} · scorebug video holds its frame");
             return;
@@ -2538,7 +2572,7 @@ public sealed class MediaSession
         if (Selected is not null && !ReferenceEquals(Selected, Current)) { Play(Selected); return; }
         if (Current is null && _backgroundAudio is not null)
         {
-            if (_backgroundRouted)
+            if (BedRouted)
             {
                 Status?.Invoke("AUDIO BED · routed to a speaker output · use its quick button to stop it");
                 return;
@@ -2558,7 +2592,8 @@ public sealed class MediaSession
             ? 0
             : (float)Math.Clamp(Current.Volume * resumeGain, 0, 1);
         try { _player.Play(); } catch { }
-        _audio.Resume();
+        foreach (var routed in _clipRouters.Values) routed.Router.Resume();
+        SyncCueAudio(Current);
         SetTransportPlaying(true);
         if (Current.IsVideo) Playback.Start(Current);
         Status?.Invoke($"PLAYING · {(Current.IsVideo ? "VIDEO" : "AUDIO")} · {Current.Label}");
@@ -2604,12 +2639,8 @@ public sealed class MediaSession
                 _player.Position = TimeSpan.Zero;
                 _player.Play();
                 // A routed clip loops its speaker output as well as its picture.
-                var (loopDevice, loopGain) = OutputFor(Current);
-                if (!string.IsNullOrWhiteSpace(loopDevice))
-                {
-                    _audioDevice = null;
-                    RouteAudio(Current, loopDevice, Current.Volume * loopGain);
-                }
+                StopClipRouter(Current);
+                SyncCueAudio(Current, 0);
             }
             catch { SetTransportPlaying(false); return; }
             Playback.Seek(0);
@@ -2768,8 +2799,7 @@ public sealed class MediaSession
         try { _player.Stop(); _player.Close(); } catch { }
         StopBackgroundAudio(silent: true);
         StopLiveSources();
-        _audio.Stop();
-        _audioDevice = null;
+        StopAllClipRouters();
         ResetReplaySessions();
         _seekApply.Stop();
         _seekTarget = 0;
@@ -2905,7 +2935,8 @@ public sealed class MediaSession
         StopMicrophone();
         StopLiveSources();
         StopBackgroundAudio(silent: true);
-        _audio.Dispose();
+        foreach (var routed in _clipRouters.Values) routed.Router.Dispose();
+        _clipRouters.Clear();
         try { _player.Close(); } catch { }
         try { _background.Close(); } catch { }
     }

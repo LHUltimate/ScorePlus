@@ -54,7 +54,9 @@ public sealed class ReplayBoothWindow : Window
     readonly TextBlock _windowLabel = new() { Text = "2 MIN", FontSize = 10, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xA0, 0xB4)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
     readonly StackPanel _stoppagePanel = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed };
     readonly TextBlock _stoppageValue = new() { Text = "0:00", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD2, 0x66)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 8, 0), MinWidth = 38 };
-    readonly Button _stoppageToggle = new() { Content = "Start", MinWidth = 58, Margin = new Thickness(0, 0, 4, 0) };
+    // A fixed width, not a minimum: Start and Stop are different lengths, and an auto-sized button
+    // moved every control beside it each time the clock changed state.
+    readonly Button _stoppageToggle = new() { Content = "Start", Width = 78, Margin = new Thickness(0, 0, 4, 0) };
     readonly Button _stoppageReset = new() { Content = "Reset", MinWidth = 58, Margin = new Thickness(0, 0, 4, 0) };
     readonly Button _stoppageMinus = new() { Content = "−30s", MinWidth = 52, Margin = new Thickness(0, 0, 4, 0) };
     readonly Button _stoppagePlus = new() { Content = "+30s", MinWidth = 52, Margin = new Thickness(0, 0, 4, 0) };
@@ -64,7 +66,7 @@ public sealed class ReplayBoothWindow : Window
     readonly ComboBox _wallColumnsBox = new() { Width = 130, Margin = new Thickness(0, 0, 0, 6) };
     bool _updatingLayout;
     int _wallColumns = 2;
-    readonly Button _playButton = new() { Content = "Play", MinWidth = 70 };
+    readonly Button _playButton = new() { Content = "Play", Width = 78 };
     readonly Button _backButton = new() { Content = "◀ Wall", MinWidth = 76, Margin = new Thickness(0, 0, 6, 0), Visibility = Visibility.Collapsed };
     readonly CheckBox _labelsCheck = new() { Content = "Show camera names on the bottom corner", IsChecked = true };
     readonly Border _editor = new() { Visibility = Visibility.Collapsed, Padding = new Thickness(10, 7, 10, 7) };

@@ -863,8 +863,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     }
 
     /// <summary>
-    /// Repaints the meter and the show line beside it: what is on air, and the score and clock the
-    /// audience is actually looking at. Read from the published copy, not from staged edits.
+    /// Repaints the rail's peak meter from the sound the machine is actually putting out.
     /// </summary>
     void UpdateSoundMeter()
     {
@@ -879,15 +878,12 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
             for (var index = 0; index < _meterBars.Length; index++)
                 _meterBars[index].Background = index < lit ? new SolidColorBrush((Color)_meterBars[index].Tag) : unlit;
         }
+        // The reading beside the bar, in decibels, so the level is a number and not only a shape.
         SoundLevelText.Text = SoundLevelMeter.Suppressed
-            ? "speakers off"
+            ? "off"
             : level <= 0
-                ? (SoundLevelMeter.Available ? "−∞ dB" : "no output")
+                ? (SoundLevelMeter.Available ? "−∞ dB" : "no out")
                 : $"{SoundLevelMeter.Decibels(level):0} dB";
-        if (_preview is null) { OnAirInfo.Text = "STANDBY"; ShowInfo.Text = "Start a game to go live"; return; }
-        OnAirInfo.Text = _program.HasStagedChanges ? "STAGED · UPDATE TO AIR" : $"ON AIR · {_program.Display.Name.ToUpperInvariant()}";
-        var s = _publishedEngine.State;
-        ShowInfo.Text = $"{s.AwayAbbreviation} {s.AwayScore} · {s.HomeAbbreviation} {s.HomeScore} · {GameEngine.FormatClock(s.ClockSeconds)} · {PeriodDisplay.Format(s)}";
     }
 
     void ApplyHintVisibility()

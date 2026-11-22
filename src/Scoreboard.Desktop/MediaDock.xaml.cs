@@ -1064,12 +1064,30 @@ public partial class MediaDock : UserControl
         return track;
     }
 
+    /// <summary>
+    /// True while an item is actually making sound: a clip that is playing, a microphone that is on
+    /// air, or a speaker bus that is switched on. An idle item shows no bar at all, so a clip that
+    /// is merely selected — or routed to a busy speaker — never looks as though it is playing.
+    /// </summary>
+    bool Audible(MediaEntry entry)
+    {
+        if (_session is null) return false;
+        if (entry.IsSpeaker) return _session.IsOnAir(entry);
+        if (entry.IsMicrophone) return _session.IsOnAir(entry);
+        if (entry.IsCamera) return false;
+        return _session.IsOnAir(entry) && _session.IsPlaying;
+    }
+
     /// <summary>Moves every bar to the level of the source behind it and keeps the master readout current.</summary>
     void UpdateMeters()
     {
         if (_session is null) return;
         foreach (var (entry, fill, track) in _meters)
         {
+            var live = Audible(entry);
+            var wanted = live ? Visibility.Visible : Visibility.Collapsed;
+            if (track.Visibility != wanted) track.Visibility = wanted;
+            if (!live) { fill.Height = 0; continue; }
             var available = track.ActualHeight - 2;
             if (available <= 1) continue;
             var level = Math.Clamp(_session.LevelFor(entry), 0, 1);

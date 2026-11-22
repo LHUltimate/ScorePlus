@@ -467,6 +467,57 @@ public sealed class MediaPlayback
     /// <summary>True when the chosen speaker could not be opened and the clip fell back to the default.</summary>
     public bool RoutingFailed { get; private set; }
 
+    /// <summary>
+    /// What each on-air cue's own sound is doing: the speaker it goes to, the level it plays at and
+    /// whether that speaker could be opened. Held per cue, so two videos on two tags are routed
+    /// separately and a speaker that is off silences only the clip that chose it.
+    /// </summary>
+    readonly Dictionary<string, (string? Device, double Volume, double Gain, bool Failed)> _cueAudio = new(StringComparer.OrdinalIgnoreCase);
+
+    static string CueKey(MediaEntry entry) =>
+        $"{MediaLibrary.NormalizeTag(entry.Tag)}|{entry.Path}".ToLowerInvariant();
+
+    /// <summary>Records where and how loud one on-air cue plays.</summary>
+    public void ReportCueAudio(MediaEntry entry, string? device, double volume, double gain, bool failed = false)
+    {
+        var sound = (string.IsNullOrWhiteSpace(device) ? null : device,
+            Math.Clamp(volume, 0, 1), Math.Clamp(gain, 0, 1), failed);
+        if (_cueAudio.TryGetValue(CueKey(entry), out var current) && current == sound) return;
+        _cueAudio[CueKey(entry)] = sound;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Forgets a cue that has left the air, so a later cue starts clean.</summary>
+    public void ForgetCueAudio(MediaEntry entry)
+    {
+        if (_cueAudio.Remove(CueKey(entry))) Changed?.Invoke();
+    }
+
+    /// <summary>Keeps the mixer state of exactly the cues that are still on air.</summary>
+    public void KeepCueAudio(IEnumerable<MediaEntry> onAir)
+    {
+        var keep = onAir.Select(CueKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var stale = _cueAudio.Keys.Where(key => !keep.Contains(key)).ToArray();
+        if (stale.Length == 0) return;
+        foreach (var key in stale) _cueAudio.Remove(key);
+        Changed?.Invoke();
+    }
+
+    (string? Device, double Volume, double Gain, bool Failed)? CueSound(MediaEntry? entry) =>
+        entry is not null && _cueAudio.TryGetValue(CueKey(entry), out var sound) ? sound : null;
+
+    /// <summary>True when this cue's sound comes from the session's speaker stream, not a video box.</summary>
+    public bool RoutedToDeviceFor(MediaEntry? entry) => CueSound(entry) is { Device: not null };
+
+    /// <summary>True when this cue's chosen speaker could not be opened: silent, not moved elsewhere.</summary>
+    public bool AudioFailedFor(MediaEntry? entry) => CueSound(entry) is { Failed: true };
+
+    /// <summary>This cue's own level, so two clips playing at once each keep their own slider.</summary>
+    public double VolumeFor(MediaEntry? entry) => CueSound(entry)?.Volume ?? entry?.Volume ?? 1;
+
+    /// <summary>This cue's bus level, so one bus moving does not change another tag's clip.</summary>
+    public double GainFor(MediaEntry? entry) => CueSound(entry)?.Gain ?? SpeakerGain;
+
     /// <summary>The transport reports whether routing worked, so no clip ever goes silent.</summary>
     public void ReportRouting(bool failed)
     {

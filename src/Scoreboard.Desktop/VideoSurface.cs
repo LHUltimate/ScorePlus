@@ -430,10 +430,15 @@ public sealed class VideoSurface : Grid
         // this element) is muted here so its sound never comes out of two places at once.
         try
         {
-            _player.IsMuted = _mute || !string.IsNullOrWhiteSpace(_item.AudioDevice) || (_playback?.RoutedToDevice ?? false);
-            // The clip's own level, through the bus that carries its tag: a speaker switched off
-            // takes its clips silent with it instead of leaving them playing on another output.
-            var level = (_playback?.Volume ?? 1) * (_playback?.SpeakerGain ?? 0);
+            // Routing is judged for this cue, not for the newest cue on the show: a video on
+            // another tag keeps its own sound while a second video is routed to a speaker. A
+            // speaker that could not be opened leaves the box silent instead of jumping to
+            // whichever other speaker is switched on.
+            _player.IsMuted = _mute || !string.IsNullOrWhiteSpace(_item.AudioDevice)
+                || (_playback?.RoutedToDeviceFor(entry) ?? false)
+                || (_playback?.AudioFailedFor(entry) ?? false);
+            // The clip's own level, through the bus that carries its tag.
+            var level = (_playback?.VolumeFor(entry) ?? entry.Volume) * (_playback?.GainFor(entry) ?? 1);
             _player.Volume = Math.Clamp(level, 0, 1);
         }
         catch { }
@@ -545,12 +550,14 @@ public sealed class VideoSurface : Grid
         {
             // Start at the transport's point so joining a running clip stays in sync.
             var start = _playback?.Position ?? 0;
-            _router.Play(entry.Path, device, Math.Clamp((_playback?.Volume ?? entry.Volume) * (_playback?.SpeakerGain ?? 0), 0, 1), start);
+            _router.Play(entry.Path, device,
+                Math.Clamp((_playback?.VolumeFor(entry) ?? entry.Volume) * (_playback?.GainFor(entry) ?? 1), 0, 1), start);
             _routedPath = entry.Path;
             _routedDevice = device;
         }
         if (_playback is { IsPlaying: false }) _router.Pause(); else _router.Resume();
-        if (_playback is not null) _router.SetVolume(Math.Clamp(_playback.Volume * _playback.SpeakerGain, 0, 1));
+        if (_playback is not null)
+            _router.SetVolume(Math.Clamp(_playback.VolumeFor(entry) * _playback.GainFor(entry), 0, 1));
     }
 
     void StopRouting()
