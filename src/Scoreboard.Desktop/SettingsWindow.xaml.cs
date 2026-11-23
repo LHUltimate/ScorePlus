@@ -23,6 +23,13 @@ public partial class SettingsWindow : Window
         _draft = prefs.Clone();
         ThemeSelector.ItemsSource = new[] { "System", "Dark", "Light" };
         ThemeSelector.SelectedItem = ThemeSelector.Items.Contains(_draft.Theme) ? _draft.Theme : "System";
+        RoleInput.SelectedIndex = _draft.OperatorRole switch
+        {
+            "Scorekeeper" => 1,
+            "Graphics" => 2,
+            "Cues" => 3,
+            _ => 0
+        };
         ShowHints.IsChecked = _draft.ShowHeadingHints;
         QuickPublishInput.IsChecked = _draft.QuickLayoutsPublish;
         QuickMediaPublishInput.IsChecked = _draft.QuickMediaPublish;
@@ -298,6 +305,18 @@ public partial class SettingsWindow : Window
         _draft.AutoUpdateRecord = AutoRecordInput.IsChecked == true;
     }
 
+    void Role_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || RoleInput is null) return;
+        _draft.OperatorRole = RoleInput.SelectedIndex switch
+        {
+            1 => "Scorekeeper",
+            2 => "Graphics",
+            3 => "Cues",
+            _ => "Full"
+        };
+    }
+
     void TieRule_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_loading || TieRuleInput is null || TiePeriodInput is null) return;
@@ -395,6 +414,7 @@ public partial class SettingsWindow : Window
     {
         if (!ApplyLockPassword()) return false;
         _original.Theme = _draft.Theme;
+        _original.OperatorRole = _draft.OperatorRole;
         _original.ShowHeadingHints = _draft.ShowHeadingHints;
         _original.QuickLayoutsPublish = _draft.QuickLayoutsPublish;
         _original.QuickMediaPublish = _draft.QuickMediaPublish;

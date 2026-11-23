@@ -98,6 +98,138 @@
     </Style>
   </UserControl.Resources>
 
+  <DockPanel>
+  <!-- Show: the ordered cue list and its transport, above the palette of macro buttons that the
+       cues run. This is the same tab, not a second one. -->
+  <Border DockPanel.Dock="Top" Background="{DynamicResource MacroSurfaceBrush}" BorderBrush="{DynamicResource MacroBorderBrush}"
+          BorderThickness="1" CornerRadius="9" Padding="10,8" Margin="0,0,0,8">
+    <StackPanel>
+      <DockPanel Margin="0,0,0,6">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <Button x:Name="CuePrevButton" Style="{StaticResource MacroAction}" Content="◀ PREV" MinWidth="72"
+                  Click="CuePrevious_Click" ToolTip="Move the cue marker back without running anything (Page Up)"/>
+          <Button x:Name="CueGoButton" Style="{StaticResource MacroAccent}" Content="GO" MinWidth="92" MinHeight="38"
+                  FontSize="15" Click="CueGo_Click" ToolTip="Run the current cue and move to the next armed cue (Space)"/>
+          <Button x:Name="CueNextButton" Style="{StaticResource MacroAction}" Content="NEXT ▶" MinWidth="72"
+                  Click="CueNext_Click" ToolTip="Move the cue marker forward without running anything (Page Down)"/>
+          <Button x:Name="CueSkipButton" Style="{StaticResource MacroAction}" Content="Skip cue"
+                  Click="CueSkip_Click" ToolTip="Pass over the current cue and mark the next one"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <Border Width="3" Height="13" CornerRadius="2" Background="{DynamicResource MacroAccentBrush}" Margin="0,0,7,0"/>
+          <TextBlock Text="SHOW" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource MacroTextBrush}" VerticalAlignment="Center"/>
+          <TextBlock x:Name="CueStatus" Text="No cues yet" FontSize="11" Foreground="{DynamicResource MacroMutedBrush}"
+                     VerticalAlignment="Center" Margin="12,0,0,0" TextTrimming="CharacterEllipsis"/>
+        </StackPanel>
+      </DockPanel>
+      <Grid Height="212">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="8"/>
+          <ColumnDefinition Width="266"/>
+        </Grid.ColumnDefinitions>
+        <Border Background="{DynamicResource MacroInputBrush}" CornerRadius="7" Padding="3">
+          <Grid>
+            <!-- The list paints its own background: a transparent ListBox fell back to the system
+                 white and left the cue area unreadable on the dark operator theme. -->
+            <ListBox x:Name="CueList" Background="{DynamicResource MacroInputBrush}" BorderThickness="0"
+                     Foreground="{DynamicResource MacroTextBrush}"
+                     FontFamily="Consolas" FontSize="11" ItemContainerStyle="{StaticResource MacroListItem}"
+                     SelectionChanged="CueList_SelectionChanged" MouseDoubleClick="CueList_DoubleClick">
+              <!-- Themed template: the app's ListBox style paints a white scroll area over the cue
+                   row, which hid the list on the dark operator theme. -->
+              <ListBox.Template>
+                <ControlTemplate TargetType="ListBox">
+                  <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                    <ScrollViewer Focusable="False" Background="Transparent"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                      <ItemsPresenter/>
+                    </ScrollViewer>
+                  </Border>
+                </ControlTemplate>
+              </ListBox.Template>
+            </ListBox>
+            <TextBlock x:Name="CueEmptyText" Text="No cues yet. Add one from the selected macro below, or start from the palette."
+                       Style="{StaticResource MacroHint}" Margin="8,8" Visibility="Visible"/>
+          </Grid>
+        </Border>
+        <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel>
+          <TextBlock Text="CUE NAME" Style="{StaticResource MacroLabel}" Margin="0,0,0,2"/>
+          <TextBox x:Name="CueNameBox" Style="{StaticResource MacroBox}" TextChanged="CueName_Changed"/>
+          <TextBlock Text="NOTES" Style="{StaticResource MacroLabel}"/>
+          <TextBox x:Name="CueNotesBox" Style="{StaticResource MacroBox}" Height="44" AcceptsReturn="True"
+                   TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" TextChanged="CueNotes_Changed"/>
+          <WrapPanel Margin="0,5,0,0">
+            <Button x:Name="CueAddButton" Style="{StaticResource MacroAction}" Content="+ Cue" Padding="8,4" Click="CueAdd_Click" ToolTip="Add the selected macro as the next cue"/>
+            <Button x:Name="CueRemoveButton" Style="{StaticResource MacroAction}" Content="Remove" Padding="8,4" Click="CueRemove_Click"/>
+            <Button x:Name="CueUpButton" Style="{StaticResource MacroAction}" Content="↑" Padding="9,4" Click="CueUp_Click"/>
+            <Button x:Name="CueDownButton" Style="{StaticResource MacroAction}" Content="↓" Padding="9,4" Click="CueDown_Click"/>
+          </WrapPanel>
+          <Button x:Name="CueArmButton" Style="{StaticResource MacroAction}" Content="Arm / disarm" Padding="8,4"
+                  Margin="0,0,0,0" HorizontalAlignment="Stretch" Click="CueArm_Click"/>
+        </StackPanel>
+        </ScrollViewer>
+      </Grid>
+      <Expander x:Name="PracticeExpander" Header="PRACTICE TIMER" IsExpanded="False" Margin="0,6,0,0"
+                Expanded="PracticeExpander_Expanded"
+                Foreground="{DynamicResource MacroMutedBrush}" FontSize="10" FontWeight="Bold">
+        <StackPanel Margin="0,4,0,0">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <Button x:Name="PracticeStartButton" Style="{StaticResource MacroAction}" Content="Start"
+                      Click="PracticeStart_Click" MinWidth="64"/>
+              <Button x:Name="PracticeNextButton" Style="{StaticResource MacroAction}" Content="Next segment"
+                      Click="PracticeNext_Click"/>
+              <Button x:Name="PracticeResetButton" Style="{StaticResource MacroAction}" Content="Reset"
+                      Click="PracticeReset_Click"/>
+            </StackPanel>
+            <TextBlock x:Name="PracticeStatus" Text="No segments" FontSize="11"
+                       Foreground="{DynamicResource MacroTextBrush}" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis"/>
+          </DockPanel>
+          <Grid Height="86" Margin="0,5,0,0">
+            <ListBox x:Name="PracticeList" Background="{DynamicResource MacroInputBrush}" BorderThickness="0"
+                     Foreground="{DynamicResource MacroTextBrush}" FontFamily="Consolas" FontSize="11"
+                     ItemContainerStyle="{StaticResource MacroListItem}"
+                     SelectionChanged="PracticeList_SelectionChanged" MouseDoubleClick="PracticeList_DoubleClick">
+              <ListBox.Template>
+                <ControlTemplate TargetType="ListBox">
+                  <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                    <ScrollViewer Focusable="False" Background="Transparent"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                      <ItemsPresenter/>
+                    </ScrollViewer>
+                  </Border>
+                </ControlTemplate>
+              </ListBox.Template>
+            </ListBox>
+          </Grid>
+          <Grid Margin="0,4,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="72"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock Text="SEGMENT NAME" Style="{StaticResource MacroLabel}" Margin="0,0,0,2"/>
+              <TextBox x:Name="PracticeNameBox" Style="{StaticResource MacroBox}"
+                       ToolTip="The name shown while this segment runs"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Margin="6,0,0,0">
+              <TextBlock Text="MINUTES" Style="{StaticResource MacroLabel}" Margin="0,0,0,2"/>
+              <TextBox x:Name="PracticeMinutesBox" Style="{StaticResource MacroBox}"
+                       ToolTip="Length in minutes, e.g. 2 or 1.5"/>
+            </StackPanel>
+          </Grid>
+          <WrapPanel Margin="0,4,0,0">
+            <Button x:Name="PracticeAddButton" Style="{StaticResource MacroAction}" Content="+ Segment" Click="PracticeAdd_Click"/>
+            <Button Style="{StaticResource MacroAction}" Content="Remove" Click="PracticeRemove_Click"/>
+          </WrapPanel>
+        </StackPanel>
+      </Expander>
+    </StackPanel>
+  </Border>
+
   <Grid>
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="*"/>
@@ -128,7 +260,7 @@
           </StackPanel>
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             <Border Width="3" Height="13" CornerRadius="2" Background="{DynamicResource MacroAccentBrush}" Margin="0,0,7,0"/>
-            <TextBlock Text="MACROS" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource MacroMutedBrush}" VerticalAlignment="Center"/>
+            <TextBlock Text="MACRO PALETTE" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource MacroMutedBrush}" VerticalAlignment="Center"/>
           </StackPanel>
         </DockPanel>
         <TextBlock Style="{StaticResource MacroHint}" Text="One button, several changes, in order. Each press runs the full step list against the current game; Update Output then puts the result on air. Drag the handle to any cell or column; empty cells stay open. Media steps start playing immediately."
@@ -146,8 +278,13 @@
                   MinWidth="30" Padding="6,3" Margin="0,0,8,0" Click="NextPage_Click"
                   ToolTip="Next page of macros"/>
           <Button x:Name="AddPageButton" Style="{StaticResource MacroAction}" Content="+ Page"
-                  Padding="8,3" Margin="0" Click="AddPage_Click"
+                  Padding="8,3" Margin="0,0,6,0" Click="AddPage_Click"
                   ToolTip="Add a blank page for another board of macros"/>
+          <TextBox x:Name="PageNameBox" Style="{StaticResource MacroBox}" Width="120" Padding="6,3"
+                   LostFocus="PageName_LostFocus" ToolTip="Name this page, e.g. Pre-game or Second half"/>
+          <Button x:Name="RemovePageButton" Style="{StaticResource MacroAction}" Content="Remove page"
+                  Padding="8,3" Margin="6,0,0,0" Click="RemovePage_Click"
+                  ToolTip="Delete this page and the macros on it"/>
         </DockPanel>
       </StackPanel>
       <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -187,6 +324,14 @@
           <WrapPanel x:Name="ColorChoices" Margin="0,4,0,0"/>
           <TextBlock Style="{StaticResource MacroHint}" Margin="0,2,0,0"
                      Text="Optional colour coding for the macro button. Leave it empty for the theme accent."/>
+          <TextBlock Text="TILE SIZE" Style="{StaticResource MacroLabel}" Margin="0,8,0,3"/>
+          <ComboBox x:Name="TileSizeBox" Style="{StaticResource MacroCombo}"
+                    ToolTip="Resize the tile: a wide tile spans two columns, a tall one two rows">
+            <ComboBoxItem Content="1 × 1"/>
+            <ComboBoxItem Content="2 × 1 wide"/>
+            <ComboBoxItem Content="1 × 2 tall"/>
+            <ComboBoxItem Content="2 × 2 large"/>
+          </ComboBox>
           <WrapPanel Margin="0,7,0,0">
             <Button x:Name="SaveButton" Style="{StaticResource MacroAccent}" Content="Save macro" Click="Save_Click"/>
             <Button x:Name="DeleteButton" Style="{StaticResource MacroAction}" Content="Delete" Click="Delete_Click"/>
@@ -389,4 +534,5 @@
       </ScrollViewer>
     </Border>
   </Grid>
+  </DockPanel>
 </UserControl>

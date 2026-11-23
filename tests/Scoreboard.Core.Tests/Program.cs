@@ -86,6 +86,115 @@ tickerEngine.State.TickerScoreAlerts=false;
 Check(TickerRotation.LocalScoreAlert(tickerEngine.State).Length==0,"switching score alerts off stops the ticker alert");
 tickerEngine.SetTickerSettings([],["Only news"],autoRotate:true,scoreAlerts:true,dwellSeconds:1,transitionSeconds:0.25);
 Check(TickerRotation.Build(tickerEngine.State).Count==1&&TickerRotation.Build(tickerEngine.State)[0].Text=="NEWS · Only news","clearing every chosen game leaves the news rotation usable on its own");
+// Stage 0: the show spine publishes ordered events, one evaluator answers every rule, and an older
+// game file arrives in the current shape instead of half-missing.
+var spineEvents=new List<ShowEvent>();
+using(var spineSubscription=ShowBus.Shared.Subscribe(spineEvents.Add))
+{
+    var first=ShowBus.Shared.Publish(ShowEventKind.Score,"Score","Home +2");
+    var second=ShowBus.Shared.Publish(ShowEventKind.Media,"Media","Clip on air");
+    Check(second.Sequence==first.Sequence+1,"the show spine stamps a growing sequence on every event");
+    Check(spineEvents.Select(item=>item.Sequence).SequenceEqual([first.Sequence,second.Sequence]),
+        "a subscriber sees events in publication order");
+}
+Check(ShowBus.Shared.Recent().Any(item=>item.Description=="Home +2"),"recent events are kept for the triggers page");
+Check(ShowEventKinds.FromType("Score")==ShowEventKind.Score&&ShowEventKinds.FromType("Roster")==ShowEventKind.Roster
+    &&ShowEventKinds.FromType("a type nobody knows")==ShowEventKind.System,"log types map onto the spine's event kinds");
+var spineEngine=new GameEngine();spineEngine.NewGame("basketball");spineEngine.SetTeams("Eagles","Tigers");
+var recorded=new List<ShowEvent>();
+using(ShowBus.Shared.Subscribe(recorded.Add)){spineEngine.Score(true,2);spineEngine.RecordEvent("Media","Clip on air");}
+Check(recorded.Count>=2&&recorded[0].Kind==ShowEventKind.Score&&recorded[^1].Kind==ShowEventKind.Media,
+    "the engine publishes console scoring and media actions onto the same spine");
+var spineRule=new AutomationRule{Enabled=true,Conditions=[new AutomationCondition{Field=AutomationField.HomeScore,Operator=AutomationOperator.GreaterOrEqual,Value=3}]};
+spineEngine.Score(true,3);
+Check(TriggerEvaluator.Matches(spineRule,spineEngine.State),"the shared evaluator answers the question the runtime asks");
+spineRule.Enabled=false;
+Check(!TriggerEvaluator.Matches(spineRule,spineEngine.State)&&TriggerEvaluator.Active([spineRule],spineEngine.State).Count==0,
+    "a disabled rule is never live, whoever asks");
+var spineWaitRule=new AutomationRule{Conditions=[
+    new AutomationCondition{Field=AutomationField.HomeScore,Operator=AutomationOperator.GreaterOrEqual,Value=1},
+    new AutomationCondition{Field=AutomationField.GameClock,Operator=AutomationOperator.Less,Value=60,WaitUntil=true}]};
+var waitResult=TriggerEvaluator.Evaluate(spineWaitRule,spineEngine.State);
+Check(waitResult.HasWait&&waitResult.Trigger&&!waitResult.WaitMet,
+    "the evaluator reports the trigger and the wait condition separately");
+var oldDocument=new GameFileDocument{Version=1,Game=new GameState(),Design=new ScorebugDocument{Displays=[new ScorebugDisplay{Layouts=[new ScorebugLayout{Id=""}],Automations=[new AutomationRule{Id="",Name=""}]}]}};
+Check(ShowSchema.Migrate(oldDocument),"a version 1 game file is migrated when it is opened");
+Check(oldDocument.Version==ShowSchema.CurrentGameFileVersion
+    &&!string.IsNullOrWhiteSpace(oldDocument.Design!.Displays[0].Layouts[0].Id)
+    &&!string.IsNullOrWhiteSpace(oldDocument.Design.Displays[0].Automations[0].Id)
+    &&oldDocument.Design.Displays[0].Automations[0].Name.Length>0,
+    "migration stamps the version and repairs missing layout and rule identities");
+var oldGamePath=Path.Combine(Path.GetTempPath(),$"spine-v1-{Guid.NewGuid():N}.spg");
+try
+{
+    File.WriteAllText(oldGamePath,JsonSerializer.Serialize(new GameFileDocument{Version=1,Game=new GameState{HomeTeam="Legacy"}}));
+    var (legacyGame,_)=GameFiles.Read(oldGamePath);
+    Check(legacyGame.HomeTeam=="Legacy","a version 1 .spg still opens exactly as it was written");
+}
+finally{if(File.Exists(oldGamePath))File.Delete(oldGamePath);}
+// Stage 1: a run of show is built from the macro board, points at the macros rather than copying
+// their steps, and a version 2 game gains one when it is opened.
+var cueSource=new[]{new SavedMacro{Id="m2",Label="Second",Page=0,Row=1},new SavedMacro{Id="m1",Label="First",Page=0,Row=0}};
+var builtCues=CueLists.FromMacros(cueSource);
+Check(builtCues.Count==2&&builtCues[0].MacroId=="m1"&&builtCues[1].MacroId=="m2",
+    "a first run of show follows the macro board's own order");
+Check(CueLists.NextArmed(builtCues,0)==1&&CueLists.Previous(0,2)==1&&CueLists.Next(1,2)==0,
+    "cue transport wraps at both ends and skips to the next armed cue");
+builtCues[1].Armed=false;
+Check(CueLists.NextArmed(builtCues,0)==0,"a disarmed cue is passed over by GO");
+var cueState=new GameState{Cues=[new ShowCue{MacroId="m1",Name="Open"},new ShowCue{MacroId="m2"}],CueIndex=9};
+CueLists.Normalize(cueState);
+Check(cueState.CueIndex==1,"a stale cue marker is clamped to the end of the list on load");
+var v2Document=new GameFileDocument{Version=2,Game=new GameState{Macros=[new SavedMacro{Id="m1",Label="Open",Row=0},new SavedMacro{Id="m2",Label="Close",Row=1}]}};
+Check(ShowSchema.Migrate(v2Document),"a version 2 game file is migrated when the run of show arrives");
+Check(v2Document.Version==3&&v2Document.Game!.Cues.Count==2&&v2Document.Game.Cues[0].MacroId=="m1",
+    "migration gives an older game one cue per macro without copying the steps");
+var emptyCuesDocument=new GameFileDocument{Version=3,Game=new GameState{Macros=[new SavedMacro{Id="m1"}]}};
+ShowSchema.Migrate(emptyCuesDocument);
+Check(emptyCuesDocument.Game!.Cues.Count==0,"a current game with its cue list deliberately emptied is left alone");
+// Workspaces and practice plans: tile spans clamp, page names survive, and a blank segment gets
+// a readable name and a real length instead of saving as an empty countdown.
+var spanMacro=new SavedMacro{Label="Wide",ColumnSpan=9,RowSpan=-2};
+spanMacro.Normalize();
+Check(spanMacro.ColumnSpan==2&&spanMacro.RowSpan==1,"a tile's span is clamped to the two-by-two board");
+var spanCopy=spanMacro.Copy();
+Check(spanCopy.ColumnSpan==2&&spanCopy.RowSpan==1,"a resized tile keeps its size when copied");
+var practiceState=new GameState{PracticeSegments=[new PracticeSegment{Name="  ",Seconds=0}],PracticeIndex=5};
+PracticePlans.Normalize(practiceState);
+Check(practiceState.PracticeSegments[0].Name=="Drill"&&practiceState.PracticeSegments[0].Seconds==5&&practiceState.PracticeIndex==0,
+    "a blank practice segment becomes a named five-second drill, and the marker is clamped");
+// Stage 2: a team identity switch moves the whole identity between the two sides and can list
+// exactly what changes before it is applied.
+var switchState=new GameState{HomeTeam="Home",AwayTeam="Visitors",HomeAbbreviation="HOM",AwayAbbreviation="VIS",
+    HomePrimaryColor="#FF111111",AwayPrimaryColor="#FF222222",HomeLogoPath="home.png",AwayLogoPath="away.png",HomeRecord="4-0",AwayRecord="0-4"};
+var switchDiff=TeamIdentities.Diff(switchState);
+Check(switchDiff.Any(row=>row.Field=="Name"&&row.Before=="Home"&&row.After=="Visitors"),
+    "the team switch preview lists what its preflight diff will move");
+TeamIdentities.Swap(switchState);
+Check(switchState.HomeTeam=="Visitors"&&switchState.AwayTeam=="Home"&&switchState.HomeAbbreviation=="VIS"
+    &&switchState.HomePrimaryColor=="#FF222222"&&switchState.HomeLogoPath=="away.png"&&switchState.HomeRecord=="0-4",
+    "the team switch moves names, colours, logos and records together");
+// Stage 2: element logic is stored with the element and evaluates its conditions against the game.
+var logicState=new GameState{Down=3};
+var logicRule=new ElementLogicRule
+{
+    Enter=ElementLogicAction.Pulse, Exit=ElementLogicAction.None,
+    Conditions=[new AutomationCondition{Field=AutomationField.Down,Operator=AutomationOperator.GreaterOrEqual,Value=3}]
+};
+Check(logicRule.Matches(logicState),"an element logic rule matches the state it was written for");
+logicState.Down=2;
+Check(!logicRule.Matches(logicState),"an element logic rule stops matching when its condition clears");
+var logicJson=JsonSerializer.Serialize(new ScorebugElement{Logic=[logicRule]});
+var logicBack=JsonSerializer.Deserialize<ScorebugElement>(logicJson)!;
+Check(logicBack.Logic.Count==1&&logicBack.Logic[0].Enter==ElementLogicAction.Pulse&&logicBack.Logic[0].Conditions[0].Field==AutomationField.Down,
+    "element logic survives a save and reopen");
+var zoneElement=new ScorebugElement{Kind=ScorebugElementKind.Layout,IsZone=true,ZoneName="Lower third",NestedLayoutId="source"};
+var zoneJson=JsonSerializer.Deserialize<ScorebugElement>(JsonSerializer.Serialize(zoneElement))!;
+Check(zoneJson.IsZone&&zoneJson.ZoneName=="Lower third"&&zoneJson.NestedLayoutId=="source",
+    "a zone keeps its region name and source layout when saved");
+var blendElement=new ScorebugElement{Kind=ScorebugElementKind.Shape,BlendMode="Multiply"};
+var blendBack=JsonSerializer.Deserialize<ScorebugElement>(JsonSerializer.Serialize(blendElement))!;
+Check(blendBack.BlendMode=="Multiply","a layer's blend mode survives a save and reopen");
 var catalogPath=Path.Combine(Path.GetTempPath(),$"sports-{Guid.NewGuid():N}.json");
 try
 {

@@ -14,6 +14,15 @@
         <ComboBox x:Name="ThemeSelector" SelectionChanged="Theme_Changed"/>
         <TextBlock Text="System follows the Windows app theme (Settings → Personalisation → Colors), so the panels match your desktop. Dark and Light pin one. Applies to operator windows only: scorebug and audience graphics keep their designed colors." TextWrapping="Wrap" Foreground="#93A0B2" FontSize="11" Margin="6,4,6,14"/>
         <Separator/>
+        <TextBlock Text="OPERATOR PROFILES" Foreground="#93A0B2" FontSize="11" Margin="4,14,0,2"/>
+        <ComboBox x:Name="RoleInput" SelectionChanged="Role_Changed">
+          <ComboBoxItem Content="Full access — every desk"/>
+          <ComboBoxItem Content="Scorekeeper — control and rosters"/>
+          <ComboBoxItem Content="Graphics — media and show"/>
+          <ComboBoxItem Content="Cues — show only"/>
+        </ComboBox>
+        <TextBlock Text="Hides the desks this operator does not need, so a scorekeeper cannot change a layout and a graphics operator cannot change the score. The phone remote refuses score and clock changes for Graphics and Cues. The choice is remembered on this computer; the phone remote password stays shared."
+                   TextWrapping="Wrap" Foreground="#93A0B2" FontSize="11" Margin="6,4,6,12"/>
         <TextBlock Text="OPERATOR WORKFLOW" Foreground="#93A0B2" FontSize="11" Margin="4,14,0,2"/>
         <CheckBox x:Name="ShowHints" Content="Show tips next to headings (for example 'scoring, timing, actions')" Checked="Controls_Changed" Unchecked="Controls_Changed"/>
         <TextBlock Text="Off by default. Turning it on adds the small explanatory labels in the header, the media dock and the console cards." TextWrapping="Wrap" Foreground="#93A0B2" FontSize="11" Margin="6,4,6,8"/>

@@ -30,6 +30,7 @@ public partial class MacroDock : UserControl
     readonly MediaSession _session;
     readonly ScorebugCatalog? _catalog;
     readonly MacroRunner _runner;
+    readonly CueRunner _cues;
     readonly Action? _publishOutput;
     readonly Func<bool>? _liveState;
     readonly Action<bool>? _setLive;
@@ -53,6 +54,11 @@ public partial class MacroDock : UserControl
     bool _showHints;
     int _page;
     int _pageCount = 1;
+    int _cueSelection = -1;
+    bool _cueSync;
+    string _cueSignature = "";
+    readonly PracticeTimer _practice = new();
+    bool _pageNameSync;
 
     sealed record KindChoice(MacroActionKind Kind, string Label)
     {
@@ -166,6 +172,11 @@ public partial class MacroDock : UserControl
         _liveState = liveState;
         _setLive = setLive;
         _runner = new MacroRunner(engine, session, executeControl, catalog, publishOutput);
+        _cues = new CueRunner(engine, _runner);
+        _engine.Changed += CueChanged;
+        _practice.Tick += RefreshPracticeStatus;
+        _engine.Changed += PracticeChanged;
+        Unloaded += (_, _) => { _engine.Changed -= CueChanged; _engine.Changed -= PracticeChanged; _practice.Stop(); };
         // The board paints itself from its own palette so generated cards, the step list and the
         // editor all follow the active theme. Opting out keeps the window-wide theme pass from
         // flattening the card hierarchy and its accent.
@@ -240,6 +251,8 @@ public partial class MacroDock : UserControl
         LiveButton.IsEnabled = _setLive is not null;
         RefreshLiveButton();
         RefreshView();
+        RefreshPractice();
+        RefreshCues(force: true);
     }
 
     /// <summary>
@@ -275,6 +288,221 @@ public partial class MacroDock : UserControl
         }
         RenderMacros();
         LoadEditor();
+        RefreshCues();
+    }
+
+    // ---------- run of show ----------
+
+    void CueChanged()
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(new Action(() => RefreshCues())); return; }
+        RefreshCues();
+    }
+
+    /// <summary>
+    /// Repaints the cue list when its content or marker moved. A signature keeps the one-second
+    /// clock updates from rebuilding the list sixty times a second.
+    /// </summary>
+    void RefreshCues(bool force = false)
+    {
+        var cues = _engine.State.Cues;
+        var signature = $"{_engine.State.CueIndex}|{cues.Count}|" + string.Join("|", cues.Select(cue =>
+            $"{cue.Id}:{cue.Armed}:{cue.Name}:{cue.MacroId}:{cue.Notes}"));
+        if (!force && signature == _cueSignature) return;
+        _cueSignature = signature;
+        _cueSelection = Math.Clamp(_engine.State.CueIndex, 0, Math.Max(0, cues.Count - 1));
+        _cueSync = true;
+        CueList.ItemsSource = cues.Select((cue, index) =>
+        {
+            var macro = _engine.State.Macros.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, cue.MacroId, StringComparison.OrdinalIgnoreCase));
+            var notes = string.IsNullOrWhiteSpace(cue.Notes) ? "" : $"  ·  {cue.Notes}";
+            return $"{(index == _engine.State.CueIndex ? "▶" : " ")} {index + 1:00} {(cue.Armed ? "●" : "○")} {cue.DisplayName}  [{macro?.Label ?? "missing macro"}]{notes}";
+        }).ToArray();
+        CueEmptyText.Visibility = cues.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        CueStatus.Text = _cues.Summary;
+        if (cues.Count == 0)
+        {
+            CueNameBox.Text = "";
+            CueNotesBox.Text = "";
+        }
+        else
+        {
+            CueList.SelectedIndex = _cueSelection;
+            CueNameBox.Text = cues[_cueSelection].Name;
+            CueNotesBox.Text = cues[_cueSelection].Notes;
+        }
+        CueList.IsEnabled = cues.Count > 0;
+        _cueSync = false;
+    }
+
+    async void CueGo_Click(object sender, RoutedEventArgs e) => await RunGoAsync();
+
+    /// <summary>The cue strip on the phone: current cue, what comes next, and the armed flag.</summary>
+    public string CueJson()
+    {
+        var cues = _engine.State.Cues;
+        var index = Math.Clamp(_engine.State.CueIndex, 0, Math.Max(0, cues.Count - 1));
+        var cue = cues.Count == 0 ? null : cues[index];
+        var next = cues.Count == 0 ? null : cues.Skip(index + 1).FirstOrDefault(candidate => candidate.Armed);
+        return JsonSerializer.Serialize(new
+        {
+            index,
+            count = cues.Count,
+            name = cue?.DisplayName ?? "",
+            notes = cue?.Notes ?? "",
+            armed = cue?.Armed ?? false,
+            next = next?.DisplayName ?? ""
+        });
+    }
+
+    /// <summary>Runs a cue-strip button from the phone on the UI thread.</summary>
+    public bool RemoteCue(string action)
+    {
+        switch (action)
+        {
+            case "go": _ = RunGoAsync(); return true;
+            case "prev": CuePrevious_Click(this, new RoutedEventArgs()); return true;
+            case "next": CueNext_Click(this, new RoutedEventArgs()); return true;
+            case "skip": CueSkip_Click(this, new RoutedEventArgs()); return true;
+            case "arm": CueArm_Click(this, new RoutedEventArgs()); return true;
+            default: return false;
+        }
+    }
+
+    async Task RunGoAsync()
+    {
+        SaveDraft(false);
+        var message = await _cues.GoAsync();
+        CueStatus.Text = message;
+        Status?.Invoke(message);
+        RefreshCues(force: true);
+    }
+
+    void CuePrevious_Click(object sender, RoutedEventArgs e)
+    {
+        SaveDraft(false);
+        var message = _cues.Previous();
+        CueStatus.Text = message;
+        Status?.Invoke(message);
+        RefreshCues(force: true);
+    }
+
+    void CueNext_Click(object sender, RoutedEventArgs e)
+    {
+        SaveDraft(false);
+        var message = _cues.Next();
+        CueStatus.Text = message;
+        Status?.Invoke(message);
+        RefreshCues(force: true);
+    }
+
+    void CueSkip_Click(object sender, RoutedEventArgs e)
+    {
+        var message = _cues.Skip();
+        CueStatus.Text = message;
+        Status?.Invoke(message);
+        RefreshCues(force: true);
+    }
+
+    void CueAdd_Click(object sender, RoutedEventArgs e)
+    {
+        SaveDraft(false);
+        var macro = _draft ?? _engine.State.Macros.FirstOrDefault();
+        if (macro is null)
+        {
+            Status?.Invoke("CUE · create a macro first, then add it as a cue");
+            return;
+        }
+        var cues = _engine.State.Cues;
+        var cue = new ShowCue
+        {
+            MacroId = macro.Id,
+            Name = macro.Label,
+            Section = macro.Page == 0 ? "" : $"Page {macro.Page + 1}"
+        };
+        var at = cues.Count == 0 ? 0 : Math.Clamp(_engine.State.CueIndex + 1, 0, cues.Count);
+        cues.Insert(at, cue);
+        _engine.State.CueIndex = at;
+        _engine.RecordEvent("Cue", $"Added cue {at + 1} · {cue.DisplayName}");
+        RefreshCues(force: true);
+        Status?.Invoke($"CUE · added {cue.DisplayName}");
+    }
+
+    void CueRemove_Click(object sender, RoutedEventArgs e)
+    {
+        var cues = _engine.State.Cues;
+        if (cues.Count == 0) return;
+        var index = Math.Clamp(_cueSelection, 0, cues.Count - 1);
+        var removed = cues[index];
+        cues.RemoveAt(index);
+        _engine.State.CueIndex = Math.Clamp(index, 0, Math.Max(0, cues.Count - 1));
+        _engine.RecordEvent("Cue", $"Removed cue · {removed.DisplayName}");
+        RefreshCues(force: true);
+    }
+
+    void CueUp_Click(object sender, RoutedEventArgs e) => MoveCue(-1);
+    void CueDown_Click(object sender, RoutedEventArgs e) => MoveCue(1);
+
+    void MoveCue(int delta)
+    {
+        if (!_cues.Move(delta)) return;
+        RefreshCues(force: true);
+    }
+
+    void CueArm_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cues.ToggleArmed(_cueSelection)) RefreshCues(force: true);
+    }
+
+    void CueList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_cueSync || CueList.SelectedIndex < 0) return;
+        _cueSelection = CueList.SelectedIndex;
+        _cues.Jump(_cueSelection);
+        RefreshCues(force: true);
+    }
+
+    async void CueList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (CueList.SelectedIndex < 0) return;
+        _cues.Jump(CueList.SelectedIndex);
+        await RunGoAsync();
+    }
+
+    void CueName_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_cueSync || _cueSelection < 0 || _cueSelection >= _engine.State.Cues.Count) return;
+        _engine.State.Cues[_cueSelection].Name = CueNameBox.Text.Trim();
+        _cueSignature = "";
+        CueStatus.Text = _cues.Summary;
+    }
+
+    void CueNotes_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_cueSync || _cueSelection < 0 || _cueSelection >= _engine.State.Cues.Count) return;
+        _engine.State.Cues[_cueSelection].Notes = CueNotesBox.Text.Trim();
+        _cueSignature = "";
+    }
+
+    /// <summary>Space, Page Up and Page Down drive the cue list from anywhere on this tab.</summary>
+    public bool HandleTransportKey(Key key)
+    {
+        if (Visibility != Visibility.Visible) return false;
+        switch (key)
+        {
+            case Key.Space:
+                _ = RunGoAsync();
+                return true;
+            case Key.PageUp:
+                CuePrevious_Click(this, new RoutedEventArgs());
+                return true;
+            case Key.PageDown:
+                CueNext_Click(this, new RoutedEventArgs());
+                return true;
+            default:
+                return false;
+        }
     }
 
     /// <summary>
@@ -326,6 +554,10 @@ public partial class MacroDock : UserControl
     void UpdatePageBar()
     {
         PageLabel.Text = $"PAGE {_page + 1} / {_pageCount}";
+        _pageNameSync = true;
+        try { PageNameBox.Text = PageName(_page); }
+        finally { _pageNameSync = false; }
+        RemovePageButton.IsEnabled = _pageCount > 1;
         PrevPageButton.IsEnabled = _page > 0;
         NextPageButton.IsEnabled = _page < _pageCount - 1;
         AddPageButton.IsEnabled = _pageCount < 99;
@@ -345,6 +577,38 @@ public partial class MacroDock : UserControl
         RenderMacros();
         LoadEditor();
         Status?.Invoke($"MACRO · Page {_page + 1} of {_pageCount}");
+    }
+
+    string PageName(int page)
+    {
+        var names = _engine.State.MacroPageNames;
+        return page >= 0 && page < names.Count ? names[page] : "";
+    }
+
+    void PageName_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_pageNameSync) return;
+        var names = Enumerable.Range(0, _pageCount)
+            .Select(index => index == _page ? PageNameBox.Text : PageName(index)).ToList();
+        _engine.StorePageNames(names);
+    }
+
+    void RemovePage_Click(object sender, RoutedEventArgs e)
+    {
+        if (_pageCount <= 1) return;
+        SaveDraft(false);
+        _macros.RemoveAll(macro => macro.Page == _page);
+        var names = Enumerable.Range(0, _pageCount).Where(index => index != _page).Select(PageName).ToList();
+        foreach (var macro in _macros.Where(macro => macro.Page > _page)) macro.Page--;
+        _pageCount--;
+        _page = Math.Clamp(_page, 0, _pageCount - 1);
+        _draft = MacrosOnPage.FirstOrDefault()?.Copy();
+        _dirty = false;
+        StoreBoard();
+        _engine.StorePageNames(names);
+        RenderMacros();
+        LoadEditor();
+        Status?.Invoke($"MACRO · Removed page · {_pageCount} left");
     }
 
     void AddPage_Click(object sender, RoutedEventArgs e)
@@ -393,7 +657,7 @@ public partial class MacroDock : UserControl
     {
         var width = CardWidth();
         foreach (var card in MacroButtons.Children.OfType<Border>())
-            card.Width = width;
+            card.Width = card.Tag is SavedMacro { ColumnSpan: > 1 } ? double.NaN : width;
     }
 
     IEnumerable<SavedMacro> MacrosOnPage => _macros.Where(macro => macro.Page == _page);
@@ -413,15 +677,21 @@ public partial class MacroDock : UserControl
         for (var column = 0; column < columns; column++)
             MacroButtons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var placements = LayoutMacros(columns);
-        var rows = placements.Count == 0 ? 0 : placements.Max(placement => placement.Row) + 1;
+        var rows = placements.Count == 0 ? 0 : placements.Max(placement => placement.Row + Math.Clamp(placement.Macro.RowSpan, 1, 2));
         for (var row = 0; row < rows; row++)
             MacroButtons.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         foreach (var placement in placements)
         {
             var card = BuildMacroCard(placement.Macro);
-            card.Width = CardWidth();
+            var columnSpan = Math.Clamp(placement.Macro.ColumnSpan, 1, Math.Min(2, columns));
+            var rowSpan = Math.Clamp(placement.Macro.RowSpan, 1, 2);
+            // A spanning card stretches across its cells; an explicit width would overflow them.
+            card.Width = columnSpan > 1 ? double.NaN : CardWidth();
+            if (columnSpan > 1) card.HorizontalAlignment = HorizontalAlignment.Stretch;
             Grid.SetRow(card, placement.Row);
             Grid.SetColumn(card, placement.Column);
+            Grid.SetColumnSpan(card, columnSpan);
+            Grid.SetRowSpan(card, rowSpan);
             MacroButtons.Children.Add(card);
         }
     }
@@ -524,8 +794,14 @@ public partial class MacroDock : UserControl
             {
                 var row = macro.Row;
                 var column = Math.Clamp(macro.Column, 0, columns - 1);
-                if (occupied.Add((row, column)))
+                var columnSpan = Math.Clamp(macro.ColumnSpan, 1, Math.Min(2, columns - column));
+                var rowSpan = Math.Clamp(macro.RowSpan, 1, 2);
+                var cells = (from r in Enumerable.Range(row, rowSpan)
+                             from c in Enumerable.Range(column, columnSpan)
+                             select (r, c)).ToArray();
+                if (cells.All(cell => !occupied.Contains(cell)))
                 {
+                    foreach (var cell in cells) occupied.Add(cell);
                     placements.Add(new MacroPlacement(macro, row, column));
                     continue;
                 }
@@ -551,6 +827,8 @@ public partial class MacroDock : UserControl
             }
             while (occupied.Contains((nextRow, nextColumn))) Advance();
             occupied.Add((nextRow, nextColumn));
+            if (Math.Clamp(macro.ColumnSpan, 1, 2) == 2 && nextColumn + 1 < columns) occupied.Add((nextRow, nextColumn + 1));
+            if (Math.Clamp(macro.RowSpan, 1, 2) == 2) occupied.Add((nextRow + 1, nextColumn));
             placements.Add(new MacroPlacement(macro, nextRow, nextColumn));
             Advance();
         }
@@ -564,6 +842,8 @@ public partial class MacroDock : UserControl
         {
             NameBox.Text = _draft?.Label ?? "";
             ColorBox.Text = _draft?.Color ?? "";
+            TileSizeBox.SelectedIndex = _draft is null ? 0 : _draft.ColumnSpan > 1 && _draft.RowSpan > 1 ? 3
+                : _draft.ColumnSpan > 1 ? 1 : _draft.RowSpan > 1 ? 2 : 0;
             StepList.ItemsSource = _draft?.Actions;
             SaveButton.IsEnabled = DeleteButton.IsEnabled = _draft is not null;
             EditStatus.Text = _draft is null ? "NEW" : _dirty ? "UNSAVED" : "SAVED";
@@ -1098,6 +1378,13 @@ public partial class MacroDock : UserControl
         if (history) PushHistory();
         if (_draft is null) return;
         _draft.Label = string.IsNullOrWhiteSpace(NameBox.Text) ? "Macro" : NameBox.Text.Trim();
+        (_draft.ColumnSpan, _draft.RowSpan) = TileSizeBox.SelectedIndex switch
+        {
+            1 => (2, 1),
+            2 => (1, 2),
+            3 => (2, 2),
+            _ => (1, 1)
+        };
         var existing = _macros.FirstOrDefault(item => item.Id == _draft.Id);
         if (existing is null)
         {
@@ -1134,6 +1421,121 @@ public partial class MacroDock : UserControl
         UpdateColorChoiceHighlight();
         EditStatus.Text = "SAVED";
         if (announce) Status?.Invoke($"MACRO · {_draft.Label} saved");
+    }
+
+    void PracticeChanged()
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(new Action(RefreshPracticeList)); return; }
+        if (PracticeExpander.IsExpanded) RefreshPracticeList();
+    }
+
+    void PracticeExpander_Expanded(object sender, RoutedEventArgs e) => RefreshPractice();
+
+    // ---------- practice timer ----------
+
+    void RefreshPractice()
+    {
+        var segments = _engine.State.PracticeSegments;
+        _practice.Load(segments, _engine.State.PracticeIndex);
+        RefreshPracticeList();
+        RefreshPracticeStatus();
+    }
+
+    void RefreshPracticeList()
+    {
+        var segments = _engine.State.PracticeSegments;
+        var selected = _practice.Index;
+        _syncing = true;
+        try
+        {
+            PracticeList.ItemsSource = segments.Select((segment, index) =>
+                $"{(index == selected ? "▶" : " ")} {index + 1:00}  {segment.Name}  ·  {PracticeTimer.Format(segment.Seconds)}").ToArray();
+            PracticeList.SelectedIndex = segments.Count == 0 ? -1 : Math.Clamp(selected, 0, segments.Count - 1);
+        }
+        finally { _syncing = false; }
+        PracticeStartButton.IsEnabled = segments.Count > 0;
+        PracticeNextButton.IsEnabled = segments.Count > 1;
+        PracticeResetButton.IsEnabled = segments.Count > 0;
+    }
+
+    void RefreshPracticeStatus()
+    {
+        var segments = _engine.State.PracticeSegments;
+        if (segments.Count == 0)
+        {
+            PracticeStatus.Text = "No segments. Add one below: a name and a length in minutes.";
+            PracticeStartButton.Content = "Start";
+            return;
+        }
+        var index = Math.Clamp(_practice.Index, 0, segments.Count - 1);
+        var segment = segments[index];
+        PracticeStartButton.Content = _practice.Running ? "Pause" : "Start";
+        PracticeStatus.Text = $"{(_practice.Running ? "▶" : _practice.Expired ? "■" : "■")} {PracticeTimer.Format(_practice.RemainingSeconds)} · {segment.Name} · segment {index + 1} of {segments.Count}";
+    }
+
+    void PracticeStart_Click(object sender, RoutedEventArgs e)
+    {
+        if (_engine.State.PracticeSegments.Count == 0) return;
+        _practice.Toggle();
+        RefreshPracticeStatus();
+    }
+
+    void PracticeNext_Click(object sender, RoutedEventArgs e)
+    {
+        _practice.Next();
+        _engine.StorePractice(_engine.State.PracticeSegments, _practice.Index);
+        RefreshPracticeList();
+        RefreshPracticeStatus();
+    }
+
+    void PracticeReset_Click(object sender, RoutedEventArgs e)
+    {
+        _practice.Reset();
+        RefreshPracticeStatus();
+    }
+
+    void PracticeList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncing || PracticeList.SelectedIndex < 0) return;
+        _practice.Jump(PracticeList.SelectedIndex);
+        _engine.StorePractice(_engine.State.PracticeSegments, _practice.Index);
+        RefreshPracticeStatus();
+    }
+
+    void PracticeList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (PracticeList.SelectedIndex < 0) return;
+        _practice.Jump(PracticeList.SelectedIndex);
+        _practice.Start();
+        RefreshPracticeStatus();
+    }
+
+    void PracticeAdd_Click(object sender, RoutedEventArgs e)
+    {
+        var name = (PracticeNameBox.Text ?? "").Trim();
+        if (name.Length == 0) { Status?.Invoke("PRACTICE · Type a segment name first"); return; }
+        if (!double.TryParse(PracticeMinutesBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var minutes)
+            && !double.TryParse(PracticeMinutesBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out minutes))
+            minutes = 5;
+        var segment = new PracticeSegment { Name = name, Seconds = (int)Math.Round(Math.Clamp(minutes, 0.1, 60) * 60) };
+        var segments = _engine.State.PracticeSegments.Select(item => item.Copy()).ToList();
+        segments.Add(segment);
+        _engine.StorePractice(segments, _practice.Index);
+        PracticeNameBox.Text = "";
+        PracticeMinutesBox.Text = "";
+        RefreshPractice();
+        Status?.Invoke($"PRACTICE · Added {segment.Name}");
+    }
+
+    void PracticeRemove_Click(object sender, RoutedEventArgs e)
+    {
+        var index = PracticeList.SelectedIndex;
+        var segments = _engine.State.PracticeSegments;
+        if (index < 0 || index >= segments.Count) return;
+        var next = segments.Where((_, at) => at != index).Select(item => item.Copy()).ToList();
+        _engine.StorePractice(next, Math.Min(index, Math.Max(0, next.Count - 1)));
+        RefreshPractice();
+        Status?.Invoke("PRACTICE · Removed segment");
     }
 
     void Name_Changed(object sender, TextChangedEventArgs e)

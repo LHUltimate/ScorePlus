@@ -619,6 +619,11 @@ public partial class ScorebugEditorWindow : Window
         // Follow it onto a portrait or higher-DPI monitor without running off the screen.
         ScreenFit.Track(this);
         RefreshMotionLists();
+        BuildLogicPanel();
+        RefreshLogicPanel();
+        BuildBlendPanel();
+        RefreshBlendPanel();
+        Layers.SelectionChanged += (_, _) => { RefreshLogicPanel(); RefreshBlendPanel(); };
         // Saved clips are offered beside the presets by RefreshMotionLists.
         // Built-in arrivals plus the show's named transitions, by RefreshLayoutTransitionChoices.
         ShapeInput.ItemsSource=Enum.GetValues<ScorebugShape>();
@@ -716,6 +721,17 @@ public partial class ScorebugEditorWindow : Window
         return false;
     }
 
+    // The Logic page lives below the element properties: one list of rules, plus the controls that
+    // add a condition. It edits the selected element only, so it can never leak across a selection.
+    ListBox? _logicList;
+    ComboBox? _logicField;
+    ComboBox? _logicOperator;
+    ComboBox? _logicEnter;
+    ComboBox? _logicExit;
+    TextBox? _logicValue;
+    ComboBox? _blendBox;
+    bool _blendSync;
+
     ScorebugElement? Selected => _selectedId is null ? null : _catalog.Layout.Elements.FirstOrDefault(x=>x.Id==_selectedId);
 
     bool IsSelected(string id) => _selectedIds.Contains(id);
@@ -800,6 +816,8 @@ public partial class ScorebugEditorWindow : Window
         LayerCount.Text=ordered.Length==0?"no elements":$"{ordered.Length} element{(ordered.Length==1?"":"s")}";
         _syncingLayers=false;
         RefreshMotionLists();
+        RefreshLogicPanel();
+        RefreshBlendPanel();
         SyncLayoutPicker();
         SyncDisplayPicker();
         SyncScoreVideos();
@@ -3288,6 +3306,186 @@ public partial class ScorebugEditorWindow : Window
     }
 
     static ScorebugElement CloneElement(ScorebugElement item)=>JsonSerializer.Deserialize<ScorebugElement>(JsonSerializer.Serialize(item))!;
+
+    // ---------- layer blending ----------
+
+    void BuildBlendPanel()
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 2, 0, 8) };
+        panel.Children.Add(new TextBlock { Text = "LAYER BLEND", Style = (Style)FindResource("SectionTitle") });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "How this layer mixes with the board beneath it. Applies to text, shapes, logos and images; video and HTML stay normal.",
+            Foreground = new SolidColorBrush(Color.FromRgb(147, 160, 178)),
+            FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 0, 10, 4)
+        });
+        _blendBox = new ComboBox
+        {
+            Margin = new Thickness(10, 0, 10, 4),
+            ItemsSource = new[] { "Normal", "Multiply", "Screen", "Add", "Overlay" },
+            SelectedIndex = 0
+        };
+        _blendBox.SelectionChanged += (_, _) =>
+        {
+            if(_blendSync || Selected is not { } element || _blendBox.SelectedItem is not string mode) return;
+            var id = element.Id;
+            _catalog.Update(layout =>
+            {
+                var target = layout.Elements.FirstOrDefault(item => item.Id == id);
+                if(target is not null) target.BlendMode = mode;
+            });
+            RefreshAllVisuals();
+            Render();
+        };
+        panel.Children.Add(_blendBox);
+        PropertyPanel.Children.Add(panel);
+    }
+
+    void RefreshBlendPanel()
+    {
+        if(_blendBox is null) return;
+        _blendSync = true;
+        try
+        {
+            var mode = Selected?.BlendMode;
+            _blendBox.SelectedItem = string.IsNullOrWhiteSpace(mode) ? "Normal" : mode;
+            _blendBox.IsEnabled = Selected is not null;
+        }
+        finally { _blendSync = false; }
+    }
+
+    // ---------- per-element logic ----------
+
+    void BuildLogicPanel()
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 4, 0, 12) };
+        panel.Children.Add(new TextBlock { Text = "LOGIC", Style = (Style)FindResource("SectionTitle") });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "While every condition matches, the enter action runs. When it stops matching, the exit action runs once. Pulse and Flash loop only while matched.",
+            Foreground = new SolidColorBrush(Color.FromRgb(147, 160, 178)),
+            FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 0, 10, 6)
+        });
+        _logicList = new ListBox { Height = 96, Margin = new Thickness(10, 0, 10, 4) };
+        panel.Children.Add(_logicList);
+        _logicField = Choice(Enum.GetValues<AutomationField>().Cast<object>().ToArray());
+        _logicOperator = Choice(Enum.GetValues<AutomationOperator>().Cast<object>().ToArray());
+        _logicValue = new TextBox { Margin = new Thickness(10, 0, 10, 4), MinHeight = 28, Padding = new Thickness(8, 4, 8, 4) };
+        _logicEnter = Choice(Enum.GetValues<ElementLogicAction>().Cast<object>().ToArray());
+        _logicExit = Choice(Enum.GetValues<ElementLogicAction>().Cast<object>().ToArray());
+        panel.Children.Add(Label("Condition field"));
+        panel.Children.Add(_logicField);
+        panel.Children.Add(Label("Operator"));
+        panel.Children.Add(_logicOperator);
+        panel.Children.Add(Label("Value"));
+        panel.Children.Add(_logicValue);
+        panel.Children.Add(Label("While matched"));
+        panel.Children.Add(_logicEnter);
+        panel.Children.Add(Label("When cleared"));
+        panel.Children.Add(_logicExit);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(10, 4, 10, 0) };
+        var add = new Button { Content = "Add rule", Padding = new Thickness(12, 5, 12, 5), FontSize = 11, Margin = new Thickness(0, 0, 6, 0) };
+        add.Click += (_, _) => AddLogicRule();
+        var remove = new Button { Content = "Remove rule", Padding = new Thickness(12, 5, 12, 5), FontSize = 11 };
+        remove.Click += (_, _) => RemoveLogicRule();
+        buttons.Children.Add(add);
+        buttons.Children.Add(remove);
+        panel.Children.Add(buttons);
+        PropertyPanel.Children.Add(panel);
+    }
+
+    ComboBox Choice(IEnumerable<object> values)
+    {
+        var list = values.ToArray();
+        return new ComboBox
+        {
+            Margin = new Thickness(10, 0, 10, 4),
+            ItemsSource = list,
+            SelectedIndex = list.Length > 0 ? 0 : -1
+        };
+    }
+
+    TextBlock Label(string text) => new()
+    {
+        Text = text, FontSize = 11, Foreground = new SolidColorBrush(Color.FromRgb(124, 138, 156)),
+        Margin = new Thickness(10, 4, 0, 2)
+    };
+
+    static string DescribeRule(ElementLogicRule rule)
+    {
+        var condition = rule.Conditions.Count == 0 ? "no condition" : string.Join(" and ", rule.Conditions.Select(c =>
+            AutomationRules.IsTextField(c.Field)
+                ? $"{c.Field} {c.Operator} {c.Text}"
+                : $"{c.Field} {c.Operator} {c.Value:0.##}"));
+        var label = string.IsNullOrWhiteSpace(rule.Label) ? "" : $"{rule.Label}: ";
+        return $"{label}{condition} → {rule.Enter}, then {rule.Exit}";
+    }
+
+    void RefreshLogicPanel()
+    {
+        if (_logicList is null) return;
+        var element = Selected;
+        _logicList.ItemsSource = element?.Logic.Select(DescribeRule).ToArray() ?? [];
+        _logicList.IsEnabled = element is not null;
+        _logicList.SelectedIndex = element?.Logic.Count > 0 ? 0 : -1;
+    }
+
+    void AddLogicRule()
+    {
+        if (Selected is not { } element) return;
+        if (_logicField?.SelectedItem is not AutomationField field || _logicOperator?.SelectedItem is not AutomationOperator op) return;
+        var condition = new AutomationCondition { Field = field, Operator = op };
+        var text = (_logicValue?.Text ?? "").Trim();
+        if (AutomationRules.IsTextField(field)) condition.Text = text;
+        else if (double.TryParse(text, out var number)) condition.Value = number;
+        var rule = new ElementLogicRule
+        {
+            Conditions = [condition],
+            Enter = _logicEnter?.SelectedItem is ElementLogicAction enter ? enter : ElementLogicAction.Pulse,
+            Exit = _logicExit?.SelectedItem is ElementLogicAction exit ? exit : ElementLogicAction.None
+        };
+        var id = element.Id;
+        _catalog.Update(layout => layout.Elements.FirstOrDefault(item => item.Id == id)?.Logic.Add(rule));
+        RefreshLogicPanel();
+        RefreshAllVisuals();
+      }
+
+    void RemoveLogicRule()
+    {
+        if (Selected is not { } element || _logicList?.SelectedIndex is not int index || index < 0) return;
+        var id = element.Id;
+        _catalog.Update(layout =>
+        {
+            var target = layout.Elements.FirstOrDefault(item => item.Id == id);
+            if (target is not null && index < target.Logic.Count) target.Logic.RemoveAt(index);
+        });
+        RefreshLogicPanel();
+        RefreshAllVisuals();
+    }
+
+    /// <summary>A zone is a live layout region: it follows its source layout and can be swapped on its own.</summary>
+    void AddZone_Click(object sender, RoutedEventArgs e)
+    {
+        var choice = NestedLayoutCandidates().FirstOrDefault();
+        if (choice.Id is null)
+        {
+            NoticeWindow.Tell(this, "No layout to use", "Create another layout first, then add a zone from it.");
+            return;
+        }
+        var source = _catalog.FindLayout(choice.Id);
+        if (source is null) return;
+        var count = _catalog.Layout.Elements.Count(item => item.IsZone);
+        var width = Math.Max(180, Math.Round(_catalog.Layout.Width * 0.36));
+        var height = Math.Max(110, Math.Round(_catalog.Layout.Height * 0.30));
+        Add(new ScorebugElement
+        {
+            Name = $"Zone {count + 1} · {source.Name}", Kind = ScorebugElementKind.Layout,
+            IsZone = true, ZoneName = $"Zone {count + 1}", Content = "",
+            NestedLayoutId = source.Id, NestedPreserveAspect = true,
+            X = 32 + (count % 2) * 40, Y = 32 + (count % 3) * 40,
+            Width = width, Height = height, TransparentBackground = true, BorderThickness = 1
+        });
+    }
 
     void Add(ScorebugElement item)
     {

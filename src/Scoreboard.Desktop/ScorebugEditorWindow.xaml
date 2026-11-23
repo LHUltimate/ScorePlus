@@ -70,6 +70,8 @@
                   ToolTip="A live HTML/CSS widget, drawn by a browser engine on every screen"/>
           <Button Content="LAYOUT +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddLayoutFeed_Click"
                   ToolTip="Put another layout inside this one as a resizeable live feed"/>
+          <Button Content="ZONE +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddZone_Click"
+                  ToolTip="Add a zone: a region of this layout fed by another layout, replaceable on its own"/>
           <Button Content="PARTS +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="ImportParts_Click"
                   ToolTip="Copy elements from another layout instead of rebuilding them"/>
           <Button x:Name="UndoButton" Content="UNDO" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="Undo_Click"
@@ -263,10 +265,10 @@
             <DataTemplate>
               <Grid>
                 <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="20"/>
+                  <ColumnDefinition Width="22"/>
                   <ColumnDefinition Width="*"/>
                   <ColumnDefinition Width="Auto"/>
-                  <ColumnDefinition Width="20"/>
+                  <ColumnDefinition Width="28"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding Glyph}" FontSize="12" Foreground="{DynamicResource Accent}" VerticalAlignment="Center"/>
                 <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
@@ -274,8 +276,9 @@
                 <!-- The lock lives on the row so a locked layer can always be unlocked again, even
                      though selecting it is refused. A locked row cannot be moved or deleted. -->
                 <Button Grid.Column="3" Content="{Binding LockGlyph}" ToolTip="{Binding LockTip}"
-                        Click="LayerLock_Click" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                        Padding="0" Width="20" MinWidth="20" Height="18"
+                        Click="LayerLock_Click" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                        Padding="0" Width="26" MinWidth="26" Height="24" Margin="0,0,0,0"
+                        VerticalAlignment="Center" VerticalContentAlignment="Center"
                         Background="Transparent" BorderThickness="0" Foreground="#93A0B2" Cursor="Hand"
                         local:ThemeManager.SkipTheme="True"/>
               </Grid>

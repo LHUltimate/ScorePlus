@@ -1214,6 +1214,60 @@ internal static class Program
                         throw new Exception($"FAIL: resetting a custom value clock left {resetSmokeClock.Display} {(resetSmokeClock.ClockRunning ? "running" : "stopped")}");
                     extendedEngine.ClearMacroOutputHold();
 
+                    // Stage 1: GO runs the current cue's macro and moves the marker, and the run of
+                    // show is a real surface on the same tab as the palette.
+                    var cueEngine = new GameEngine();
+                    cueEngine.NewGame("basketball");
+                    var cueMacro = new SavedMacro
+                    {
+                        Label = "Cue smoke",
+                        Actions = [new MacroAction { Kind = MacroActionKind.Score, Home = true, Amount = 2, Value = 2 }]
+                    };
+                    cueEngine.State.Macros.Add(cueMacro);
+                    cueEngine.State.Cues.Add(new ShowCue { MacroId = cueMacro.Id, Name = "Opening basket" });
+                    var cueSession = new MediaSession(PreferencesStore.Load());
+                    var cueRunner = new CueRunner(cueEngine, new MacroRunner(cueEngine, cueSession));
+                    cueRunner.GoAsync().GetAwaiter().GetResult();
+                    if (cueEngine.State.HomeScore != 2)
+                        throw new Exception($"FAIL: GO did not run the cue's macro (score {cueEngine.State.HomeScore})");
+                    cueEngine.State.Cues.Add(new ShowCue { MacroId = cueMacro.Id, Name = "Second", Armed = false });
+                    cueEngine.State.CueIndex = 0;
+                    cueRunner.GoAsync().GetAwaiter().GetResult();
+                    if (cueEngine.State.CueIndex != 0)
+                        throw new Exception($"FAIL: GO did not step over the disarmed cue (marker {cueEngine.State.CueIndex})");
+                    var cueDock = new MacroDock(cueEngine, cueSession);
+                    cueDock.Measure(new Size(1100, 760));
+                    cueDock.Arrange(new Rect(0, 0, 1100, 760));
+                    cueDock.UpdateLayout();
+                    if (cueDock.FindName("CueList") is not ListBox cueList)
+                        throw new Exception("FAIL: the run of show has no cue list");
+                    if (cueList.Items.Count != 2)
+                        throw new Exception($"FAIL: the cue list showed {cueList.Items.Count} cues instead of 2");
+                    if (cueDock.FindName("CueGoButton") is not Button cueGo || cueGo.Content?.ToString() != "GO")
+                        throw new Exception("FAIL: the run of show has no GO button");
+                    if (cueDock.FindName("TileSizeBox") is not ComboBox || cueDock.FindName("PageNameBox") is not TextBox
+                        || cueDock.FindName("PracticeList") is not ListBox || cueDock.FindName("PracticeAddButton") is not Button)
+                        throw new Exception("FAIL: the workspace size, page name or practice controls are missing");
+                    // The phone's cue strip reads the same cue the console is showing.
+                    using (var cueJson = System.Text.Json.JsonDocument.Parse(cueDock.CueJson()))
+                    {
+                        var root = cueJson.RootElement;
+                        if (root.GetProperty("count").GetInt32() != 2 || root.GetProperty("name").GetString() != "Opening basket")
+                            throw new Exception("FAIL: the remote cue strip does not see the current cue");
+                    }
+                    // A practice segment can be added from the panel and the clock starts from it.
+                    ((TextBox)cueDock.FindName("PracticeNameBox")!).Text = "Warm-up";
+                    ((TextBox)cueDock.FindName("PracticeMinutesBox")!).Text = "2";
+                    ((Button)cueDock.FindName("PracticeAddButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    if (cueEngine.State.PracticeSegments.Count != 1 || cueEngine.State.PracticeSegments[0].Seconds != 120)
+                        throw new Exception("FAIL: the practice panel did not save a two-minute segment");
+                    var practiceStart = (Button)cueDock.FindName("PracticeStartButton")!;
+                    practiceStart.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    var practiceStatus = cueDock.FindName("PracticeStatus") as TextBlock;
+                    if (practiceStatus is null || !practiceStatus.Text.Contains("Warm-up") || practiceStatus.Text.Contains("00:00"))
+                        throw new Exception($"FAIL: the practice timer did not start: {practiceStatus?.Text}");
+                    practiceStart.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
                     // The macro clock field is typed as MM:SS, not as a raw second count.
                     var clockDock = new MacroDock(extendedEngine, extendedSession);
                     var clockKindBox = (ComboBox)clockDock.FindName("KindBox")!;
@@ -3191,6 +3245,32 @@ internal static class Program
             eventLog.UpdateLayout();
             eventLog.Close();
             Console.WriteLine("PASS: event log opens in its own window");
+
+            // Stage 0: the same window carries the triggers page, and a rule shows its live state.
+            var spineCatalogPath = Path.Combine(Path.GetTempPath(), $"smoke-spine-{Guid.NewGuid():N}.json");
+            var spineCatalog = new ScorebugCatalog(spineCatalogPath);
+            spineCatalog.ActiveDisplay.Automations.Add(new AutomationRule
+            {
+                Name = "Smoke trigger",
+                Enabled = true,
+                Conditions = [new AutomationCondition
+                    { Field = AutomationField.HomeScore, Operator = AutomationOperator.GreaterOrEqual, Value = 0 }]
+            });
+            using (var spineRuntime = new AutomationRuntime(spineCatalog, engine))
+            {
+                var spineLog = new EventLogWindow(engine, "Dark", false, spineCatalog, spineRuntime);
+                ShowForSmoke(spineLog);
+                spineLog.UpdateLayout();
+                if (spineLog.FindName("TriggerList") is not ListBox triggerList)
+                    throw new Exception("FAIL: the event log has no triggers page");
+                if (triggerList.Items.Count == 0)
+                    throw new Exception("FAIL: the triggers page listed no rules");
+                if (spineLog.FindName("TriggerSummary") is not TextBlock summary || summary.Text.Length == 0)
+                    throw new Exception("FAIL: the triggers page did not describe the show's rules");
+                spineLog.Close();
+            }
+            if (File.Exists(spineCatalogPath)) File.Delete(spineCatalogPath);
+            Console.WriteLine("PASS: the event log carries a live triggers page");
 
             // Scorebug video elements only show clips from their tag, and never audio.
             var videoCatalogPath = Path.Combine(Path.GetTempPath(), $"smoke-video-{Guid.NewGuid():N}.json");

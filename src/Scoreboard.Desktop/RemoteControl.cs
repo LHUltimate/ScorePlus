@@ -247,6 +247,13 @@ public sealed class RemoteControlServer : IDisposable
     /// <summary>The phone's flag card: raise or clear a penalty, and pick what it was for and who.</summary>
     public static Func<string, string, string, bool>? PenaltyAction { get; set; }
 
+    /// <summary>Set by the console: false refuses score and clock actions for a graphics or cues profile.</summary>
+    public static Func<string, bool>? ActionAllowed { get; set; }
+
+    /// <summary>The run of show as the phone's cue strip reads it, and the actions its buttons send.</summary>
+    public static Func<string>? CueState { get; set; }
+    public static Func<string, bool>? CueAction { get; set; }
+
     async Task Handle(NetworkStream stream, RemoteRequest request, CancellationToken token)
     {
         var ip = "remote";
@@ -436,6 +443,8 @@ public sealed class RemoteControlServer : IDisposable
     {
         var action = form.GetValueOrDefault("a", string.Empty).Trim();
         if (action.Length == 0) return (false, "No action.");
+        if (ActionAllowed?.Invoke(action) == false)
+            return (false, "This operator profile cannot change the score. Ask the scorekeeper.");
         try
         {
             return _dispatcher.Invoke(() =>
@@ -502,6 +511,8 @@ public sealed class RemoteControlServer : IDisposable
                     case "stat.remove":
                         _engine.RemoveStat(form.GetValueOrDefault("id", string.Empty));
                         return (true, string.Empty);
+                    case var cue when cue.StartsWith("cue.", StringComparison.Ordinal):
+                        return CueAction?.Invoke(cue[4..]) == true ? (true, string.Empty) : (false, "The cue list is not available.");
                     case "stat.set":
                         var id = form.GetValueOrDefault("id", string.Empty);
                         _engine.SetStatText(id, form.GetValueOrDefault("value", string.Empty));
@@ -591,10 +602,22 @@ public sealed class RemoteControlServer : IDisposable
             displays,
             staged = _host.HasStagedChanges,
             live = _host.LiveScoreClock,
+            cue = CueElement(),
             locked = LockState?.Invoke() == true
         };
         return JsonSerializer.Serialize(state);
     });
+
+    /// <summary>The cue strip object, cloned so the parsed document is released on every poll.</summary>
+    static JsonElement CueElement()
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(CueState?.Invoke() ?? "{}");
+            return document.RootElement.Clone();
+        }
+        catch { return JsonDocument.Parse("{}").RootElement.Clone(); }
+    }
 
     /// <summary>#RRGGBB for a browser field and a colour swatch: WPF stores #AARRGGBB, CSS does not.</summary>
     static string Hex(string? value)

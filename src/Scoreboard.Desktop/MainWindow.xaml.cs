@@ -195,6 +195,11 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
             // element. The runtime owns the artwork; the show owns these two.
             RunCommand = RunAutomationCommand
         };
+        // The status bar reads the show spine once a second, from the same heartbeat the rules use
+        // instead of a timer of its own.
+        ShowHeartbeat.Shared.Tick += BeatShowHealth;
+        ShowHeartbeat.Shared.Start();
+        Closed += (_, _) => ShowHeartbeat.Shared.Tick -= BeatShowHealth;
         _program = new ProgramSelection(_scorebug);
         _program.Changed += ProgramChanged;
         // The preview is the staging desk: it must show the values the operator is about to put on
@@ -209,9 +214,18 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         RefreshEndGameButton();
         SyncDisplayPicker();
         RefreshLayoutIndicators();
-        ShowTab(GameControlWindow.ConsoleTab.Control);
+        ApplyOperatorRole();
+        RemoteControlServer.ActionAllowed = action => OperatorCanScore(_preferences.OperatorRole) || !ScoreChanging(action);
         // The theme pass repaints every button when the window loads, which used to wipe the green
         // outline off the already-selected tab until another tab was clicked.
+        // Space, Page Up and Page Down belong to the run of show while its tab is open; text and
+        // combo boxes keep them, so typing a cue name never fires the show.
+        PreviewKeyDown += (_, e) =>
+        {
+            if (_tab != GameControlWindow.ConsoleTab.Macros || _macroDock is null) return;
+            if (Keyboard.FocusedElement is TextBox or ComboBox) return;
+            if (_macroDock.HandleTransportKey(e.Key)) e.Handled = true;
+        };
         Loaded += (_, _) =>
         {
             ApplyTabVisuals();
@@ -247,6 +261,9 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         RemoteControlServer.RosterJson = RosterSnapshotJson;
         RemoteControlServer.RosterAction = RosterAction;
         RemoteControlServer.PenaltyAction = PenaltyAction;
+        // The phone's run-of-show strip drives the same cue transport as the desktop tab.
+        RemoteControlServer.CueState = _macroDock.CueJson;
+        RemoteControlServer.CueAction = _macroDock.RemoteCue;
         RemoteControlServer.LockState = () => _operatorLocked;
         RemoteControlServer.CameraWallState = mode => Dispatcher.Invoke(() =>
         {
@@ -896,10 +913,33 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _log?.SetHintVisibility(_preferences.ShowHeadingHints);
     }
 
+    long _lastHealthSecond = -1;
+
+    /// <summary>Once a second, not on every beat: the health line is a summary, not an animation.</summary>
+    void BeatShowHealth(TimeSpan elapsed)
+    {
+        var second = (long)elapsed.TotalSeconds;
+        if (second == _lastHealthSecond) return;
+        _lastHealthSecond = second;
+        UpdateShowHealth();
+    }
+
+    /// <summary>Publishes the spine's own counters: events seen and rules matching right now.</summary>
+    void UpdateShowHealth()
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(UpdateShowHealth); return; }
+        var events = ShowBus.Shared.Count;
+        var live = _automation.ActiveRuleCount;
+        ShowHealth.Text = $"SPINE · {events} event{(events == 1 ? "" : "s")} · {live} live";
+        ShowHealth.ToolTip =
+            $"Show spine: {events} events this session, {live} automation rule{(live == 1 ? "" : "s")} matching now.\n" +
+            "Open the Event Log and choose Triggers for the rule list and its last state.";
+    }
+
     void EventLog_Click(object sender, RoutedEventArgs e)
     {
         if (_log is { IsVisible: true }) { _log.Activate(); return; }
-        _log = new EventLogWindow(_engine, _preferences.Theme, _preferences.ShowHeadingHints) { Owner = this };
+        _log = new EventLogWindow(_engine, _preferences.Theme, _preferences.ShowHeadingHints, _scorebug, _automation) { Owner = this };
         _log.Closed += (_, _) => _log = null;
         _log.Show();
     }
@@ -1011,8 +1051,52 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         foreach (var output in _outputs) output.RefreshGraphic();
         ApplyTabVisuals();
         // Turning the remote on or changing its password takes effect without a restart.
+        RemoteControlServer.ActionAllowed = action => OperatorCanScore(_preferences.OperatorRole) || !ScoreChanging(action);
+        ApplyOperatorRole();
         StartRemote();
     }
+
+    /// <summary>
+    /// Hides the desks an operator profile does not need, so a scorekeeper cannot open a layout
+    /// editor and a graphics operator cannot change the score. Tab names stay on the bar for the
+    /// roles that own them; the rest collapse instead of showing a locked, dead tab.
+    /// </summary>
+    void ApplyOperatorRole()
+    {
+        var role = _preferences.OperatorRole;
+        var control = role is "Full" or "Scorekeeper";
+        var media = role is "Full" or "Graphics";
+        var rosters = role is "Full" or "Scorekeeper";
+        var cues = role is "Full" or "Graphics" or "Cues";
+        ControlTab.Visibility = control ? Visibility.Visible : Visibility.Collapsed;
+        MediaTab.Visibility = media ? Visibility.Visible : Visibility.Collapsed;
+        RosterTab.Visibility = rosters ? Visibility.Visible : Visibility.Collapsed;
+        MacrosTab.Visibility = cues ? Visibility.Visible : Visibility.Collapsed;
+        var allowed = _tab switch
+        {
+            GameControlWindow.ConsoleTab.Control => control,
+            GameControlWindow.ConsoleTab.Media => media,
+            GameControlWindow.ConsoleTab.Rosters => rosters,
+            GameControlWindow.ConsoleTab.Macros => cues,
+            _ => false
+        };
+        if (!allowed) ShowTab(cues ? GameControlWindow.ConsoleTab.Macros : control ? GameControlWindow.ConsoleTab.Control : GameControlWindow.ConsoleTab.Media);
+        else ApplyTabVisuals();
+    }
+
+    static bool OperatorCanScore(string role) => role is not ("Graphics" or "Cues");
+
+    static bool ScoreChanging(string action) =>
+        action.StartsWith("score.", StringComparison.Ordinal)
+        || action.StartsWith("clock.", StringComparison.Ordinal)
+        || action.StartsWith("playclock.", StringComparison.Ordinal)
+        || action.StartsWith("shotclock.", StringComparison.Ordinal)
+        || action.StartsWith("timeoutclock.", StringComparison.Ordinal)
+        || action.StartsWith("football.", StringComparison.Ordinal)
+        || action.StartsWith("sport.", StringComparison.Ordinal)
+        || action.StartsWith("stat.", StringComparison.Ordinal)
+        || action.StartsWith("period.", StringComparison.Ordinal)
+        || action.StartsWith("team.", StringComparison.Ordinal);
 
     /// <summary>
     /// Starts (or restarts) the phone remote from the saved preferences. It is off unless enabled and
@@ -1173,6 +1257,13 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     public bool HasStagedGameState() =>
         GameEngine.StagedSignature(_engine.State) != GameEngine.StagedSignature(_publishedEngine.State)
         || _session.PendingQuickMedia is not null;
+
+    void SwapTeams_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new TeamSwitchWindow(_engine, _preferences.Theme) { Owner = this };
+        ThemeManager.Apply(dialog, _preferences.Theme);
+        dialog.ShowDialog();
+    }
 
     void SportProfiles_Click(object sender, RoutedEventArgs e)
     {

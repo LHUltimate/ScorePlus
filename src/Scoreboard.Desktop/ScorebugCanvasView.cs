@@ -90,6 +90,14 @@ public sealed class ScorebugCanvasView : Grid
     // Value switch delay: what each element is currently printing, and the wait before a change
     // lands. The operator sets the delay in Preferences; 0 prints instantly.
     readonly Dictionary<string,string> _shownText = [];
+    // Blended layers are composited into a bitmap because WPF has no blend modes. The overlay is
+    // inserted at the layer's own child index, so it still sits in the right stack position.
+    readonly Dictionary<string, Image> _blendOverlays = [];
+    readonly DispatcherTimer _blendTimer = new() { Interval = TimeSpan.FromMilliseconds(140) };
+    bool _blending;
+    // The logic rule that was in force on each element last tick, so the exit action runs once when
+    // a condition clears instead of every frame.
+    readonly Dictionary<string, ElementLogicRule?> _logicRule = [];
     readonly Dictionary<string,(string Target, System.Windows.Threading.DispatcherTimer Timer)> _pendingText = [];
     bool _flushDelay;
     bool _disposed;
@@ -125,11 +133,14 @@ public sealed class ScorebugCanvasView : Grid
         if(stateProvider is null||liveValues)_engine.Changed+=UpdateValues;else _engine.Changed+=UpdateClockValues;
         // A decimal column ticks many times a second; only the clock text follows that event.
         _engine.FractionsChanged+=UpdateFractionValues;
+        _blendTimer.Tick+=(_,_)=>{_blendTimer.Stop();ApplyBlending();};
         _wallClock.Tick+=(_,_)=>{if(UsesWallClock())UpdateValues();};
         _wallClock.Start();
         _layoutChain.Add(Layout.Id);
         _lastScoreSequence=_stateProvider().LastScoreSequence;
         Rebuild();
+        ApplyElementLogic(_stateProvider());
+        ScheduleBlending();
     }
 
     /// <summary>The artwork this view is drawing: the design being previewed, or the published one.</summary>
@@ -1162,6 +1173,178 @@ public sealed class ScorebugCanvasView : Grid
         ||content.Contains("{{STOPPAGE}}",StringComparison.OrdinalIgnoreCase)
         ||content.Contains("{{TIMEOUT_CLOCK}}",StringComparison.OrdinalIgnoreCase);
 
+    void ScheduleBlending()
+    {
+        if(_disposed) return;
+        _blendTimer.Stop();
+        _blendTimer.Start();
+    }
+
+    /// <summary>
+    /// Composites every layer whose BlendMode is not Normal. WPF's visual tree is source-over only,
+    /// so the board beneath the layer is snapshotted, this layer is rendered on its own, and the
+    /// two are mixed pixel by pixel. Live video and HTML stay on the normal path: a frame grab of a
+    /// media surface is not a reliable picture to blend.
+    /// </summary>
+    void ApplyBlending()
+    {
+        if(_disposed || _blending) return;
+        _blending = true;
+        try
+        {
+            var blended = Layout.Elements.Where(item => item.BlendMode is not (null or "" or "Normal")
+                && item.Kind is not (ScorebugElementKind.Video or ScorebugElementKind.Html or ScorebugElementKind.Layout)).ToList();
+            // Every overlay is taken down before the new backdrop is captured, or the previous
+            // blended result would be blended into itself on the next pass.
+            foreach(var overlay in _blendOverlays.Values)
+                if(_canvas.Children.Contains(overlay)) _canvas.Children.Remove(overlay);
+            _blendOverlays.Clear();
+            foreach(var item in Layout.Elements)
+                if(_visuals.TryGetValue(item.Id, out var visual)) visual.Host.Visibility = item.Visible ? Visibility.Visible : Visibility.Collapsed;
+            if(blended.Count == 0) return;
+            // The backdrop is taken once, with the blended layers hidden, so each layer blends with
+            // the same board beneath it rather than with the previous blended result.
+            foreach(var item in blended)
+                if(_visuals.TryGetValue(item.Id, out var visual)) visual.Host.Visibility = Visibility.Collapsed;
+            _canvas.UpdateLayout();
+            var backdrop = Snapshot(_canvas, Layout.Width, Layout.Height);
+            if(backdrop is null) return;
+            foreach(var item in blended)
+            {
+                if(!_visuals.TryGetValue(item.Id, out var visual)) continue;
+                var host = visual.Host;
+                var width = Math.Max(1, (int)Math.Round(host.Width > 0 ? host.Width : item.Width));
+                var height = Math.Max(1, (int)Math.Round(host.Height > 0 ? host.Height : item.Height));
+                host.Visibility = Visibility.Visible;
+                var layer = Snapshot(host, width, height);
+                host.Visibility = Visibility.Collapsed;
+                if(layer is null) continue;
+                var mixed = Mix(backdrop, layer, item, (int)Math.Round(item.X), (int)Math.Round(item.Y));
+                if(mixed is null) continue;
+                var image = new Image { Source = mixed, Width = width, Height = height, Stretch = Stretch.Fill, IsHitTestVisible = false };
+                Canvas.SetLeft(image, item.X);
+                Canvas.SetTop(image, item.Y);
+                if(_blendOverlays.TryGetValue(item.Id, out var old) && _canvas.Children.Contains(old)) _canvas.Children.Remove(old);
+                _blendOverlays[item.Id] = image;
+                var index = _canvas.Children.IndexOf(host);
+                if(index >= 0) _canvas.Children.Insert(index, image); else _canvas.Children.Add(image);
+            }
+        }
+        finally { _blending = false; }
+    }
+
+    static BitmapSource? Snapshot(Visual visual, int width, int height)
+    {
+        if(width <= 0 || height <= 0) return null;
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        if(visual is UIElement element && element is not Canvas)
+        {
+            var brush = new VisualBrush(element) { Stretch = Stretch.Fill };
+            var drawing = new DrawingVisual();
+            using(var context = drawing.RenderOpen())
+                context.DrawRectangle(brush, null, new Rect(0, 0, width, height));
+            bitmap.Render(drawing);
+        }
+        else bitmap.Render(visual);
+        var converted = new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0);
+        var stride = width * 4;
+        var pixels = new byte[stride * height];
+        converted.CopyPixels(pixels, stride, 0);
+        return BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
+    }
+
+    static BitmapSource? Mix(BitmapSource backdrop, BitmapSource layer, ScorebugElement item, int x, int y)
+    {
+        var w = backdrop.PixelWidth;
+        var h = backdrop.PixelHeight;
+        var stride = w * 4;
+        var output = new byte[stride * h];
+        backdrop.CopyPixels(output, stride, 0);
+        var lw = layer.PixelWidth;
+        var lh = layer.PixelHeight;
+        var lstride = lw * 4;
+        var source = new byte[lstride * lh];
+        layer.CopyPixels(source, lstride, 0);
+        for(var row = 0; row < lh; row++)
+        {
+            var dy = y + row;
+            if(dy < 0 || dy >= h) continue;
+            for(var column = 0; column < lw; column++)
+            {
+                var dx = x + column;
+                if(dx < 0 || dx >= w) continue;
+                var si = row * lstride + column * 4;
+                var alpha = source[si + 3] / 255.0 * Math.Clamp(item.Opacity, 0, 1);
+                if(alpha <= 0) continue;
+                var di = dy * stride + dx * 4;
+                for(var channel = 0; channel < 3; channel++)
+                {
+                    var src = source[si + channel] / 255.0;
+                    var dst = output[di + channel] / 255.0;
+                    var blend = item.BlendMode switch
+                    {
+                        "Multiply" => src * dst,
+                        "Screen" => 1 - (1 - src) * (1 - dst),
+                        "Add" => Math.Min(1, src + dst),
+                        "Overlay" => dst < 0.5 ? 2 * src * dst : 1 - 2 * (1 - src) * (1 - dst),
+                        _ => src
+                    };
+                    output[di + channel] = (byte)Math.Clamp(Math.Round((blend * alpha + dst * (1 - alpha)) * 255), 0, 255);
+                }
+            }
+        }
+        return BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, output, stride);
+    }
+
+    /// <summary>
+    /// Per-element logic: while a rule's conditions match, its enter action runs; when the last
+    /// matching rule clears, its exit action runs once. Pulse and Flash loop only while matched.
+    /// </summary>
+    void ApplyElementLogic(GameState state)
+    {
+        if(_disposed) return;
+        foreach(var item in Layout.Elements)
+        {
+            if(item.Logic is not { Count: > 0 } rules) continue;
+            if(!_visuals.TryGetValue(item.Id, out var visual)) continue;
+            var host = visual.Host;
+            var matched = rules.FirstOrDefault(rule => rule.Matches(state));
+            _logicRule.TryGetValue(item.Id, out var previous);
+            if(ReferenceEquals(previous, matched))
+            {
+                if(matched is not null && matched.Enter is ElementLogicAction.Pulse or ElementLogicAction.Flash) continue;
+                if(matched is null) continue;
+            }
+            _logicRule[item.Id] = matched;
+            var action = matched?.Enter ?? previous?.Exit ?? ElementLogicAction.None;
+            host.BeginAnimation(OpacityProperty, null);
+            host.Opacity = Math.Clamp(item.Opacity, 0, 1);
+            switch(action)
+            {
+                case ElementLogicAction.Hide:
+                    host.Visibility = Visibility.Collapsed;
+                    break;
+                case ElementLogicAction.Show:
+                    host.Visibility = item.Visible ? Visibility.Visible : Visibility.Collapsed;
+                    break;
+                case ElementLogicAction.Pulse:
+                case ElementLogicAction.Flash:
+                    host.Visibility = item.Visible ? Visibility.Visible : Visibility.Collapsed;
+                    var low = action == ElementLogicAction.Flash ? 0.0 : 0.45;
+                    var animation = new DoubleAnimation(low, 1, TimeSpan.FromSeconds(action == ElementLogicAction.Flash ? 0.35 : 0.8))
+                    {
+                        AutoReverse = true,
+                        RepeatBehavior = RepeatBehavior.Forever
+                    };
+                    host.BeginAnimation(OpacityProperty, animation);
+                    break;
+                default:
+                    host.Visibility = item.Visible ? Visibility.Visible : Visibility.Collapsed;
+                    break;
+            }
+        }
+    }
+
     void UpdateClockValues()
     {
         var state=_stateProvider();
@@ -1185,6 +1368,8 @@ public sealed class ScorebugCanvasView : Grid
         if(!Dispatcher.CheckAccess()){Dispatcher.BeginInvoke(UpdateValues);return;}
         if(_disposed)return;
         var state=_stateProvider();
+        ApplyElementLogic(state);
+        ScheduleBlending();
         var layout=Layout;
         foreach(var item in layout.Elements)
         {

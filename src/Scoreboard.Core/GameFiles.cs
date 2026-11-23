@@ -11,7 +11,7 @@ namespace Scoreboard.Core;
 /// </summary>
 public sealed class GameFileDocument
 {
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = ShowSchema.CurrentGameFileVersion;
     public GameState? Game { get; set; }
     public ScorebugDocument? Design { get; set; }
 }
@@ -51,6 +51,9 @@ public static class GameFiles
         if (node is JsonObject root && root["Game"] is not null)
         {
             var document = root.Deserialize<GameFileDocument>(Options) ?? new GameFileDocument();
+            // A file keeps the shape it was written with; the spine brings it forward on read, so
+            // an older game opens with its rules and macros repaired rather than half-missing.
+            ShowSchema.Migrate(document);
             return (document.Game ?? new GameState(), document.Design);
         }
         return (JsonSerializer.Deserialize<GameState>(text, Options) ?? new GameState(), null);

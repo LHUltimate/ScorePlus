@@ -157,6 +157,46 @@ public enum ScorebugIcon
     Custom
 }
 
+/// <summary>What an element does while its logic rule matches, and again when it stops matching.</summary>
+public enum ElementLogicAction { None, Show, Hide, Pulse, Flash }
+
+/// <summary>
+/// A rule attached to one element: while every condition matches, the element takes its enter
+/// action; when the rule stops matching, it takes its exit action. Rules run on the same state
+/// changes as the show, so a third-down plate can pulse without a macro or a layout rule.
+/// </summary>
+public sealed class ElementLogicRule
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Label { get; set; } = "";
+    public List<AutomationCondition> Conditions { get; set; } = [];
+    public ElementLogicAction Enter { get; set; } = ElementLogicAction.Pulse;
+    public ElementLogicAction Exit { get; set; } = ElementLogicAction.None;
+
+    public bool Matches(GameState state) => Conditions.Count > 0 && Conditions.All(condition => condition.Matches(state));
+
+    public ElementLogicRule Copy() => new()
+    {
+        Id = Id,
+        Label = Label,
+        Enter = Enter,
+        Exit = Exit,
+        Conditions = Conditions.Select(condition => new AutomationCondition
+        {
+            Field = condition.Field, Operator = condition.Operator, Value = condition.Value,
+            Text = condition.Text, Key = condition.Key, WaitUntil = condition.WaitUntil
+        }).ToList()
+    };
+
+    public void Normalize()
+    {
+        if (string.IsNullOrWhiteSpace(Id)) Id = Guid.NewGuid().ToString("N");
+        Label = (Label ?? "").Trim();
+        Conditions ??= [];
+        Conditions = Conditions.Take(8).ToList();
+    }
+}
+
 public sealed class ScorebugElement
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -306,6 +346,23 @@ public sealed class ScorebugElement
     public bool TransparentBackground { get; set; }
     public double Opacity { get; set; } = 1;
     public bool Visible { get; set; } = true;
+
+    /// <summary>Per-element logic: conditions that pulse, flash, show or hide this element.</summary>
+    public List<ElementLogicRule> Logic { get; set; } = [];
+
+    /// <summary>
+    /// A region of the canvas composed from another layout. Zones reuse the live-layout element,
+    /// so switching one zone never touches the rest of the board.
+    /// </summary>
+    public bool IsZone { get; set; }
+    public string ZoneName { get; set; } = "";
+
+    /// <summary>
+    /// How this layer composites over the layers below it. Normal paints as-is; the other modes
+    /// are applied by the canvas compositor where the platform supports them.
+    /// </summary>
+    public string BlendMode { get; set; } = "Normal";
+
     public ScorebugAnimation Animation { get; set; }
 
     /// <summary>How the value changes: dissolve, wheel, flip, and so on.</summary>
@@ -1405,6 +1462,11 @@ public sealed class ScorebugCatalog
         if (display.PublishedIndex == next) return;
         display.PublishedIndex = next;
         Save(); Changed?.Invoke();
+        // Every layout that actually reaches an audience is one event on the show spine, whichever
+        // path put it there: the operator, a macro, a rule or a remote page.
+        var published = display.Layouts.ElementAtOrDefault(next);
+        ShowBus.Shared.Publish(ShowEventKind.Layout, "Layout",
+            $"{display.Name} · {(published?.Name ?? "layout")}");
     }
 
     public int AddLayout(string? name = null, bool copyActive = false)

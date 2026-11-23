@@ -78,6 +78,8 @@ public static class RemotePage
         .publish{background:#0b6b50;border-color:#14a67c}
         .live-on{background:#123c33;border-color:#14a67c;color:#c9f7e8}
         .live-off{background:#2a1720;border-color:#5b2634;color:#ffd7df}
+        .cueNow{font-size:17px;font-weight:800;color:#f4f7fb;padding:4px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        #cueNext{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px}
         .flash{position:fixed;left:0;right:0;bottom:0;background:#111a24;border-top:1px solid #2b394a;color:#9fb0c4;font-size:11px;padding:7px 12px;text-align:center;opacity:0;transition:opacity .2s}
         .flash.show{opacity:1}
         .statEdit{display:flex;align-items:center;gap:6px;margin-top:6px}
@@ -474,8 +476,22 @@ public static class RemotePage
           renderControls(state);
           renderStats(state);
           renderPenalty(state);
+          renderCue(state);
           var lock = $('lockScreen');
           if (lock) lock.hidden = !state.locked;
+        }
+
+        function renderCue(state) {
+          const cue = state.cue || {};
+          const card = $('cueCard');
+          if (!card) return;
+          card.style.display = cue.count ? '' : 'none';
+          if (!cue.count) return;
+          $('cueName').textContent = (cue.index + 1) + ' · ' + (cue.name || 'Cue');
+          $('cueCount').textContent = (cue.index + 1) + ' / ' + cue.count;
+          $('cueNext').textContent = cue.next ? 'NEXT · ' + cue.next : (cue.armed ? 'END OF LIST' : 'DISARMED');
+          const arm = document.querySelector('[data-act="cue.arm"]');
+          if (arm) arm.textContent = cue.armed ? 'ARMED' : 'DISARMED';
         }
 
         async function poll() {
@@ -557,6 +573,18 @@ public static class RemotePage
                 <input class="color" id="homeColor" data-set="team.color" data-side="home" title="Home colour, for example #38D7A3"/>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="card" id="cueCard">
+          <div class="title">SHOW <span class="right" id="cueCount"></span></div>
+          <div class="cueNow" id="cueName">No cues</div>
+          <div class="muted" id="cueNext"></div>
+          <div class="row">
+            <button data-act="cue.prev" title="Move back one cue">◀ PREV</button>
+            <button class="publish" data-act="cue.go" style="flex:2" title="Run the current cue">GO</button>
+            <button data-act="cue.next" title="Move forward one cue">NEXT ▶</button>
+            <button data-act="cue.arm" class="small" title="Arm or disarm the current cue">ARM</button>
           </div>
         </div>
 

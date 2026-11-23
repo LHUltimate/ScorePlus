@@ -17,6 +17,12 @@ public sealed class UserPreferences
 
     /// <summary>"System" follows Windows' app theme; "Dark" and "Light" pin one.</summary>
     public string Theme { get; set; } = "System";
+
+    /// <summary>
+    /// Which desk this operator is allowed to use: Full, Scorekeeper, Graphics or Cues. Tabs outside
+    /// the role are hidden, and the phone remote refuses score changes for the graphics role.
+    /// </summary>
+    public string OperatorRole { get; set; } = "Full";
     public bool ShowHeadingHints { get; set; }
 
     /// <summary>The operator interface's accent: tab outlines, selected rows, live badges.</summary>

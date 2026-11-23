@@ -166,8 +166,21 @@ public sealed class GameState
     public List<SavedQuickMedia> QuickMedia { get; set; } = [];
     /// <summary>Saved macro buttons, with their ordered steps, so a game reopens with the show's shortcuts.</summary>
     public List<SavedMacro> Macros { get; set; } = [];
+    /// <summary>
+    /// The show's run of show: ordered cues that run macro buttons. The markers and notes belong to
+    /// the game, so a saved show comes back to the same cue and the same armed set.
+    /// </summary>
+    public List<ShowCue> Cues { get; set; } = [];
+    /// <summary>The cue GO would run next. Saved with the game; clamped on load and on every edit.</summary>
+    public int CueIndex { get; set; }
     /// <summary>How many macro board pages exist. A blank page is a valid page.</summary>
     public int MacroPages { get; set; } = 1;
+    /// <summary>Operator names for the board pages, so a show reads “Pre-game”, not “Page 1”.</summary>
+    public List<string> MacroPageNames { get; set; } = [];
+    /// <summary>Practice timer segments: a name and a length in seconds, in running order.</summary>
+    public List<PracticeSegment> PracticeSegments { get; set; } = [];
+    /// <summary>The practice segment the timer is on.</summary>
+    public int PracticeIndex { get; set; }
     /// <summary>
     /// The latest league cloud snapshot. It is live data rather than part of the fixture, so it is
     /// deliberately not written into a saved game; the ticker refreshes from the cloud on sync.
@@ -1774,6 +1787,38 @@ public sealed class GameEngine
         Changed?.Invoke();
     }
 
+    /// <summary>Saves the operator's page names, so pages read as show sections rather than numbers.</summary>
+    public void StorePageNames(IEnumerable<string> names)
+    {
+        var next = names.Select(name => (name ?? "").Trim()).Take(99).ToList();
+        if (JsonSerializer.Serialize(next) == JsonSerializer.Serialize(State.MacroPageNames)) return;
+        SaveUndo("Page names");
+        State.MacroPageNames = next;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Saves the practice plan and the segment the timer rests on.</summary>
+    public void StorePractice(IEnumerable<PracticeSegment> segments, int? index = null)
+    {
+        var next = segments.Where(segment => segment is not null).Select(segment => segment.Copy()).Take(40).ToList();
+        foreach (var segment in next) segment.Normalize();
+        var at = Math.Clamp(index ?? State.PracticeIndex, 0, Math.Max(0, next.Count - 1));
+        if (JsonSerializer.Serialize(next) == JsonSerializer.Serialize(State.PracticeSegments) && at == State.PracticeIndex) return;
+        SaveUndo("Practice plan");
+        State.PracticeSegments = next;
+        State.PracticeIndex = at;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Swaps home and visitors everywhere: names, colours, logos and records.</summary>
+    public void SwapTeamIdentities()
+    {
+        SaveUndo("Team identities");
+        TeamIdentities.Swap(State);
+        Log("Team", "Swapped the home and visitors identity");
+        Changed?.Invoke();
+    }
+
     public void ResetGame()
     {
         SaveUndo("Game reset"); var home = State.HomeTeam; var away = State.AwayTeam; var id = State.SportId;
@@ -1814,6 +1859,7 @@ public sealed class GameEngine
         State.SportValues ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         State.Macros ??= [];
         foreach (var macro in State.Macros) macro.Normalize();
+        PracticePlans.Normalize(State);
         // Older saves have no page count; make room for every page a saved macro already names.
         State.MacroPages = Math.Clamp(State.MacroPages, 1, 99);
         if (State.Macros.Count > 0)
@@ -2122,7 +2168,14 @@ public sealed class GameEngine
         : JsonSerializer.Deserialize<SelectedPlayer>(JsonSerializer.Serialize(player, JsonOptions), JsonOptions)!;
 
     void SaveUndo(string label) { _redo.Clear(); _undo.Push(new GameSnapshot(JsonSerializer.Deserialize<GameState>(JsonSerializer.Serialize(State, JsonOptions), JsonOptions)!, label)); if (_undo.Count > 100) { var keep = _undo.Reverse().TakeLast(100).ToArray(); _undo.Clear(); foreach (var x in keep) _undo.Push(x); } }
-    void Log(string type, string description) => State.Events.Add(new GameEvent(DateTimeOffset.Now, type, description, State.HomeScore, State.AwayScore));
+    void Log(string type, string description)
+    {
+        State.Events.Add(new GameEvent(DateTimeOffset.Now, type, description, State.HomeScore, State.AwayScore));
+        // Scoring, clocks, periods, possession, penalties and game state all arrive here, so this is
+        // where the spine sees the console's own actions — not only the external ones that call
+        // RecordEvent.
+        ShowBus.Shared.Publish(ShowEventKinds.FromType(type), type, description);
+    }
 
     /// <summary>
     /// Writes one operator-visible event to the log. Media, macro and roster actions use this so
@@ -2131,6 +2184,8 @@ public sealed class GameEngine
     public void RecordEvent(string type, string description)
     {
         if (string.IsNullOrWhiteSpace(description)) return;
+        // The show spine sees every operator-visible event, so media, macro and roster actions reach
+        // the same ordered stream as the console's own scoring and clock changes.
         Log(type, description.Trim());
         Changed?.Invoke();
     }

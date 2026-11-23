@@ -23,7 +23,11 @@ public sealed class AutomationRuntime : IDisposable
     readonly Dictionary<string, RuleFlow> _flows = new(StringComparer.OrdinalIgnoreCase);
     // Which scheduled rules have already run, and in which minute, so an at-time rule fires once.
     readonly Dictionary<string, DateTime> _fired = new(StringComparer.OrdinalIgnoreCase);
-    readonly System.Windows.Threading.DispatcherTimer _schedule = new() { Interval = TimeSpan.FromSeconds(1) };
+    // When each rule last started matching, for the triggers page's last-fire column.
+    readonly Dictionary<string, DateTime> _lastActive = new(StringComparer.OrdinalIgnoreCase);
+    // The app's one clock. Scheduled rules wake on the shared heartbeat instead of owning a timer.
+    readonly ShowHeartbeat _beat = ShowHeartbeat.Shared;
+    long _lastScheduleSecond = -1;
     readonly Dictionary<ScorebugLayout, (long Version, ScorebugLayout Effective)> _cache = new(ReferenceEqualityComparer.Instance);
     long _version;
     long _catalogVersion;
@@ -39,8 +43,8 @@ public sealed class AutomationRuntime : IDisposable
         _engine.Changed += Evaluate;
         // Bypass rules follow the working game, not just the copy currently on air.
         if (liveEngine is not null && !ReferenceEquals(liveEngine, engine)) liveEngine.Changed += Evaluate;
-        _schedule.Tick += Schedule_Tick;
-        _schedule.Start();
+        _beat.Tick += Beat;
+        _beat.Start();
         Evaluate();
     }
 
@@ -54,10 +58,16 @@ public sealed class AutomationRuntime : IDisposable
     /// </summary>
     public Action<AutomationAction>? RunCommand { get; set; }
 
-    /// <summary>Re-evaluates once a second, so an at-time rule fires even while the game is still.</summary>
-    void Schedule_Tick(object? sender, EventArgs e)
+    /// <summary>
+    /// Re-evaluates once a second, so an at-time rule fires even while the game is still. The shared
+    /// heartbeat beats ten times a second; this work only happens on the whole-second edge.
+    /// </summary>
+    void Beat(TimeSpan elapsed)
     {
-        if (_disposed) { _schedule.Stop(); return; }
+        if (_disposed) return;
+        var second = (long)elapsed.TotalSeconds;
+        if (second == _lastScheduleSecond) return;
+        _lastScheduleSecond = second;
         if (!_catalog.Displays.Any(display => (display.Automations ?? []).Any(rule =>
                 rule.Enabled && AutomationRules.NormalizeTime(rule.AtTime).Length > 0)))
             return;
@@ -80,6 +90,10 @@ public sealed class AutomationRuntime : IDisposable
     }
 
     public int ActiveRuleCount => _matched.Count;
+
+    /// <summary>When a rule last started matching, or null if it has not fired this session.</summary>
+    public DateTime? LastFired(string displayId, string ruleId) =>
+        _lastActive.TryGetValue(Key(displayId, ruleId), out var at) ? at : null;
 
     /// <summary>True when this exact rule is matching on the current evaluation.</summary>
     public bool IsRuleActive(string displayId, string ruleId) =>
@@ -130,6 +144,8 @@ public sealed class AutomationRuntime : IDisposable
             var next = new Dictionary<string, Dictionary<string, VisualPatch>>(StringComparer.OrdinalIgnoreCase);
             var flows = new Dictionary<string, RuleFlow>(StringComparer.OrdinalIgnoreCase);
             var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Rules that started matching on this evaluation, reported once on the show spine.
+            var entered = new List<string>();
             var switchTargets = new List<(string DisplayId, string LayoutId)>();
             var publishedState = _engine.State;
             var liveState = _liveEngine?.State ?? publishedState;
@@ -145,11 +161,14 @@ public sealed class AutomationRuntime : IDisposable
                     // "at 19:30 switch to the opening layout" needs no game change to fire.
                     var scheduled = Scheduled(key, rule);
                     if (scheduled) _fired[$"{key}|{AutomationRules.NormalizeTime(rule.AtTime)}"] = DateTime.Now;
-                    var trigger = scheduled || rule.Matches(state);
+                    // One evaluator behind every rule, so the triggers page, the editor's test
+                    // button and the running show cannot disagree about a condition.
+                    var evaluated = TriggerEvaluator.Evaluate(rule, state);
+                    var trigger = scheduled || evaluated.Trigger;
                     // A rule with no wait-until conditions never enters a wait step, so it keeps the
                     // flat trigger/action behaviour it had before wait steps existed.
-                    var waits = rule.Conditions?.Any(condition => condition.WaitUntil) == true;
-                    var waitMet = waits && rule.MatchesWait(state);
+                    var waits = evaluated.HasWait;
+                    var waitMet = evaluated.WaitMet;
                     var previous = _flows.TryGetValue(key, out var flow) ? flow : RuleFlow.Idle;
                     var nextFlow = previous;
                     var onMatch = false;
@@ -207,7 +226,15 @@ public sealed class AutomationRuntime : IDisposable
                             break;
                     }
 
-                    if (trigger) matched.Add(key);
+                    if (trigger)
+                    {
+                        matched.Add(key);
+                        if (!_matched.Contains(key))
+                        {
+                            entered.Add($"{display.Name} · {rule.Name}");
+                            _lastActive[key] = DateTime.Now;
+                        }
+                    }
                     flows[key] = nextFlow;
                     ApplyPatches(rule, patches, onMatch, afterWait, elseBranch, state);
                     if (enterOnMatch || enterAfterWait || enterElse)
@@ -229,6 +256,10 @@ public sealed class AutomationRuntime : IDisposable
             foreach (var (displayId, patches) in next) _overrides[displayId] = patches;
             if (visualChange) _version++;
             if (visualChange) _cache.Clear();
+            // A rule becoming live is a show event in its own right: the triggers page and any later
+            // cue or device consumer can follow it without polling the runtime.
+            foreach (var description in entered)
+                ShowBus.Shared.Publish(ShowEventKind.Automation, "Trigger", description);
             // A decimal column on any element (in the design or in a rule's live patch) is the only
             // reason the engine has to wake the show ten times a second.
             // Only ever turned on: a staged layout can use decimals before it is saved, and the
@@ -357,13 +388,14 @@ public sealed class AutomationRuntime : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _schedule.Stop();
+        _beat.Tick -= Beat;
         _catalog.Changed -= CatalogChanged;
         _engine.Changed -= Evaluate;
         if (_liveEngine is not null && !ReferenceEquals(_liveEngine, _engine)) _liveEngine.Changed -= Evaluate;
         _cache.Clear();
         _overrides.Clear();
         _matched.Clear();
+        _lastActive.Clear();
     }
 
     enum RuleFlow

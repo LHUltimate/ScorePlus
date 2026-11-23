@@ -301,6 +301,12 @@ public sealed class SavedMacro
     public int Column { get; set; } = -1;
     /// <summary>The board page this macro belongs to. Page 0 is the first page.</summary>
     public int Page { get; set; }
+
+    /// <summary>How many board columns this tile spans: 1 or 2. A wide tile reads at a glance.</summary>
+    public int ColumnSpan { get; set; } = 1;
+
+    /// <summary>How many board rows this tile spans: 1 or 2. A tall tile suits a show step.</summary>
+    public int RowSpan { get; set; } = 1;
     public List<MacroAction> Actions { get; set; } = [];
 
     public SavedMacro Copy() => new()
@@ -312,6 +318,8 @@ public sealed class SavedMacro
         Row = Row,
         Column = Column,
         Page = Page,
+        ColumnSpan = ColumnSpan,
+        RowSpan = RowSpan,
         Actions = (Actions ?? []).Select(action => action.Copy()).ToList()
     };
 
@@ -326,6 +334,8 @@ public sealed class SavedMacro
         Row = Math.Clamp(Row, -1, 999);
         Column = Math.Clamp(Column, -1, 999);
         Page = Math.Clamp(Page, 0, 98);
+        ColumnSpan = Math.Clamp(ColumnSpan, 1, 2);
+        RowSpan = Math.Clamp(RowSpan, 1, 2);
         Actions ??= [];
         Actions = Actions.Where(action => action is not null).Take(80).ToList();
         foreach (var action in Actions) action.Normalize();

@@ -89,10 +89,10 @@ dotnet run --project src/Scoreboard.Desktop/Scoreboard.Desktop.csproj
 The app opens on the launch box; create or open a game from there. For a release-shaped build with the installer, use the release script:
 
 ```sh
-./scripts/build-release.sh b1.2
+./scripts/build-release.sh b1.3
 ```
 
-Output lands in `dist/ScorePlus-win-x64-b1.2/`:
+Output lands in `dist/ScorePlus-win-x64-b1.3/`:
 
 ```
 ScorePlusPortable.exe   self-contained app
@@ -119,7 +119,7 @@ The suites cover scoring, undo, clock behaviour, period formats, sport profiles 
 `scripts/publish-release.sh` builds the release, writes `win.json`, and optionally creates the GitHub release:
 
 ```sh
-./scripts/publish-release.sh b1.2 --release --prerelease --notes "Adds X, fixes Y"
+./scripts/publish-release.sh b1.3 --release --prerelease --notes "Adds X, fixes Y"
 ```
 
 - The release must carry **`ScorePlusSetup.exe`** and **`ScorePlusPortable.exe`**.
