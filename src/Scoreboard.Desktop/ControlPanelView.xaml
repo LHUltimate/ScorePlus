@@ -284,7 +284,7 @@
                       Margin="8,0,24,0" FontSize="11"
                       SelectionChanged="ClockMessage_Changed"
                       ToolTip="What the game clock prints on the graphic">
-              <ComboBoxItem Content="Game clock" Tag="Clock"/>
+              <ComboBoxItem Content="Game Clock" Tag="Clock"/>
               <ComboBoxItem Content="Final" Tag="Final"/>
               <ComboBoxItem Content="End of Reg." Tag="EndOfRegulation"/>
             </ComboBox>

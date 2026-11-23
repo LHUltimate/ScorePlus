@@ -243,7 +243,7 @@
             <ComboBox x:Name="CopySourceBox" Style="{StaticResource MacroCombo}"
                       ToolTip="Any live game value: clocks, score, down, records, sport values, custom values or selected-player stats"/>
             <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
-                       Text="For example, copy the Game clock into “Last ball snapped” when the snap happens. A custom-value clock also accepts a clock reading."/>
+                       Text="For example, copy the Game Clock into “Last ball snapped” when the snap happens. A custom-value clock also accepts a clock reading."/>
           </StackPanel>
           <StackPanel x:Name="SidePanel">
             <TextBlock Text="SIDE" Style="{StaticResource MacroLabel}"/>

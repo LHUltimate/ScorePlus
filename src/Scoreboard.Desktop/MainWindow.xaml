@@ -176,20 +176,25 @@
           </StackPanel>
 
           <!-- What the room hears: the peak level as tall as the rail allows, with its reading in
-               decibels at the end of the bar. The old caption and show line stay gone so the
-               meter itself is the whole card. -->
+               decibels at the end of the bar. A short caption names the bar, because a strip of
+               segments on its own does not tell an operator what it is measuring. -->
           <Border Grid.Row="5" Background="#171C25" CornerRadius="9" Padding="10,8" Margin="0,8,0,0">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-              </Grid.ColumnDefinitions>
-              <UniformGrid x:Name="SoundMeterSegments" Columns="22" Height="30" VerticalAlignment="Center"/>
-              <TextBlock x:Name="SoundLevelText" Grid.Column="1" Text="—" Foreground="#93A0B2"
-                         FontFamily="Consolas" FontSize="12" FontWeight="Bold" MinWidth="58"
-                         TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"
-                         ToolTip="The loudest level the show is putting out, in decibels"/>
-            </Grid>
+            <StackPanel>
+              <DockPanel Margin="0,0,0,5">
+                <TextBlock Text="MASTER SOUND" Foreground="#5C6B7E" FontSize="10" FontWeight="Bold"/>
+              </DockPanel>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <UniformGrid x:Name="SoundMeterSegments" Columns="22" Height="30" VerticalAlignment="Center"/>
+                <TextBlock x:Name="SoundLevelText" Grid.Column="1" Text="—" Foreground="#93A0B2"
+                           FontFamily="Consolas" FontSize="12" FontWeight="Bold" MinWidth="58"
+                           TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"
+                           ToolTip="The loudest level the show is putting out, in decibels"/>
+              </Grid>
+            </StackPanel>
           </Border>
 
           <!-- What the audience is actually watching: the published layout, on a display of

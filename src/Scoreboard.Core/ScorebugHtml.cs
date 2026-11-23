@@ -221,7 +221,7 @@ public static class ScorebugHtml
     static string TextHtml(ScorebugElement item, GameState? state, string colour)
     {
         var text = state is not null
-            ? ScoreboardTemplates.Bind(item.Content ?? string.Empty, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision)
+            ? ScoreboardTemplates.Bind(item.Content ?? string.Empty, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero)
             : item.Content ?? string.Empty;
         var font = FontFamily(item.FontFamily);
         var weight = item.Bold ? "font-weight:700;" : "font-weight:400;";
@@ -265,7 +265,7 @@ public static class ScorebugHtml
     {
         if (item.Icon != ScorebugIcon.None && state is not null && !string.IsNullOrWhiteSpace(item.IconToken))
         {
-            var bound = ScoreboardTemplates.Bind(item.IconToken, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision).Trim();
+            var bound = ScoreboardTemplates.Bind(item.IconToken, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero).Trim();
             if (bound.Length == 0
                 || bound == "0"
                 || bound.Equals("false", StringComparison.OrdinalIgnoreCase)

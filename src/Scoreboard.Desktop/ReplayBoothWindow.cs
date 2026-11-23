@@ -1,9 +1,11 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.Win32;
 
 namespace Scoreboard.Desktop;
 
@@ -62,6 +64,15 @@ public sealed class ReplayBoothWindow : Window
     readonly Button _stoppagePlus = new() { Content = "+30s", MinWidth = 52, Margin = new Thickness(0, 0, 4, 0) };
     readonly Slider _speedSlider = new() { Minimum = 0.1, Maximum = 2.0, Value = 1, Width = 150, Margin = new Thickness(8, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
     readonly TextBlock _speedText = new() { Text = "1.0×", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD2, 0x66)), VerticalAlignment = VerticalAlignment.Center, MinWidth = 40 };
+    // The show's replay hand-over: a clip played over the replay box, cut away at the chosen beat.
+    readonly Button _switchVideoButton = new() { Content = "Choose…", MinWidth = 70, Margin = new Thickness(0, 0, 4, 0), ToolTip = "Pick a video to play as the switch when a replay goes on air" };
+    readonly Button _switchVideoClear = new() { Content = "Clear", MinWidth = 54, Margin = new Thickness(0, 0, 10, 0), ToolTip = "Use the ordinary fade, slide or zoom instead of a video" };
+    readonly TextBox _switchVideoCut = new() { Width = 44, Margin = new Thickness(6, 0, 8, 0), TextAlignment = TextAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+    readonly TextBlock _switchVideoName = new() { FontSize = 10, Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0xA8, 0xB8)), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 340 };
+    // The replay's own arrival, independent of the clip: follow the camera, or pick a preset.
+    readonly ComboBox _switchAnimationBox = new() { Width = 126, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+    readonly TextBox _switchAnimationSeconds = new() { Width = 44, TextAlignment = TextAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+    bool _syncingSwitch;
     readonly StackPanel _wallCameraList = new();
     readonly ComboBox _wallColumnsBox = new() { Width = 130, Margin = new Thickness(0, 0, 0, 6) };
     bool _updatingLayout;
@@ -79,6 +90,12 @@ public sealed class ReplayBoothWindow : Window
     bool _editing;
     bool _updatingScrub;
     string _cameraSignature = "";
+
+    /// <summary>One entry in the booth's switch-animation picker. "Camera" follows the source camera.</summary>
+    sealed record SwitchAnimationOption(string Key, string Label)
+    {
+        public override string ToString() => Label;
+    }
 
     public ReplayBoothWindow(ReplayBoothController booth, UserPreferences preferences)
     {
@@ -115,6 +132,42 @@ public sealed class ReplayBoothWindow : Window
             _booth.Speed = e.NewValue;
             _speedText.Text = $"{_booth.Speed:0.0}×";
         };
+        _switchVideoButton.Click += (_, _) => ChooseSwitchVideo();
+        _switchVideoClear.Click += (_, _) => SetSwitchVideo(string.Empty);
+        _switchVideoCut.LostFocus += (_, _) => CommitSwitchCut();
+        _switchVideoCut.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            CommitSwitchCut();
+            Keyboard.ClearFocus();
+        };
+        _switchAnimationBox.ItemsSource = new[]
+        {
+            new SwitchAnimationOption("Camera", "Follow camera"),
+            new SwitchAnimationOption("Cut", "Cut"),
+            new SwitchAnimationOption("Fade", "Dissolve"),
+            new SwitchAnimationOption("Slide", "Slide"),
+            new SwitchAnimationOption("Zoom", "Zoom")
+        };
+        _switchAnimationBox.SelectionChanged += (_, _) =>
+        {
+            if (_syncingSwitch || _switchAnimationBox.SelectedItem is not SwitchAnimationOption option) return;
+            _preferences.ReplaySwitchTransition = option.Key;
+            SaveSwitchPreferences();
+            _status.Text = option.Key == "Camera"
+                ? "REPLAY SWITCH · follows the camera"
+                : $"REPLAY SWITCH · {option.Label}";
+        };
+        _switchAnimationSeconds.LostFocus += (_, _) => CommitSwitchAnimationSeconds();
+        _switchAnimationSeconds.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            CommitSwitchAnimationSeconds();
+            Keyboard.ClearFocus();
+        };
+        SyncSwitchVideo();
         Content = BuildChrome();
         BuildBigView();
         _booth.RefreshCameras();
@@ -191,6 +244,51 @@ public sealed class ReplayBoothWindow : Window
         });
         columnsRow.Children.Add(_wallColumnsBox);
         editorStack.Children.Add(columnsRow);
+        var switchRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 7, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        switchRow.Children.Add(new TextBlock
+        {
+            Text = "REPLAY SWITCH VIDEO",
+            FontSize = 10,
+            FontWeight = FontWeights.Bold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xA0, 0xB4)),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
+        });
+        switchRow.Children.Add(_switchVideoButton);
+        switchRow.Children.Add(_switchVideoClear);
+        switchRow.Children.Add(new TextBlock
+        {
+            Text = "CUT AT (S)",
+            FontSize = 10,
+            FontWeight = FontWeights.Bold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xA0, 0xB4)),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        switchRow.Children.Add(_switchVideoCut);
+        switchRow.Children.Add(_switchVideoName);
+        editorStack.Children.Add(switchRow);
+        var animationRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        animationRow.Children.Add(new TextBlock
+        {
+            Text = "REPLAY SWITCH ANIMATION",
+            FontSize = 10,
+            FontWeight = FontWeights.Bold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xA0, 0xB4)),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
+        });
+        animationRow.Children.Add(_switchAnimationBox);
+        animationRow.Children.Add(new TextBlock
+        {
+            Text = "TIME (S)",
+            FontSize = 10,
+            FontWeight = FontWeights.Bold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xA0, 0xB4)),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0)
+        });
+        animationRow.Children.Add(_switchAnimationSeconds);
+        editorStack.Children.Add(animationRow);
         editorStack.Children.Add(new TextBlock
         {
             Text = "CAMERAS ON THIS WALL · ↑ ↓ ORDER",
@@ -633,6 +731,82 @@ public sealed class ReplayBoothWindow : Window
         _status.Text = $"BOOTH LAYOUT · {order.Count} camera{(order.Count == 1 ? "" : "s")} · {(_booth.Columns == 0 ? "auto columns" : $"{_booth.Columns} column{(_booth.Columns == 1 ? "" : "s")}")}";
     }
 
+
+    void ChooseSwitchVideo()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Replay switch video",
+            Filter = "Video|*.mp4;*.m4v;*.wmv;*.avi;*.mov;*.mkv;*.webm|All files|*.*",
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        SetSwitchVideo(dialog.FileName);
+    }
+
+    /// <summary>The switch travels with every replay cue from then on, including the preview.</summary>
+    void SetSwitchVideo(string path)
+    {
+        _preferences.ReplaySwitchVideo = path;
+        SaveSwitchPreferences();
+        _status.Text = string.IsNullOrWhiteSpace(path)
+            ? "REPLAY SWITCH · ordinary fade, slide or zoom"
+            : "REPLAY SWITCH · " + System.IO.Path.GetFileName(path);
+    }
+
+    void CommitSwitchCut()
+    {
+        var seconds = double.TryParse(_switchVideoCut.Text.Trim(), NumberStyles.Float,
+            CultureInfo.CurrentCulture, out var parsed) ? parsed : 0;
+        _preferences.ReplaySwitchVideoCutSeconds = Math.Clamp(seconds, 0, 30);
+        SaveSwitchPreferences();
+    }
+
+    void CommitSwitchAnimationSeconds()
+    {
+        var seconds = double.TryParse(_switchAnimationSeconds.Text.Trim(), NumberStyles.Float,
+            CultureInfo.CurrentCulture, out var parsed) ? parsed : 0.45;
+        _preferences.ReplaySwitchTransitionSeconds = Math.Clamp(seconds, 0, 5);
+        SaveSwitchPreferences();
+    }
+
+    void SaveSwitchPreferences()
+    {
+        try { PreferencesStore.Save(_preferences); } catch { }
+        SyncSwitchVideo();
+    }
+
+    void SyncSwitchVideo()
+    {
+        if (_switchVideoCut.Text != _preferences.ReplaySwitchVideoCutSeconds.ToString("0.#", CultureInfo.CurrentCulture))
+            _switchVideoCut.Text = _preferences.ReplaySwitchVideoCutSeconds.ToString("0.#", CultureInfo.CurrentCulture);
+        _switchVideoCut.ToolTip = "Seconds the switch video covers before the replay is revealed. 0 plays the clip to its end.";
+        var path = _preferences.ReplaySwitchVideo ?? string.Empty;
+        var missing = path.Length > 0 && !System.IO.File.Exists(path);
+        _switchVideoName.Text = path.Length == 0
+            ? "None"
+            : (missing ? "Missing: " : System.IO.Path.GetFileName(path));
+        _switchVideoName.ToolTip = path;
+        _switchVideoName.Foreground = missing
+            ? new SolidColorBrush(Color.FromRgb(0xFF, 0x8A, 0x8A))
+            : new SolidColorBrush(Color.FromRgb(0x9A, 0xA8, 0xB8));
+        _syncingSwitch = true;
+        try
+        {
+            var key = string.IsNullOrWhiteSpace(_preferences.ReplaySwitchTransition)
+                ? "Camera"
+                : _preferences.ReplaySwitchTransition;
+            _switchAnimationBox.ToolTip = "How every replay arrives. Follow camera uses the camera's own switch.";
+            _switchAnimationBox.SelectedItem = _switchAnimationBox.Items.OfType<SwitchAnimationOption>()
+                .FirstOrDefault(option => string.Equals(option.Key, key, StringComparison.OrdinalIgnoreCase))
+                ?? _switchAnimationBox.Items.OfType<SwitchAnimationOption>().FirstOrDefault();
+            var secondsText = _preferences.ReplaySwitchTransitionSeconds.ToString("0.##", CultureInfo.CurrentCulture);
+            if (_switchAnimationSeconds.Text != secondsText) _switchAnimationSeconds.Text = secondsText;
+            _switchAnimationSeconds.ToolTip = "Seconds a replay's own switch animation takes (0–5).";
+            _switchAnimationSeconds.IsEnabled = !string.Equals(key, "Camera", StringComparison.OrdinalIgnoreCase);
+        }
+        finally { _syncingSwitch = false; }
+    }
 
     void RefreshUi()
     {

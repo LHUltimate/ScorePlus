@@ -27,7 +27,7 @@ public sealed class LeagueCloudWindow : Window
     readonly ListBox _games = new() { MinHeight = 120, MaxHeight = 190, FontSize = 11 };
     readonly CheckBox _importHome = new() { Content = "Home score" };
     readonly CheckBox _importAway = new() { Content = "Away score" };
-    readonly CheckBox _importClock = new() { Content = "Game clock" };
+    readonly CheckBox _importClock = new() { Content = "Game Clock" };
     readonly CheckBox _importPeriod = new() { Content = "Period" };
 
     public LeagueCloudWindow(LeagueCloudService service, UserPreferences preferences, ScorebugCatalog catalog,

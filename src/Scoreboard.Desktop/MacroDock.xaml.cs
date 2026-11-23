@@ -179,7 +179,7 @@ public partial class MacroDock : UserControl
             new KindChoice(MacroActionKind.Score, "Score — add points to a side"),
             new KindChoice(MacroActionKind.SetDown, "Down — set the current down"),
             new KindChoice(MacroActionKind.SetTimeouts, "Timeouts — set a side's remaining count"),
-            new KindChoice(MacroActionKind.SetGameClock, "Game clock — set the clock"),
+            new KindChoice(MacroActionKind.SetGameClock, "Game Clock — set the clock"),
             new KindChoice(MacroActionKind.SetPlayClock, "Play clock — set the clock"),
             new KindChoice(MacroActionKind.SetTimeoutClock, "Timeout clock — set the clock"),
             new KindChoice(MacroActionKind.SetPeriod, "Period — set the current period"),
@@ -221,7 +221,7 @@ public partial class MacroDock : UserControl
         SideBox.SelectedIndex = 0;
         ClockBox.ItemsSource = new[]
         {
-            new ClockChoice("game", "Game clock"),
+            new ClockChoice("game", "Game Clock"),
             new ClockChoice("play", "Play clock"),
             new ClockChoice("timeout", "Timeout clock"),
             new ClockChoice("shot", "Shot clock"),

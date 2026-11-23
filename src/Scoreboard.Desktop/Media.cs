@@ -67,6 +67,16 @@ public sealed record MediaEntry(
     public int ReplayCue { get; init; }
 
     /// <summary>
+    /// A video that plays as this cue's hand-over. The replay is already underneath it, so the clip
+    /// is a video switch rather than a second picture: it covers the box until it ends or until
+    /// <see cref="SwitchVideoCutSeconds"/> reveals the replay.
+    /// </summary>
+    public string? SwitchVideoPath { get; init; }
+
+    /// <summary>Seconds the switch video covers the incoming picture. Zero plays the clip to its end.</summary>
+    public double SwitchVideoCutSeconds { get; init; }
+
+    /// <summary>
     /// For a camera: the microphone item that captures its sound. A camera carries no audio of its
     /// own, so naming its microphone is what lets a multiview tile draw a sound bar beside it.
     /// </summary>

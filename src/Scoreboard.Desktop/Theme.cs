@@ -128,6 +128,27 @@ public sealed class UserPreferences
     public double ReplaySpeed { get; set; } = 1;
 
     /// <summary>
+    /// A video played over the replay box when a replay goes on air, so the switch reads as a
+    /// produced hand-over instead of a cut. Empty means the ordinary fade/slide/zoom runs instead.
+    /// </summary>
+    public string ReplaySwitchVideo { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Seconds the replay switch video covers the picture before the replay is revealed. Zero lets
+    /// the clip play to its own end.
+    /// </summary>
+    public double ReplaySwitchVideoCutSeconds { get; set; }
+
+    /// <summary>
+    /// How a replay arrives when it has no switch video: "Camera" follows the replay's camera, or
+    /// Cut/Fade/Slide/Zoom give replays an animation of their own.
+    /// </summary>
+    public string ReplaySwitchTransition { get; set; } = "Camera";
+
+    /// <summary>Seconds the replay's own switch animation runs (0–5).</summary>
+    public double ReplaySwitchTransitionSeconds { get; set; } = 0.45;
+
+    /// <summary>
     /// The tag a replay carries. A scorebug video element tagged with this shows replays, so the
     /// operator can give replays their own box instead of reusing a camera's tag.
     /// </summary>
@@ -246,6 +267,10 @@ public sealed class UserPreferences
         ReplayBoothShowLabels = ReplayBoothShowLabels,
         ReplaySeconds = ReplaySeconds,
         ReplaySpeed = ReplaySpeed,
+        ReplaySwitchVideo = ReplaySwitchVideo,
+        ReplaySwitchVideoCutSeconds = ReplaySwitchVideoCutSeconds,
+        ReplaySwitchTransition = ReplaySwitchTransition,
+        ReplaySwitchTransitionSeconds = ReplaySwitchTransitionSeconds,
         ReplayTag = ReplayTag,
         ReplayBoothColumns = ReplayBoothColumns,
         ReplayBoothOrder = [.. ReplayBoothOrder],
@@ -381,6 +406,25 @@ public static class PreferencesStore
         // A malformed speed must not make the replay run at zero or a thousand times real time.
         if (!double.IsFinite(preferences.ReplaySpeed) || preferences.ReplaySpeed <= 0) preferences.ReplaySpeed = 1;
         preferences.ReplaySpeed = Math.Clamp(preferences.ReplaySpeed, 0.1, 2.0);
+        // An empty switch video is the off switch; a malformed cut beat must not cover the replay
+        // for ever, so it is clamped to the same range the booth offers.
+        preferences.ReplaySwitchVideo ??= string.Empty;
+        if (!double.IsFinite(preferences.ReplaySwitchVideoCutSeconds))
+            preferences.ReplaySwitchVideoCutSeconds = 0;
+        preferences.ReplaySwitchVideoCutSeconds = Math.Clamp(preferences.ReplaySwitchVideoCutSeconds, 0, 30);
+        // "Camera" is the follow-the-camera default; anything else must be a real preset, so a
+        // malformed file cannot leave replays unable to draw a switch.
+        preferences.ReplaySwitchTransition = (preferences.ReplaySwitchTransition ?? "").Trim().ToLowerInvariant() switch
+        {
+            "cut" => "Cut",
+            "fade" => "Fade",
+            "slide" => "Slide",
+            "zoom" => "Zoom",
+            _ => "Camera"
+        };
+        if (!double.IsFinite(preferences.ReplaySwitchTransitionSeconds))
+            preferences.ReplaySwitchTransitionSeconds = 0.45;
+        preferences.ReplaySwitchTransitionSeconds = Math.Clamp(preferences.ReplaySwitchTransitionSeconds, 0, 5);
         // A blank replay tag would route replays nowhere; the shipped name is REPLAY.
         preferences.ReplayTag = string.IsNullOrWhiteSpace(preferences.ReplayTag)
             ? MediaLibrary.ReplayTagName

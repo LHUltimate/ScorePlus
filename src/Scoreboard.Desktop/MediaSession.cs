@@ -323,6 +323,22 @@ public sealed class MediaSession
     }
 
     /// <summary>The tag every new replay carries, so a scorebug box can be set to show replays.</summary>
+    /// <summary>The show's replay hand-over video, or empty when replays use the ordinary switch.</summary>
+    public string ReplaySwitchVideo => _preferences.ReplaySwitchVideo ?? string.Empty;
+
+    /// <summary>Seconds that video covers the replay before the picture is revealed.</summary>
+    public double ReplaySwitchVideoCutSeconds => Math.Clamp(_preferences.ReplaySwitchVideoCutSeconds, 0, 30);
+
+    /// <summary>The replay's own switch animation, or "Camera" to follow its camera.</summary>
+    public string ReplaySwitchTransition => string.Equals(_preferences.ReplaySwitchTransition, "Camera",
+        StringComparison.OrdinalIgnoreCase)
+        ? "Camera"
+        : MediaLibrary.NormalizeTransition(_preferences.ReplaySwitchTransition);
+
+    /// <summary>Seconds the replay's own switch animation runs.</summary>
+    public double ReplaySwitchTransitionSeconds =>
+        MediaLibrary.NormalizeTransitionSeconds(_preferences.ReplaySwitchTransitionSeconds);
+
     public string ReplayTag => MediaLibrary.NormalizeTag(_preferences.ReplayTag);
 
     /// <summary>Changes the replay tag and moves the cue that is already open onto it.</summary>
@@ -851,6 +867,34 @@ public sealed class MediaSession
         Status?.Invoke($"SWITCH · {updated.Label} → {updated.Transition}");
     }
 
+    /// <summary>
+    /// Gives a library cue a video switch: the clip is already underneath, so the file plays over
+    /// the picture and reveals it when it ends. Null or blank removes it and the preset comes back.
+    /// </summary>
+    public void SetClipSwitchVideo(MediaEntry entry, string? path, double cutSeconds = 0)
+    {
+        entry = Resolve(entry);
+        if (entry.IsSpeaker || entry.IsMicrophone) return;
+        var normalized = string.IsNullOrWhiteSpace(path) ? null : path.Trim();
+        var cut = Math.Clamp(double.IsFinite(cutSeconds) ? cutSeconds : 0, 0, 30);
+        if (string.Equals(entry.SwitchVideoPath, normalized, StringComparison.OrdinalIgnoreCase)
+            && Math.Abs(entry.SwitchVideoCutSeconds - cut) < 0.001) return;
+        var updated = entry with { SwitchVideoPath = normalized, SwitchVideoCutSeconds = cut };
+        var index = Library.IndexOf(entry);
+        if (index < 0) index = Library.ToList().FindIndex(item => string.Equals(item.Path, entry.Path, StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return;
+        Library[index] = updated;
+        if (SameClip(Current, updated)) Current = updated;
+        if (SameClip(CameraEntry, updated)) CameraEntry = updated;
+        if (SameClip(Selected, updated)) Selected = updated;
+        Playback.UpdateEntry(updated);
+        Save();
+        StateChanged?.Invoke();
+        Status?.Invoke(normalized is null
+            ? $"SWITCH · {updated.Label} → {updated.Transition}"
+            : $"SWITCH · {updated.Label} → video {System.IO.Path.GetFileName(normalized)}");
+    }
+
     /// <summary>Sets how long this clip's or camera's switch animation runs.</summary>
     public void SetClipTransitionSeconds(MediaEntry entry, double seconds)
     {
@@ -1142,8 +1186,38 @@ public sealed class MediaSession
         // A clip only has a level while it is playing. Reading its speaker's loopback when it is
         // idle showed the rest of the machine's sound, which made a paused clip look live.
         if (!IsOnAir(entry) || !IsPlaying) return 0;
-        var bus = SpeakerBusFor(entry);
-        return SoundLevelMeter.ReadDevice(bus?.AudioDevice ?? entry.AudioDevice);
+        // A switched-off speaker, or one that could not be opened, makes this clip silent: its bar
+        // must stay empty until that speaker is switched back on.
+        if (Playback.GainFor(entry) <= 0 || Playback.AudioFailedFor(entry)) return 0;
+        // A routed cue has its own stream, so its bar reads exactly its own samples and never the
+        // other video that happens to share the speaker.
+        if (RoutedRouterFor(entry) is { IsPlaying: true } routed) return Math.Clamp(routed.Level, 0, 1);
+        // A cue still on the default output has no stream of its own. Measure that device only
+        // while this cue is alone there; otherwise the bar would show another clip's sound.
+        var sharingOutput = OnAirCues().Any(cue => !cue.IsSpeaker && !cue.IsMicrophone && !cue.IsCamera
+            && !string.Equals(ClipKey(cue), ClipKey(entry), StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(OutputFor(cue).Device));
+        return sharingOutput ? 0 : SoundLevelMeter.ReadDevice(entry.AudioDevice);
+    }
+
+    /// <summary>
+    /// True when a library item is actually making sound, so the dock can show its bar. A clip whose
+    /// speaker is switched off, or whose chosen speaker is not connected, shows no bar at all until
+    /// that speaker is back on — the bar is not just a playback indicator.
+    /// </summary>
+    public bool ClipAudible(MediaEntry entry)
+    {
+        if (entry.IsSpeaker)
+        {
+            if (!IsOnAir(entry) || entry.SpeakerMuted) return false;
+            // A bus only shows a bar while it is actually carrying one of the cues on air.
+            return IsPlaying && OnAirCues().Any(cue => !cue.IsSpeaker && !cue.IsMicrophone
+                && string.Equals(SpeakerBusFor(cue)?.Path, entry.Path, StringComparison.OrdinalIgnoreCase));
+        }
+        if (entry.IsMicrophone) return IsOnAir(entry);
+        if (entry.IsCamera) return false;
+        return IsOnAir(entry) && IsPlaying
+            && Playback.GainFor(entry) > 0 && !Playback.AudioFailedFor(entry);
     }
 
     /// <summary>
@@ -1207,6 +1281,11 @@ public sealed class MediaSession
             && (string.Equals(MediaLibrary.NormalizeTag(bus.Tag), tag, StringComparison.OrdinalIgnoreCase)
                 || MediaLibrary.IsAnyTag(bus.Tag))).ToArray();
         if (carrying.Length == 0) return null;
+        // More than one bus switched on means the show is running separate feeds. A bus then carries
+        // only the clips that name it: an unassigned clip must not be picked up by whichever bus
+        // happens to be first, which put the same audio through the wrong speaker.
+        if (string.IsNullOrWhiteSpace(entry.AudioDevice)
+            && Library.Count(bus => bus.IsSpeakerOnAir) > 1) return null;
         // A bus already pointed at the clip's own device wins, so two buses on one tag stay apart.
         return carrying.FirstOrDefault(bus => bus.IsSpeakerOnAir
                 && string.Equals(bus.AudioDevice, entry.AudioDevice, StringComparison.OrdinalIgnoreCase))
@@ -1782,15 +1861,27 @@ public sealed class MediaSession
         TransportChanged?.Invoke();
     }
 
-    /// <summary>The synthetic cue for one recorded segment. The camera's switch settings travel
-    /// with it, so a replay enters with the same animation the operator chose for the camera.</summary>
-    MediaEntry CreateReplayEntry(CameraSegment segment, int cue, MediaEntry? camera) =>
-        new(segment.Path, ReplayTag)
+    /// <summary>The synthetic cue for one recorded segment. The replay arrives on its own switch
+    /// animation, or follows the camera's when the booth is set to Follow camera.</summary>
+    MediaEntry CreateReplayEntry(CameraSegment segment, int cue, MediaEntry? camera)
+    {
+        // A replay can arrive on its own animation, set in the booth, or follow the camera it came
+        // from. Both travel on the cue, so previews and the audience see the same switch.
+        var own = ReplaySwitchTransition;
+        var followsCamera = string.Equals(own, "Camera", StringComparison.OrdinalIgnoreCase);
+        return new(segment.Path, ReplayTag)
         {
-            Transition = MediaLibrary.NormalizeTransition((camera ?? CameraEntry)?.Transition),
-            TransitionSeconds = MediaLibrary.NormalizeTransitionSeconds((camera ?? CameraEntry)?.TransitionSeconds ?? MediaLibrary.DefaultTransitionSeconds),
+            Transition = followsCamera
+                ? MediaLibrary.NormalizeTransition((camera ?? CameraEntry)?.Transition)
+                : own,
+            TransitionSeconds = followsCamera
+                ? MediaLibrary.NormalizeTransitionSeconds((camera ?? CameraEntry)?.TransitionSeconds ?? MediaLibrary.DefaultTransitionSeconds)
+                : ReplaySwitchTransitionSeconds,
+            SwitchVideoPath = ReplaySwitchVideo,
+            SwitchVideoCutSeconds = ReplaySwitchVideoCutSeconds,
             ReplayCue = cue
         };
+    }
 
     /// <summary>Opens one recorded clip at a point inside it and points the scorebug at it.</summary>
     void OpenReplaySegment(int index, double offset, bool play)

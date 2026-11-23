@@ -195,6 +195,18 @@ public sealed class ScorebugElement
     /// </summary>
     public string? LinkId { get; set; }
 
+    /// <summary>
+    /// A locked element is part of the finished artwork: the studio never selects, drags, resizes
+    /// or deletes it. It still draws and it still prints live values. Saved with the layout.
+    /// </summary>
+    public bool Locked { get; set; }
+
+    /// <summary>
+    /// Elements that share this id are one group. Selecting any of them selects the group, so a
+    /// plate and its labels move and lock together; null means the element stands alone.
+    /// </summary>
+    public string? GroupId { get; set; }
+
     /// <summary>For video elements: only media assigned to this tag plays inside the element.</summary>
     public string MediaTag { get; set; } = "";
 
@@ -333,6 +345,12 @@ public sealed class ScorebugElement
 
     /// <summary>Print {{PLAY_CLOCK}} with a leading colon, e.g. :22, on this element.</summary>
     public bool PlayClockColon { get; set; }
+
+    /// <summary>
+    /// Pad a single-digit play clock to two digits, so the element prints 05 instead of 5. It is
+    /// independent of the colon: with the colon on, :05 comes out anyway, and both can be on.
+    /// </summary>
+    public bool PlayClockLeadingZero { get; set; }
 
     /// <summary>Print {{GAME_CLOCK}} as 09:59. Off prints 9:59 and :59 under a minute on this element.</summary>
     public bool GameClockLeadingZero { get; set; } = true;
@@ -603,7 +621,7 @@ public sealed class ScorebugLayout
             new() { Name="Away team", Content="{{AWAY_TEAM}}", X=74, Y=236, Width=300, Height=54, FontSize=36 },
             new() { Name="Away score", Content="{{AWAY_SCORE}}", X=74, Y=300, Width=300, Height=126, FontSize=102, ForegroundSource=ScorebugColorSource.AwayPrimary },
             new() { Name="Period", Content="{{PERIOD}}", X=470, Y=225, Width=340, Height=52, FontSize=28 },
-            new() { Name="Game clock", Content="{{GAME_CLOCK}}", X=430, Y=300, Width=420, Height=92, FontSize=72, Transition=ScorebugTransition.Cut },
+            new() { Name="Game Clock", Content="{{GAME_CLOCK}}", X=430, Y=300, Width=420, Height=92, FontSize=72, Transition=ScorebugTransition.Cut },
             new() { Name="Home logo", Kind=ScorebugElementKind.Logo, LogoSide=ScorebugLogoSide.Home, Content="HOME LOGO", X=1082, Y=160, Width=120, Height=64, FontSize=20 },
             new() { Name="Away logo", Kind=ScorebugElementKind.Logo, LogoSide=ScorebugLogoSide.Away, Content="AWAY LOGO", X=78, Y=160, Width=120, Height=64, FontSize=20 }
         ]

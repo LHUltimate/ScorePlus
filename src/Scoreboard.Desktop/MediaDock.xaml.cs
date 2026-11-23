@@ -248,11 +248,26 @@ public partial class MediaDock : UserControl
             }
             ClipLoopBox.IsChecked = selected?.Loop == true;
             ClipLoopBox.IsEnabled = selected is not null;
-            TransitionBox.IsEnabled = selected?.IsVideo == true;
-            TransitionBox.SelectedItem = MediaLibrary.NormalizeTransition(selected?.Transition);
-            TransitionSecondsBox.IsEnabled = TransitionBox.IsEnabled;
+            // A replay is not a library item, so with one on air the rail used to show a dead
+            // dropdown. The switch animation belongs to the replay's camera; fall back to it so the
+            // choice stays usable while a replay is being set up. The picker itself is never
+            // disabled: a disabled dropdown cannot be opened at all, which read as a broken control.
+            var switchTarget = selected ?? _session!.ReplaySource;
+            TransitionBox.IsEnabled = true;
+            TransitionSecondsBox.IsEnabled = true;
+            TransitionBox.ToolTip = switchTarget is { IsSpeaker: false, IsMicrophone: false }
+                ? "How the selected clip or camera arrives when it replaces the previous picture"
+                : "Select a clip, camera or screen to set its switch animation";
+            TransitionBox.SelectedItem = MediaLibrary.NormalizeTransition(switchTarget?.Transition);
+            var switchClip = selected is { IsSpeaker: false, IsMicrophone: false } ? selected : null;
+            SwitchVideoButton.IsEnabled = switchClip is not null;
+            SwitchVideoClearButton.IsEnabled = !string.IsNullOrWhiteSpace(switchClip?.SwitchVideoPath);
+            SwitchVideoName.Text = string.IsNullOrWhiteSpace(switchClip?.SwitchVideoPath)
+                ? "No switch video"
+                : System.IO.Path.GetFileName(switchClip!.SwitchVideoPath);
             if (!TransitionSecondsBox.IsKeyboardFocusWithin)
-                TransitionSecondsBox.Text = (selected?.TransitionSeconds ?? MediaLibrary.DefaultTransitionSeconds).ToString("0.##", CultureInfo.CurrentCulture);
+                TransitionSecondsBox.Text = ((selected ?? _session?.ReplaySource)?.TransitionSeconds
+                ?? MediaLibrary.DefaultTransitionSeconds).ToString("0.##", CultureInfo.CurrentCulture);
 
             // Audio: the selected clip's own level and speaker.
             var level = Math.Round((selected?.Volume ?? 1) * 100);
@@ -278,22 +293,20 @@ public partial class MediaDock : UserControl
                     : "none added yet";
             var microphoneItem = _session.Selected?.IsMicrophone == true ? _session.Selected
                 : _session.Current?.IsMicrophone == true ? _session.Current : null;
-            MicrophoneRouteButton.IsEnabled = microphoneItem is not null;
-            MicrophoneRouteButton.ToolTip = microphoneItem is null
-                ? "Select a microphone item in the library to rename it or point it at another microphone"
-                : $"Rename {microphoneItem.Label} and choose which microphone it listens to";
             var cameraItem = _session.Selected?.IsCamera == true ? _session.Selected
                 : _session.Current?.IsCamera == true ? _session.Current : null;
-            RouteButton.IsEnabled = cameraItem is not null;
-            RouteButton.ToolTip = cameraItem is null
-                ? "Select a camera item in the library to rename it or point it at another camera"
-                : $"Rename {cameraItem.Label} and choose which camera it uses";
             var speakerItem = _session.Selected?.IsSpeaker == true ? _session.Selected
                 : _session.Current?.IsSpeaker == true ? _session.Current : null;
-            SpeakerRouteButton.IsEnabled = speakerItem is not null;
-            SpeakerRouteButton.ToolTip = speakerItem is null
-                ? "Select a speaker bus in the library to rename it or point it at another output"
-                : $"Rename {speakerItem.Label} and choose its output device";
+            // One Route… control, aimed at whichever source is selected or on air.
+            var routeItem = (MediaEntry?)microphoneItem ?? cameraItem ?? speakerItem;
+            RouteSelectedButton.IsEnabled = routeItem is not null;
+            RouteSelectedButton.ToolTip = routeItem switch
+            {
+                { IsCamera: true } item => $"Rename {item.Label} and choose which camera it uses",
+                { IsMicrophone: true } item => $"Rename {item.Label} and choose which microphone it listens to",
+                { IsSpeaker: true } item => $"Rename {item.Label} and choose its output device",
+                _ => "Select a camera, microphone or speaker in the library to rename or re-point it"
+            };
             SpeakerStatus.Text = _session.Selected?.IsSpeaker == true
                 ? $"BUS · {_session.Selected.AudioLabel}"
                 : _session.Library.Any(entry => entry.IsSpeaker)
@@ -382,13 +395,15 @@ public partial class MediaDock : UserControl
 
     void Transition_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (_syncing || _session?.Selected is not { IsVideo: true } selected) return;
+        var selected = _session?.Selected ?? _session?.ReplaySource;
+        if (_syncing || selected is not { IsSpeaker: false, IsMicrophone: false }) return;
         _session.SetClipTransition(selected, TransitionBox.SelectedItem as string);
     }
 
     void TransitionSeconds_Changed(object sender, TextChangedEventArgs e)
     {
-        if (_syncing || _session?.Selected is not { IsVideo: true } selected) return;
+        var selected = _session?.Selected ?? _session?.ReplaySource;
+        if (_syncing || selected is not { IsSpeaker: false, IsMicrophone: false }) return;
         if (!double.TryParse(TransitionSecondsBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var seconds)) return;
         _session.SetClipTransitionSeconds(selected, seconds);
     }
@@ -396,7 +411,32 @@ public partial class MediaDock : UserControl
     void TransitionSeconds_LostFocus(object sender, RoutedEventArgs e)
     {
         var selected = _session?.Selected;
-        TransitionSecondsBox.Text = (selected?.TransitionSeconds ?? MediaLibrary.DefaultTransitionSeconds).ToString("0.##", CultureInfo.CurrentCulture);
+        TransitionSecondsBox.Text = ((selected ?? _session?.ReplaySource)?.TransitionSeconds
+                ?? MediaLibrary.DefaultTransitionSeconds).ToString("0.##", CultureInfo.CurrentCulture);
+    }
+
+    /// <summary>Gives the selected clip a video as its switch animation, instead of a preset.</summary>
+    void SwitchVideo_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _session?.Selected;
+        if (_session is null || selected is not { IsSpeaker: false, IsMicrophone: false }) return;
+        var dialog = new OpenFileDialog
+        {
+            Title = "Switch video for " + selected.Label,
+            Filter = "Video|*.mp4;*.m4v;*.wmv;*.avi;*.mov;*.mkv;*.webm|All files|*.*",
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+        _session.SetClipSwitchVideo(selected, dialog.FileName, selected.SwitchVideoCutSeconds);
+        Refresh();
+    }
+
+    void SwitchVideoClear_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _session?.Selected;
+        if (_session is null || selected is null) return;
+        _session.SetClipSwitchVideo(selected, null);
+        Refresh();
     }
 
     /// <summary>Shows the dock again (the tab was just opened).</summary>
@@ -1069,14 +1109,7 @@ public partial class MediaDock : UserControl
     /// air, or a speaker bus that is switched on. An idle item shows no bar at all, so a clip that
     /// is merely selected — or routed to a busy speaker — never looks as though it is playing.
     /// </summary>
-    bool Audible(MediaEntry entry)
-    {
-        if (_session is null) return false;
-        if (entry.IsSpeaker) return _session.IsOnAir(entry);
-        if (entry.IsMicrophone) return _session.IsOnAir(entry);
-        if (entry.IsCamera) return false;
-        return _session.IsOnAir(entry) && _session.IsPlaying;
-    }
+    bool Audible(MediaEntry entry) => _session?.ClipAudible(entry) == true;
 
     /// <summary>Moves every bar to the level of the source behind it and keeps the master readout current.</summary>
     void UpdateMeters()
@@ -1488,6 +1521,24 @@ public partial class MediaDock : UserControl
         }
         if (Window.GetWindow(this) is { } owner) SpeakerRoutingWindow.Ask(owner, _session, entry, _theme);
         Refresh();
+    }
+
+    /// <summary>
+    /// One Route… button for whichever source is selected. The rail cannot afford three separate
+    /// route buttons, and the action is always "re-point the thing I am looking at".
+    /// </summary>
+    void RouteSelected_Click(object sender, RoutedEventArgs e)
+    {
+        var entry = _session?.Selected ?? _session?.Current;
+        if (entry is null)
+        {
+            _session?.Report("SELECT A CAMERA, MICROPHONE OR SPEAKER TO ROUTE");
+            return;
+        }
+        if (entry.IsCamera) Route_Click(sender, e);
+        else if (entry.IsMicrophone) MicrophoneRoute_Click(sender, e);
+        else if (entry.IsSpeaker) SpeakerRoute_Click(sender, e);
+        else _session?.Report("SELECT A CAMERA, MICROPHONE OR SPEAKER TO ROUTE");
     }
 
     void Camera_Click(object sender, RoutedEventArgs e)

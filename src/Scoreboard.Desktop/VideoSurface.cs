@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Scoreboard.Core;
 
 namespace Scoreboard.Desktop;
@@ -698,6 +699,56 @@ public sealed class VideoSurface : Grid
     }
 
     /// <summary>
+    /// Plays the cue's own switch video over this box. A replay is decoded frames, not a media
+    /// player, so its switch cannot borrow the player: a clip is painted on top of the incoming
+    /// picture through a VideoDrawing instead. False when the cue carries no usable clip, so the
+    /// ordinary fade/slide/zoom (or a cut) runs as before.
+    /// </summary>
+    bool TryPlaySwitchVideo(MediaEntry? incoming)
+    {
+        var path = incoming?.SwitchVideoPath;
+        if (string.IsNullOrWhiteSpace(path) || !IsLoaded) return false;
+        if (System.IO.Path.GetExtension(path).ToLowerInvariant()
+            is not (".mp4" or ".m4v" or ".wmv" or ".avi" or ".mov" or ".mkv" or ".webm")) return false;
+        if (!File.Exists(path)) return false;
+        var width = (int)Math.Round(ActualWidth);
+        var height = (int)Math.Round(ActualHeight);
+        if (width < 2 || height < 2) return false;
+        var player = new MediaPlayer { IsMuted = true, ScrubbingEnabled = false };
+        var brush = new DrawingBrush(new VideoDrawing { Player = player, Rect = new Rect(0, 0, 1, 1) })
+        {
+            Stretch = Stretch.Fill
+        };
+        var cover = new Rectangle { Fill = brush, IsHitTestVisible = false };
+        Panel.SetZIndex(cover, 1001);
+        Children.Add(cover);
+        _switchOverlay = cover;
+        var token = ++_switchToken;
+        void Finish()
+        {
+            if (token != _switchToken || !ReferenceEquals(_switchOverlay, cover)) return;
+            Children.Remove(cover);
+            _switchOverlay = null;
+            try { player.Stop(); player.Close(); } catch { }
+        }
+        // A clip that never opens must never leave the replay covered in black.
+        player.MediaFailed += (_, _) => Finish();
+        player.MediaEnded += (_, _) => Finish();
+        try { player.Open(new Uri(path)); player.Play(); }
+        catch { Finish(); return false; }
+        var cutSeconds = Math.Clamp(incoming!.SwitchVideoCutSeconds, 0, 30);
+        // The operator's cut beat reveals the replay early; with zero the clip plays to its end.
+        // The guard clears a decoder that opens but never reports its end.
+        var timer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(cutSeconds > 0.001 ? cutSeconds : 20)
+        };
+        timer.Tick += (_, _) => { timer.Stop(); Finish(); };
+        timer.Start();
+        return true;
+    }
+
+    /// <summary>
     /// Holds a still of the outgoing picture over the new source and animates it away. The still is
     /// important for camera cuts: the old frame is already visible while the next camera opens, so
     /// a fade, slide or zoom reads as a deliberate switch rather than a flash of black.
@@ -714,6 +765,9 @@ public sealed class VideoSurface : Grid
             _switchOverlay = null;
             _switchToken++;
         }
+        // A replay can carry its own hand-over video; it covers the incoming picture until its cut
+        // beat, so the ordinary still-over-still animation is not used for that cue.
+        if (TryPlaySwitchVideo(incoming)) return;
         if (transition == "Cut" || seconds <= 0.02 || !IsLoaded) return;
         // The outgoing frame has to be captured after layout has settled. Calling Render on a box
         // that had only just been resized produced a blank still, so the switch looked like a cut

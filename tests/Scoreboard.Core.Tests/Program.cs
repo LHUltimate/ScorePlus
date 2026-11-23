@@ -144,8 +144,12 @@ Check(ScoreboardTemplates.Bind("{{PLAY_CLOCK}}",engine.State)=="22"
     &&ScoreboardTemplates.Bind("{{PLAY_CLOCK}}",engine.State,null,playClockColon:true)==":22",
     "the play-clock colon is an element property and prints :22");
 engine.SetPlayClock(5);
-Check(ScoreboardTemplates.Bind("{{PLAY_CLOCK}}",engine.State,null,playClockColon:true)==":05",
-    "a one-digit play clock is padded after the colon");
+Check(ScoreboardTemplates.Bind("{{PLAY_CLOCK}}",engine.State,null,playClockColon:true)==":5",
+    "the colon alone adds no padding to a one-digit play clock");
+Check(ScoreboardTemplates.Bind("{{PLAY_CLOCK}}",engine.State,playClockLeadingZero:true)=="05"
+    &&ScoreboardTemplates.Bind("{{PLAY_CLOCK}}",engine.State,null,playClockColon:true,playClockLeadingZero:true)==":05"
+    &&ScoreboardTemplates.Bind("{{PLAY_CLOCK}}",engine.State)=="5",
+    "the play clock's leading zero is its own element property and works with the colon");
 var sportsGame=Path.Combine(Path.GetTempPath(),$"sports-state-{Guid.NewGuid():N}.scoreboard");engine.NewGame("football");engine.SetFootballDistance(3,17);engine.AdvanceDown();engine.Save(sportsGame);var restored=new GameEngine();restored.Load(sportsGame);Check(restored.State.Down==2&&restored.State.YardsToGo==3&&restored.State.YardsToGoal==17,"sport-specific state persists in saved game");File.Delete(sportsGame);
 engine.NewGame("baseball");engine.BaseballBall();engine.BaseballBall();engine.BaseballBall();engine.BaseballBall();Check(engine.State.Balls==0&&engine.State.Strikes==0,"four baseball balls reset the count");
 engine.BaseballStrike();engine.BaseballStrike();engine.BaseballStrike(true);Check(engine.State.Strikes==2&&engine.State.Outs==0,"baseball foul at two strikes does not record a third strike");
@@ -438,7 +442,7 @@ try
         &&macro.Actions[8].Path=="layout-2"&&macro.Actions[9].Kind==MacroActionKind.PenaltyFlag
         &&macro.Actions[9].Path=="Offside"&&macro.Actions[9].Value==1,
         "media-on-air, layout-switch and penalty-flag steps keep their targets across a save");
-    Check(new MacroAction{Kind=MacroActionKind.SetGameClock,Value=754}.Summary=="Game clock 12:34",
+    Check(new MacroAction{Kind=MacroActionKind.SetGameClock,Value=754}.Summary=="Game Clock 12:34",
         "a game-clock macro step is described as MM:SS");
 }
 finally{if(File.Exists(macroPath))File.Delete(macroPath);}
@@ -701,10 +705,44 @@ finally{if(File.Exists(gradientPath))File.Delete(gradientPath);}
         &&!stadium.Elements.Any(element=>(element.Content??"").Contains("ABBR",StringComparison.OrdinalIgnoreCase)),
         "the stadium template is a full-frame video board with the score strip along the bottom, home on the right and no abbreviations");
     var lower=ScorebugPresets.Build(ScorebugPresets.LowerThird);
-    Check(lower.Elements.Any(element=>element.Name=="Game clock")&&lower.Elements.Any(element=>element.Name=="Home score"),
+    Check(lower.Elements.Any(element=>element.Name=="Game Clock")&&lower.Elements.Any(element=>element.Name=="Home score"),
         "the broadcast lower third template carries clocks and both scores");
+    Check(!lower.Elements.Any(element=>element.Name=="Possession"),
+        "the lower third carries no possession line over the picture");
+    Check(ScorebugPresets.All.Any(preset=>preset.Id==ScorebugPresets.CornerBug)
+        &&ScorebugPresets.All.Any(preset=>preset.Id==ScorebugPresets.TopBar)
+        &&ScorebugPresets.All.Any(preset=>preset.Id==ScorebugPresets.Jumbotron),
+        "new games also offer corner, top-bar and jumbotron starting designs");
+    var jumbotron=ScorebugPresets.Build(ScorebugPresets.Jumbotron);
+    Check(jumbotron.Width==1920&&jumbotron.Height==1080&&jumbotron.Background!="#00000000"
+        &&jumbotron.Elements.Any(element=>element.Name=="Board video"&&element.Kind==ScorebugElementKind.Video),
+        "the jumbotron template is an opaque full-frame board with its own video window");
     Check(ScorebugPresets.Build("not-a-template").Elements.Count==ScorebugLayout.Default().Elements.Count,
         "an unknown starting template falls back to the classic scorebug");
+}
+
+// ---------- layer lock and group ----------
+{
+    var layerPath=Path.Combine(Path.GetTempPath(),$"layers-{Guid.NewGuid():N}.json");
+    try
+    {
+        var layerCatalog=new ScorebugCatalog(layerPath);
+        layerCatalog.Update(layout=>
+        {
+            layout.Elements.Clear();
+            layout.Elements.Add(new ScorebugElement{Name="Plate",Kind=ScorebugElementKind.Shape});
+            layout.Elements.Add(new ScorebugElement{Name="Label"});
+            var group=Guid.NewGuid().ToString("N");
+            layout.Elements[0].GroupId=group;
+            layout.Elements[0].Locked=true;
+            layout.Elements[1].GroupId=group;
+        });
+        var layerReloaded=new ScorebugCatalog(layerPath).Layout.Elements;
+        Check(layerReloaded[0].Locked&&layerReloaded[1].GroupId==layerReloaded[0].GroupId
+            &&!layerReloaded[1].Locked&&layerReloaded[0].Locked,
+            "a layer's lock and group are saved with the layout");
+    }
+    finally{if(File.Exists(layerPath))File.Delete(layerPath);}
 }
 
 // ---------- player stat columns arrive with the player ----------

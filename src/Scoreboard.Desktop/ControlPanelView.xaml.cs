@@ -58,6 +58,9 @@ public partial class ControlPanelView : UserControl
     readonly TextBox _quarterValue = new();
     readonly Button _ballSide;
     readonly Dictionary<string, TextBox> _statValues = [];
+    // The play/pause button built into each clock row, kept so its glyph can follow a clock started
+    // anywhere else (macro, remote, hotkey) without rebuilding the page.
+    readonly Dictionary<string, Button> _statClockToggles = [];
     // The sport's own values: a typed-over number per counter, a switch per flag.
     readonly Dictionary<string, TextBox> _sportValueBoxes = [];
     readonly Dictionary<string, ToggleButton> _sportFlagButtons = [];
@@ -718,11 +721,22 @@ public partial class ControlPanelView : UserControl
             _statsPageRendered = pageSignature;
             StatsHost.Children.Clear();
             _statValues.Clear();
+            _statClockToggles.Clear();
             foreach (var stat in ordered.Skip(_statPage * StatPageSize).Take(StatPageSize))
                 StatsHost.Children.Add(BuildStatRow(stat));
         }
         foreach (var stat in stats)
             if (_statValues.TryGetValue(stat.Id, out var value) && !value.IsKeyboardFocused) value.Text = stat.Display;
+        // The clock rows keep their button between refreshes, so a clock started by a macro or the
+        // remote must update that button's glyph here instead of only its reading.
+        foreach (var stat in stats)
+        {
+            if (!_statClockToggles.TryGetValue(stat.Id, out var toggle)) continue;
+            var glyph = stat.ClockRunning ? "❚❚" : "▶";
+            if (!string.Equals(toggle.Content as string, glyph, StringComparison.Ordinal)) toggle.Content = glyph;
+            var tip = stat.ClockRunning ? $"Pause {stat.Name}" : $"Start {stat.Name}";
+            if (!string.Equals(toggle.ToolTip as string, tip, StringComparison.Ordinal)) toggle.ToolTip = tip;
+        }
         StatsPageLabel.Text = $"{_statPage + 1} / {pages}";
         StatsPrevButton.IsEnabled = _statPage > 0;
         StatsNextButton.IsEnabled = _statPage < pages - 1;
@@ -818,9 +832,10 @@ public partial class ControlPanelView : UserControl
         Button plus;
         if (stat.IsClock)
         {
-            minus = Step(stat.ClockRunning ? "■" : "▶", 0,
-                stat.ClockRunning ? $"Stop {stat.Name}" : $"Start {stat.Name}",
+            minus = Step(stat.ClockRunning ? "❚❚" : "▶", 0,
+                stat.ClockRunning ? $"Pause {stat.Name}" : $"Start {stat.Name}",
                 () => _engine.ToggleStatClock(stat.Id));
+            _statClockToggles[stat.Id] = minus;
             plus = Step("↺", 0, $"Reset {stat.Name} to {ClockFormat.Format(stat.ClockStartSeconds)}",
                 () => _engine.ResetStatClock(stat.Id));
         }

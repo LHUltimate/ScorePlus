@@ -300,7 +300,10 @@ public sealed class GameState
 
     /// <summary>The play clock as the console prints it: :40, counting down to :00.</summary>
     [JsonIgnore]
-    public string PlayClockText => GameEngine.FormatPlayClock(PlayClockSeconds, 0, PlayClockFraction);
+    // The console's own reading stays two-digit (:05): only a graphic's element option may drop
+    // the pad, so the operator screen does not flicker between :5 and :05.
+    public string PlayClockText => GameEngine.FormatPlayClock(PlayClockSeconds, 0, PlayClockFraction,
+        colon: true, leadingZero: true);
 
     /// <summary>The play clock without the colon, as {{PLAY_CLOCK}} prints it without one.</summary>
     [JsonIgnore]
@@ -2186,11 +2189,14 @@ public sealed class GameEngine
         : (int)Math.Floor(part * 100 + 1e-9) % 100;
 
     /// <summary>The play clock prints as :SS, with the same whole-second decimal readout.</summary>
-    public static string FormatPlayClock(int seconds, int decimals, double part, bool colon = true)
+    public static string FormatPlayClock(int seconds, int decimals, double part, bool colon = true, bool leadingZero = false)
     {
         seconds = Math.Clamp(seconds, 0, 99);
         var fraction = Math.Clamp(double.IsFinite(part) ? part : 0, 0, 1);
-        var text = colon ? $":{seconds:00}" : seconds.ToString();
+        // The colon and the padding are separate choices: the colon alone prints :5, the padding
+        // alone prints 05, and both print :05. Neither setting changes the other.
+        var digits = leadingZero || seconds >= 10 ? seconds.ToString("00") : seconds.ToString();
+        var text = colon ? $":{digits}" : digits;
         if (decimals <= 0) return text;
         return decimals == 1
             ? $"{text}.{TenthDigit(fraction, countDown: true)}"

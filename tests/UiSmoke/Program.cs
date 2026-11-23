@@ -1172,6 +1172,23 @@ internal static class Program
                         throw new Exception($"FAIL: detailed macro steps did not run ({detailedResult}, clock {extendedEngine.State.ClockRunning}, message {extendedEngine.State.ClockMessage}, away {extendedEngine.State.AwayScore}, headlines {extendedEngine.State.TickerNews.Count}, level {mutedSpeaker.VolumePercent}, muted {mutedSpeaker.SpeakerMuted})");
                     extendedEngine.ClearMacroOutputHold();
 
+                    // Two speakers switched on are two separate feeds: a bus only carries clips that
+                    // name it, so an unassigned clip must not be picked up by whichever bus is first.
+                    extendedSession.SetSpeakerMuted(mutedSpeaker, false);
+                    var pressBus = extendedSession.AddSpeaker(1, "Press");
+                    var unassignedClip = new MediaEntry(Path.Combine(Path.GetTempPath(), "unassigned-smoke.mp4"), mutedSpeaker.Tag);
+                    if (extendedSession.SpeakerBusFor(unassignedClip) is not null
+                        || extendedSession.SpeakerGain(unassignedClip) != 0)
+                        throw new Exception("FAIL: two live speaker buses picked up an unassigned clip");
+                    var assignedClip = unassignedClip with { AudioDevice = pressBus.AudioDevice ?? "default" };
+                    if (extendedSession.SpeakerGain(assignedClip) <= 0)
+                        throw new Exception("FAIL: a clip assigned to its own speaker was silenced by the other bus");
+                    extendedSession.SetSpeakerMuted(pressBus, true);
+                    if (extendedSession.SpeakerBusFor(unassignedClip) is null)
+                        throw new Exception("FAIL: one live speaker bus stopped carrying an unassigned clip");
+                    // Leave the second bus switched off: the rest of the dock checks assume the
+                    // show has a single live speaker.
+
                     // A custom value that is a clock can be started and stopped from a macro. Start
                     // twice must not flip it, and reset returns it to the time it was created with.
                     var smokeClock = extendedEngine.AddStat("Smoke clock", clock: true, startSeconds: 45);
@@ -1201,7 +1218,7 @@ internal static class Program
                     var clockDock = new MacroDock(extendedEngine, extendedSession);
                     var clockKindBox = (ComboBox)clockDock.FindName("KindBox")!;
                     clockKindBox.SelectedItem = clockKindBox.Items.OfType<object>()
-                        .First(item => (item.ToString() ?? "").StartsWith("Game clock", StringComparison.Ordinal));
+                        .First(item => (item.ToString() ?? "").StartsWith("Game Clock", StringComparison.Ordinal));
                     var clockValueBox = (TextBox)clockDock.FindName("ValueBox")!;
                     clockValueBox.Text = "12:34";
                     var readAction = typeof(MacroDock).GetMethod("ReadActionFromFields", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -1214,6 +1231,11 @@ internal static class Program
                     // A clip that names its own speaker keeps it even while a GLOBAL bus is on air:
                     // the bus used to drag every clip onto its own output. A clip with no speaker
                     // still follows the bus, so the routing fallback is unchanged.
+                    // With more than one speaker switched on, only explicitly assigned clips route;
+                    // with a single live bus the tag/ANY fallback still applies, so the other buses
+                    // are switched off for this check and restored afterwards.
+                    var otherBuses = extendedSession.Library.Where(entry => entry.IsSpeaker && !entry.SpeakerMuted).ToArray();
+                    foreach (var bus in otherBuses) extendedSession.SetSpeakerMuted(bus, true);
                     var anyBus = new MediaEntry(MediaLibrary.SpeakerPath(9), Tag: MediaLibrary.AnyTag,
                         Name: "Smoke ANY bus", AudioDevice: "Smoke bus device");
                     var ownSpeakerClip = new MediaEntry(@"C:\smoke\anthem.mp4", Tag: "Anthem", AudioDevice: "Smoke clip device");
@@ -1229,7 +1251,11 @@ internal static class Program
                             || !string.Equals(busRoute.Device, "Smoke bus device", StringComparison.OrdinalIgnoreCase))
                             throw new Exception($"FAIL: a clip with its own speaker routed to {ownRoute.Device} (gain {ownRoute.Gain}) and a bus-only clip to {busRoute.Device} while a GLOBAL bus was on air");
                     }
-                    finally { extendedSession.Library.Remove(anyBus); }
+                    finally
+                    {
+                        extendedSession.Library.Remove(anyBus);
+                        foreach (var bus in otherBuses) extendedSession.SetSpeakerMuted(bus, false);
+                    }
                 }
                 finally { if (File.Exists(extendedLayoutPath)) File.Delete(extendedLayoutPath); }
             }
@@ -1391,6 +1417,17 @@ internal static class Program
                 throw new Exception("FAIL: the unified media dock is missing its tiles or tag editor");
             if (dock.FindName("TransitionBox") is not ComboBox mediaTransitionBox || mediaTransitionBox.Items.Count < 4)
                 throw new Exception("FAIL: the unified media dock is missing its switch-animation picker");
+            if (!mediaTransitionBox.IsEnabled)
+                throw new Exception("FAIL: the media dock's switch-animation picker is disabled, so it cannot be opened");
+            if (dock.FindName("SwitchVideoButton") is not Button switchVideoButton || (switchVideoButton.Content as string) != "Video…")
+                throw new Exception("FAIL: the media dock has no video switch-animation control");
+            // The routing rail must fit its own height: it is deliberately not a scroll box.
+            var railLast = (FrameworkElement)dock.FindName("ReplaySpeedText")!;
+            var railBottom = railLast.TransformToAncestor(dock).Transform(new Point(0, railLast.ActualHeight)).Y;
+            if (railBottom > dock.ActualHeight + 0.5)
+                throw new Exception($"FAIL: the media sidebar runs past the dock ({railBottom:0} of {dock.ActualHeight:0})");
+            if (!FindAll<TextBlock>(shell).Any(label => label.Text == "MASTER SOUND"))
+                throw new Exception("FAIL: the master sound bar has no label");
             if (dock.FindName("ReplayButton") is not Button replayButton || dock.FindName("StartReplayButton") is not Button startReplayButton)
                 throw new Exception("FAIL: the media dock is missing its replay controls");
             if (dock.FindName("TransitionSecondsBox") is not TextBox switchSecondsBox
@@ -1702,6 +1739,66 @@ internal static class Program
                 }
                 finally { if (File.Exists(multiPath)) File.Delete(multiPath); }
                 Console.WriteLine("PASS: the studio keeps a multi-selection and Delete removes every selected object");
+            }
+
+            // ---------- a starting template keeps its canvas, and layers group and lock together ----------
+            {
+                var layerPath = Path.Combine(Path.GetTempPath(), $"smoke-layers-{Guid.NewGuid():N}.json");
+                ScorebugEditorWindow? layerEditor = null;
+                try
+                {
+                    var layerCatalog = new ScorebugCatalog(layerPath);
+                    layerCatalog.ResetToDefault(ScorebugPresets.Stadium);
+                    layerEditor = new ScorebugEditorWindow(layerCatalog, engine);
+                    ShowForSmoke(layerEditor);
+                    layerEditor.UpdateLayout();
+                    // Opening the studio used to fire the canvas-size list's first selection and
+                    // quietly resize every template to 1280 × 720, scaling all of its artwork.
+                    if (layerCatalog.Layout.Width != 1920 || layerCatalog.Layout.Height != 1080)
+                        throw new Exception($"FAIL: opening the studio resized the stadium template to {layerCatalog.Layout.Width}×{layerCatalog.Layout.Height}");
+                    var canvasWidth = (TextBox)layerEditor.FindName("CanvasWidthInput")!;
+                    if (canvasWidth.Text != "1920")
+                        throw new Exception($"FAIL: the canvas size field reads {canvasWidth.Text} for a 1920-wide template");
+
+                    var layerRows = (ListBox)layerEditor.FindName("Layers")!;
+                    layerRows.SelectedItems.Add(layerRows.Items[0]);
+                    layerRows.SelectedItems.Add(layerRows.Items[1]);
+                    layerEditor.UpdateLayout();
+                    FindAll<Button>(layerEditor).First(button => (button.Content as string) == "Group")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    layerEditor.UpdateLayout();
+                    var grouped = layerCatalog.Layout.Elements.TakeLast(2).ToArray();
+                    if (string.IsNullOrWhiteSpace(grouped[0].GroupId) || grouped[0].GroupId != grouped[1].GroupId)
+                        throw new Exception("FAIL: the Group button did not group the selected layers");
+
+                    // One row of a group picks the whole group.
+                    layerRows.SelectedItems.Clear();
+                    layerRows.SelectedItems.Add(layerRows.Items[1]);
+                    layerEditor.UpdateLayout();
+                    if (layerRows.SelectedItems.Count != 2)
+                        throw new Exception($"FAIL: picking one grouped layer selected {layerRows.SelectedItems.Count} rows instead of its 2");
+
+                    // Locking the group locks every member, and a locked layer cannot be selected again.
+                    // The toolbar's Lock/Unlock-all buttons are gone; the lock lives on each row.
+                    layerEditor.UpdateLayout();
+                    var lockRow = (FrameworkElement)layerRows.ItemContainerGenerator.ContainerFromIndex(1)!;
+                    FindAll<Button>(lockRow).First(button => (button.Content as string) == "\uE785")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    layerEditor.UpdateLayout();
+                    if (!grouped[0].Locked || !grouped[1].Locked)
+                        throw new Exception($"FAIL: locking a group left it locked {grouped[0].Locked}/{grouped[1].Locked}");
+                    layerRows.SelectedItems.Clear();
+                    layerRows.SelectedItems.Add(layerRows.Items[1]);
+                    layerEditor.UpdateLayout();
+                    if (layerRows.SelectedItems.Count != 0)
+                        throw new Exception("FAIL: a locked layer could still be selected in the layer list");
+                    Console.WriteLine("PASS: a starting template keeps its canvas size, and layers group and lock together");
+                }
+                finally
+                {
+                    layerEditor?.Close();
+                    if (File.Exists(layerPath)) File.Delete(layerPath);
+                }
             }
 
             // ---------- layout hand-over that slides matching items between their old and new spots ----------
@@ -2291,8 +2388,14 @@ internal static class Program
                 addEditor.UpdateLayout();
                 if (freshCatalog.Layout.Elements.Count != beforeAdd + 2)
                     throw new Exception("FAIL: copy and paste did not add an independent element");
-                var photoButton = FindAll<Button>(addEditor).First(b => (b.Content as string) == "PLAYER PHOTO +");
-                photoButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                // The portrait is no longer a toolbar button of its own: it is one of the PLAYER
+                // DATA + choices, alongside Name, Number and the stats. The picker is modal, so the
+                // test adds the element the way that choice does.
+                if (FindAll<Button>(addEditor).Any(b => (b.Content as string) == "PLAYER PHOTO +"))
+                    throw new Exception("FAIL: the player photo still has a toolbar button of its own");
+                typeof(ScorebugEditorWindow)
+                    .GetMethod("AddPlayerPhoto", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .Invoke(addEditor, null);
                 addEditor.UpdateLayout();
                 var portrait = freshCatalog.Layout.Elements[^1];
                 if (portrait.Kind != ScorebugElementKind.Image || portrait.PlayerPhotoSide != ScorebugPlayerPhotoSide.Home)
@@ -3223,9 +3326,9 @@ internal static class Program
                         throw new Exception("FAIL: editing a selected camera put it on air");
                 }
                 finally { selectionSession.Stop(); selectionSession.Dispose(); }
-                var micRouteButton = (Button)dock.FindName("MicrophoneRouteButton")!;
-                if ((micRouteButton.Content as string) != "Route…")
-                    throw new Exception($"FAIL: the microphone route button reads '{micRouteButton.Content}'");
+                var routeButton = (Button)dock.FindName("RouteSelectedButton")!;
+                if ((routeButton.Content as string) != "Route…")
+                    throw new Exception($"FAIL: the source route button reads '{routeButton.Content}'");
                 // The playlist view's way back is a labelled button, not a lone clipped arrow.
                 var playlistBack = (Button)dock.FindName("BackToLibraryButton")!;
                 if ((playlistBack.Content as string) != "← Back")

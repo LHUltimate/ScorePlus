@@ -150,7 +150,7 @@ public sealed class MacroAction
         MacroActionKind.Score => $"{(Home ? "Home" : "Visitors")} score {(Amount >= 0 ? "+" : "−")}{Math.Abs(Amount)}",
         MacroActionKind.SetDown => $"Down {Value}",
         MacroActionKind.SetTimeouts => $"{(Home ? "Home" : "Visitors")} timeouts {Value}",
-        MacroActionKind.SetGameClock => $"Game clock {GameEngine.FormatClock(Value)}",
+        MacroActionKind.SetGameClock => $"Game Clock {GameEngine.FormatClock(Value)}",
         MacroActionKind.SetPlayClock => $"Play clock {Value}s",
         MacroActionKind.SetTimeoutClock => $"Timeout clock {Value}s",
         MacroActionKind.SetPeriod => $"Period {Value}",
@@ -195,7 +195,7 @@ public sealed class MacroAction
         "timeout" => "Timeout clock",
         "shot" => "Shot clock",
         "stoppage" => "Stoppage clock",
-        _ => "Game clock"
+        _ => "Game Clock"
     };
 
     [JsonIgnore]
@@ -245,7 +245,7 @@ public static class MacroValueSources
     {
         var values = new List<MacroValueSource>
         {
-            new("game-clock", "Game clock", "{{GAME_CLOCK}}"),
+            new("game-clock", "Game Clock", "{{GAME_CLOCK}}"),
             new("play-clock", "Play clock", "{{PLAY_CLOCK}}"),
             new("stoppage", "Stoppage time", "{{STOPPAGE}}"),
             new("down-distance", "Down & distance", "{{DOWNS}}"),

@@ -273,7 +273,7 @@ public static class AutomationRules
     public static readonly (AutomationField Field, string Label)[] Fields =
     [
         (AutomationField.PlayClock, "Play clock"),
-        (AutomationField.GameClock, "Game clock"),
+        (AutomationField.GameClock, "Game Clock"),
         (AutomationField.ShotClock, "Shot clock"),
         (AutomationField.TimeoutClock, "Timeout clock"),
         (AutomationField.Period, "Period"),
@@ -290,7 +290,7 @@ public static class AutomationRules
         (AutomationField.Outs, "Outs"),
         (AutomationField.HomePossession, "Home has possession"),
         (AutomationField.PossessionSide, "Possession"),
-        (AutomationField.ClockRunning, "Game clock running"),
+        (AutomationField.ClockRunning, "Game Clock Running"),
         (AutomationField.PlayClockRunning, "Play clock running"),
         (AutomationField.Sport, "Sport"),
         (AutomationField.CustomStat, "Custom value"),
