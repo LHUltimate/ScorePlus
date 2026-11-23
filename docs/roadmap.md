@@ -1,4 +1,4 @@
-# ScorePlus roadmap
+# ScorePlus Roadmap
 
 A staged plan for turning the console into a full show-control product: run of show, data-bound
 graphics, content, distribution, playback nodes, broadcast, venue control and operations. It is
