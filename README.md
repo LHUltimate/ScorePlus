@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/LHUltimate/ScorePlus/releases">
+  <a href="https://github.com/lhultimate/ScorePlus/releases">
     <img src="docs/assets/logo-card.png" alt="ScorePlus" width="220">
   </a>
 </p>
@@ -11,17 +11,17 @@
 <p align="center">One WPF application for the operator console and every audience output. This README is the developer guide: build, test, release and understand the codebase.</p>
 
 <p align="center">
-  <a href="https://github.com/LHUltimate/ScorePlus/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/LHUltimate/ScorePlus?include_prereleases&label=release"></a>
+  <a href="https://github.com/lhultimate/ScorePlus/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/lhultimate/ScorePlus?include_prereleases&label=release"></a>
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6">
   <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512BD4">
-  <a href="https://github.com/LHUltimate/ScorePlus/wiki"><img alt="Operator manual" src="https://img.shields.io/badge/manual-wiki-2ea043"></a>
+  <a href="https://github.com/lhultimate/ScorePlus/wiki"><img alt="Operator manual" src="https://img.shields.io/badge/manual-wiki-2ea043"></a>
 </p>
 
 <p align="center">
-  <img src="site/assets/console.png" alt="ScorePlus operator console driving Portland 24, Seattle 17 with 3rd & 7 and 04:12 left" width="900">
+  <img src="site/assets/console.png" alt="ScorePlus operator console driving a Portland vs Seattle game" width="900">
 </p>
 
-> **Beta software.** ScorePlus ships frequent beta builds under labels like `b1.1`. The operator manual and tutorials live in the [ScorePlus Wiki](https://github.com/LHUltimate/ScorePlus/wiki); the [website](https://LHUltimate.github.io/ScorePlus) is the product tour and download page.
+> **Beta software.** ScorePlus ships frequent beta builds under labels like `b1.1`. The operator manual and tutorials live in the [ScorePlus Wiki](https://github.com/lhultimate/ScorePlus/wiki); the [website](https://lhultimate.github.io/ScorePlus) is the product tour and download page.
 
 **ScorePlus is in no way affiliated with, endorsed by, or connected to Renewed Vision or ProScoreboard.**
 
@@ -125,8 +125,8 @@ The suites cover scoring, undo, clock behaviour, period formats, sport profiles 
 - The release must carry **`ScorePlusSetup.exe`** and **`ScorePlusPortable.exe`**.
 - Installed copies update from the setup exe after verifying GitHub's SHA-256 asset digest.
 - Portable copies never check for updates and never replace themselves.
-- Release numbers must increase; alpha, beta and stable live on separate numeric stages. The rules are in [docs/updates.md](docs/updates.md) and the [wiki Updates page](https://github.com/LHUltimate/ScorePlus/wiki/Updates).
-- Beta releases are **prereleases**, so `releases/latest` skips them. Use the [releases page](https://github.com/LHUltimate/ScorePlus/releases) or the releases API when you need the newest beta.
+- Release numbers must increase; alpha, beta and stable live on separate numeric stages. The rules are in [docs/updates.md](docs/updates.md) and the [wiki Updates page](https://github.com/lhultimate/ScorePlus/wiki/Updates).
+- Beta releases are **prereleases**, so `releases/latest` skips them. Use the [releases page](https://github.com/lhultimate/ScorePlus/releases) or the releases API when you need the newest beta.
 
 The website resolves the newest published release, including prereleases, at runtime and points its installer and portable buttons at the matching assets.
 
@@ -136,18 +136,18 @@ Operator documentation is deliberately kept out of this README. The wiki is the 
 
 | Page | Why a developer should read it |
 | --- | --- |
-| [Getting Started](https://github.com/LHUltimate/ScorePlus/wiki/Getting-Started) | The intended first-run flow and the vocabulary the UI uses |
-| [The Console](https://github.com/LHUltimate/ScorePlus/wiki/Console) | Every control and the live-versus-staged model |
-| [Display Studio](https://github.com/LHUltimate/ScorePlus/wiki/Display-Studio) | How layouts, elements, transitions and parts behave |
-| [Studio Reference](https://github.com/LHUltimate/ScorePlus/wiki/Studio-Reference) | Element types, properties and keyboard controls |
-| [Media, Cameras and Replay](https://github.com/LHUltimate/ScorePlus/wiki/Media-and-Replay) | Tags, speaker routing, capture and staged replay |
-| [Data Tokens](https://github.com/LHUltimate/ScorePlus/wiki/Data-Tokens) | The token language used by layouts and HTML elements |
-| [Files and Folders](https://github.com/LHUltimate/ScorePlus/wiki/Files-and-Folders) | File types and the `%LOCALAPPDATA%\ScorePlus` layout |
-| [Building and Releasing](https://github.com/LHUltimate/ScorePlus/wiki/Building-and-Releasing) | The release ritual and asset naming |
-| [Project and Tests](https://github.com/LHUltimate/ScorePlus/wiki/Project-and-Tests) | Repository layout and test suites |
-| [Troubleshooting](https://github.com/LHUltimate/ScorePlus/wiki/Troubleshooting) | Known venue failures and their causes |
+| [Getting Started](https://github.com/lhultimate/ScorePlus/wiki/Getting-Started) | The intended first-run flow and the vocabulary the UI uses |
+| [The Console](https://github.com/lhultimate/ScorePlus/wiki/Console) | Every control and the live-versus-staged model |
+| [Display Studio](https://github.com/lhultimate/ScorePlus/wiki/Display-Studio) | How layouts, elements, transitions and parts behave |
+| [Studio Reference](https://github.com/lhultimate/ScorePlus/wiki/Studio-Reference) | Element types, properties and keyboard controls |
+| [Media, Cameras and Replay](https://github.com/lhultimate/ScorePlus/wiki/Media-and-Replay) | Tags, speaker routing, capture and staged replay |
+| [Data Tokens](https://github.com/lhultimate/ScorePlus/wiki/Data-Tokens) | The token language used by layouts and HTML elements |
+| [Files and Folders](https://github.com/lhultimate/ScorePlus/wiki/Files-and-Folders) | File types and the `%LOCALAPPDATA%\ScorePlus` layout |
+| [Building and Releasing](https://github.com/lhultimate/ScorePlus/wiki/Building-and-Releasing) | The release ritual and asset naming |
+| [Project and Tests](https://github.com/lhultimate/ScorePlus/wiki/Project-and-Tests) | Repository layout and test suites |
+| [Troubleshooting](https://github.com/lhultimate/ScorePlus/wiki/Troubleshooting) | Known venue failures and their causes |
 
-The [wiki home](https://github.com/LHUltimate/ScorePlus/wiki) links every page, including the full tutorial set that used to live here.
+The [wiki home](https://github.com/lhultimate/ScorePlus/wiki) links every page, including the full tutorial set that used to live here.
 
 ## Contributing
 
@@ -159,10 +159,10 @@ The [wiki home](https://github.com/LHUltimate/ScorePlus/wiki) links every page, 
 
 ## Project status
 
-ScorePlus is an evolving production tool, not yet a full broadcast package. Network and hardware control, multi-game communication and media launch from the remote are the main areas still under construction. The [Roadmap](https://github.com/LHUltimate/ScorePlus/wiki/Roadmap) tracks them.
+ScorePlus is an evolving production tool, not yet a full broadcast package. Network and hardware control, multi-game communication and media launch from the remote are the main areas still under construction. The [Roadmap](https://github.com/lhultimate/ScorePlus/wiki/Roadmap) tracks them.
 
 Linux builds are maintained separately at [MysteriousJose/ScorePlus-Linux](https://github.com/MysteriousJose/ScorePlus-Linux) and are not officially supported.
 
 ---
 
-<sub>ScorePlus · Developer Guide · [Operator Manual](https://github.com/LHUltimate/ScorePlus/wiki)
+<sub>ScorePlus · developer guide · operator manual at <a href="https://github.com/lhultimate/ScorePlus/wiki">github.com/lhultimate/ScorePlus/wiki</a></sub>
