@@ -1,8 +1,9 @@
 # ScorePlus roadmap
 
 A staged plan for turning the console into a full show-control product: run of show, data-bound
-graphics, content, distribution, broadcast, venue control and operations. It is written as a build
-order, not a wish list, and each stage is self-contained enough to ship on its own.
+graphics, content, distribution, playback nodes, broadcast, venue control and operations. It is
+written as a build order, not a wish list, and each stage is self-contained enough to ship on its
+own.
 
 ## Rules
 
@@ -11,8 +12,8 @@ order, not a wish list, and each stage is self-contained enough to ship on its o
 2. **Everything is implemented in-house.** Features are described by behaviour. Third-party SDKs are
    integrated through their published interfaces only; no code is copied into the project.
 3. **Stages stack.** Later work reuses the earlier plumbing — the event bus, the shared condition
-   evaluator, the binding layer, the cue list. Doing them out of order means building the same thing
-   twice.
+   evaluator, the binding layer, the cue list, the node registry. Doing them out of order means
+   building the same thing twice.
 4. **Replace, don't duplicate.** No stage may add a second version of something ScorePlus already
    has. New capability lands inside the existing window, tab, model or file, and the old path is
    retired in the same release, with migration. A second surface that does the same job is a bug,
@@ -27,10 +28,38 @@ Stages are named, not versioned. Each gets cut into releases under whatever vers
 | 1 | Run of show | Cue list, workspaces, two-operator split | L |
 | 2 | Graphics | Data-bound elements, element logic, components, team switch | L |
 | 3 | Content | Template gallery, brand kit, content packs | M–L |
-| 4 | Data and distribution | Feeds, scheduler, display fleet, in-venue channel | L |
-| 5 | Broadcast | Broadcast profiles, key/fill output, dual-channel clip server | L–XL |
-| 6 | Venue control | OSC/MIDI/Art-Net/GPIO/webhooks, timecode | L |
-| 7 | Operations | Failover, roles/audit, remote monitoring | XL |
+| 4 | Data and distribution | Feeds, scheduler, display fleet, headend channels | L |
+| 5 | Playback nodes | Player and processor nodes, sync groups, central deployment | L |
+| 6 | Broadcast | Graphics output to a router, key/fill, clip channels, stream out | L–XL |
+| 7 | Venue control | Devices, priority takeovers, emergency, wayfinding, timecode | L |
+| 8 | Operations | Failover, roles/audit, monitoring, node rollouts | XL |
+
+## Deployment topology
+
+The road map is drawn around what a venue actually is: several machines and signal paths, not one
+PC with windows. Stages 0–4 work on a single machine; Stage 5 distributes them. The roles:
+
+- **Control console** — the operator UI and the single source of show state (scores, clocks, cues,
+  layouts). Everything else follows it.
+- **Graphics output machine** — a dedicated renderer whose picture goes to the video router as
+  fill+key, triggered and frame-synced from the control console. Needed once a graphic must sit over
+  live camera rather than appear on an LED display.
+- **Clip server** — one or two channels of video clips with audio and alpha, triggered from the
+  console.
+- **Headend channel service** — takes a camera feed plus overlays and makes it a channel the venue's
+  TVs can tune to.
+- **Display nodes** — a player node per display group (a ribbon, a ring, a corner board) and a video
+  processor node where the display needs scaling and mapping. They render locally from a synced
+  state, so a network hiccup does not blank a board.
+- **Monitor nodes** — multiviewers showing program, preview, cameras and node health.
+- **Cameras and router/switcher** — video sources and the machine that cuts between them; the
+  console triggers the router rather than replacing it.
+- **Stream encoder** — pushes the broadcast picture and overlays to a streaming provider.
+
+Two planes run between them: a **control plane** (show state, cues, health, content packages) and a
+**media plane** (SDI or NDI video and audio). A **sync group** ties selected nodes to one frame
+clock so a takeover, sweep or reveal starts on the same frame everywhere. A **priority model**
+decides who owns the screens when several things want them; Stage 7 defines it.
 
 ## Replacement map — what each stage absorbs
 
@@ -46,12 +75,14 @@ Every row reads as "the new thing becomes the old thing", never "the new thing s
 | Per-layout team colours + team identity dialog | 2 | One show-level identity document; layouts reference it and the dialog edits the document. |
 | Studio "new layout" presets, `ScoreboardTemplates`, `ScorebugPresets` | 3 | Become the template gallery's catalog — same files, browsable with previews. The old preset menus go. |
 | League Cloud window, ticker source setup, hardware inbound data | 4 | Become source types in the DATA tab; those windows stop owning their own fetch paths. |
-| Display picker/selector and multiview display list | 4 | One output registry and fleet view; every selector reads names from it instead of keeping a copy. |
+| Display picker/selector and multiview display list | 4 | One output registry and fleet view; every selector reads names from it. Stage 5 extends it with node discovery. |
 | Ticker rotation window | 4 | Becomes one schedule type in the venue scheduler. |
-| Output window's display list + audience display picker | 5 | Key/Fill is another mode on the same output window, not a parallel output app. |
-| Media tab clips and replay | 5 | Dual-channel server = second channel selector on the existing `MediaSession`/MEDIA tab. No second clip player. |
-| Keybinds, control-surface entries, hardware window | 6 | The device map owns addresses and connections; Keybinds stays a shortcut layer onto the same commands, and existing entries are imported as devices. |
-| Autosaves, event log, phone remote | 7 | Failover replicates the existing show file and event log; no second show format, no second remote. |
+| Audience and output windows rendering on the control PC | 5 | Keep working, but each can be hosted by a node instead; both paths share one renderer, and the control PC stops being the only place a board can be driven from. |
+| Per-display layout assignment inside one process | 5 | Moves into the node registry: a node owns its display's playlist, version and drift. |
+| Output window's display list + audience display picker | 6 | Key/Fill is another mode on the same output window, not a parallel output app. |
+| Media tab clips and replay | 6 | Dual-channel server = second channel selector on the existing `MediaSession`/MEDIA tab. No second clip player. |
+| Keybinds, control-surface entries, hardware window | 7 | The device map owns addresses and connections; Keybinds stays a shortcut layer onto the same commands, and existing entries are imported as devices. |
+| Autosaves, event log, phone remote | 8 | Failover replicates the existing show file and event log; no second show format, no second remote. |
 
 ## Stage 0 — The spine
 
@@ -68,7 +99,7 @@ Ships:
 - **One condition evaluator.** The matching logic behind automation rules becomes a service that
   rules, cues, elements and media triggers all call.
 - **One timer.** A single tick/waits/timecode service replaces per-feature timers; it will drive the
-  cue list and delayed reveals later.
+  cue list, node sync messages and delayed reveals later.
 - **Schema versions and migration** for saved games, layouts, themes and future cue lists, so later
   stages can add fields without breaking b1.2 files.
 
@@ -183,8 +214,9 @@ Ships:
   rotations.
 - **Display fleet**: every output in the venue with preview, current content, resolution, last-seen
   health and per-display control.
-- **In-venue channel**: a camera feed plus overlays pushed to concourse/suite screens over the
-  existing IP/HTTP output path, with its own playlist.
+- **Headend channels**: a camera feed plus overlays turned into a channel the venue's TVs can tune
+  to, with its own playlist and trigger points; the TVs are endpoints the fleet knows about, not
+  just a stream URL.
 
 UI changes: a **DATA** tab that absorbs the League Cloud window's feed role, the ticker's source
 setup and the hardware window's inbound data — one editor per source type, opened from the same
@@ -194,7 +226,7 @@ schedule entry. The channel wizard is a page in the Venue window.
 
 Program changes: Core data-source abstraction and HTTP client with retry/backoff; bindings from
 Stage 2 consume it; Stage 0 timer drives the scheduler; an output registry with heartbeats from
-`OutputWindow`, `MultiviewWindow` and `AudiencePreview`; overlay rendering for the channel;
+`OutputWindow`, `MultiviewWindow` and `AudiencePreview`; channel encoding and overlay rendering;
 credentials handled the same way as the league cloud secrets. The league cloud fetch and the
 ticker's own poller are retired into the data-source layer, and display names live only in the
 registry, so `DisplayPickerWindow`/`DisplaySelector` stop keeping their own copies.
@@ -202,70 +234,137 @@ registry, so `DisplayPickerWindow`/`DisplaySelector` stop keeping their own copi
 Exit: sponsor rotations and concourse content run unattended beside the score show, with health
 visible at a glance.
 
-## Stage 5 — Broadcast
+## Stage 5 — Playback nodes and sync
 
-Ships: per-layout broadcast profiles (safe areas, broadcast sizing, lower-third and ticker stacks),
-**alpha-aware output** (key/fill, NDI first, SDI via capture hardware only if a venue asks), a
-**dual-channel clip server** with internal or external keying, and external surface mapping
-(MIDI/control surface, GPIO).
+The change of shape. Until now one machine renders everything it can see. A venue has ribbon boards,
+rings, corner boards and concourse screens fed by separate players and processors, and they must
+change together.
+
+Ships:
+
+- **A node agent**: a headless mode of the same application, installed on each playback machine. It
+  receives show state and content packages, renders locally, reports health and frame stats, and
+  keeps playing its last known state if the control machine disappears.
+- **Node roles**: player node (layouts, clips, ticker), processor node (scaling and mapping to a
+  display's physical layout), monitor node (multiview of program, preview, cameras, node health).
+- **Sync groups**: selected nodes share a frame clock and a trigger, so a takeover, sweep or reveal
+  starts on the same frame; per-node drift is shown, not guessed.
+- **Central deployment**: push layouts, media and content packs to nodes as versioned packages, with
+  preview, rollback and per-node logs.
+- **Graceful degradation**: a node that loses the network keeps its playlist and marks itself stale;
+  the console shows stale state instead of pretending everything is live.
+
+UI changes: a **Nodes** page in the Venue window (the fleet extended with role, version, sync group,
+last frame, drift, stale flag); **Send to nodes** on layouts, media items and packs; a per-node
+preview tile; a sync-group editor; node health in the status bar.
+
+Program changes: Core `DisplayNode`/`SyncGroup`/`NodeAssignment` models; the node agent reuses the
+existing renderer through the output abstraction rather than a second render path; authenticated
+local transport for state and packages; sequence-stamped state with drift measurement; content
+packaging; discovery on the LAN; tests with two local agents; a smoke run that kills the control
+machine and asserts the node keeps rendering.
+
+Exit: two nodes plus the console, one GO changes both on the same frame, and unplugging the console
+leaves the boards running.
+
+## Stage 6 — Broadcast
+
+Ships:
+
+- **Per-layout broadcast profiles**: safe areas, broadcast sizing, lower-third and ticker stacks.
+- **A dedicated graphics output role**: one machine (or one process on a spare core) whose picture
+  goes to the router as **fill + key**, triggered and frame-synced from the console, with the
+  console still owning the graphic and its data.
+- **Alpha-aware output**: fill and key over NDI first, SDI via capture hardware when a venue asks;
+  internal keying for simple setups, external keying for the router.
+- **A dual-channel clip server**: two independent channels with video, audio and alpha, internal or
+  external keying, triggered from cues.
+- **Portable and rack profiles**: the same application configured as a flypack or as a fixed rack
+  unit — different I/O, same show.
+- **Stream out**: the broadcast picture plus overlays sent to a third-party streaming provider, with
+  the destination configured once and shown on air.
 
 UI changes: broadcast settings (guides, presets, field picker) join the existing layout and output
 settings rather than a separate app. **Key/Fill** is another mode on the output window that already
 manages audience displays. Channels are a second selector on the existing MEDIA tab — not a second
 clip player — and the broadcast panel is the current output list with take/edit, not another window.
+A **Graphics output** toggle marks which machine renders the router feed; a **Destinations** page
+holds stream endpoints.
 
 Program changes: an output abstraction with NDI and SDI backends; an alpha render path through
 `ScorebugRender`/`VideoSurface`; clip-server channels inside `MediaSession`, reusing the existing
-clip list and audio routing; timecode/sync hooks. The old single-channel playback path becomes
-channel one rather than a legacy branch. Licensing caution: the NDI SDK is free to use but
-proprietary, and SDI backends carry their own terms — integrate through their SDK, do not copy
-third-party code.
+clip list and audio routing; trigger and genlock hooks from Stage 5's sync; an encoder backend for
+stream destinations. The old single-channel playback path becomes channel one rather than a legacy
+branch. Licensing caution: the NDI SDK is free to use but proprietary, and SDI backends carry their
+own terms — integrate through their SDK, do not copy third-party code.
 
-Exit: a keyed scorebug reaches a switcher, and two clips play with fill+key on separate channels.
+Exit: a keyed scorebug reaches a router, two clips play with fill+key on separate channels, and a
+stream carries the same picture with overlays.
 
-## Stage 6 — Venue control
+## Stage 7 — Venue control
 
-Ships: OSC in/out, MIDI notes/CC/timecode, Art-Net/sACN lighting triggers, GPIO relays, HTTP
-webhooks and serial — as a **device map** with online state, test/fire buttons and learn mode, plus
-**timecode** as a cue master with drift shown.
+Ships:
+
+- **Devices**: OSC in/out, MIDI notes/CC/timecode, Art-Net/sACN lighting triggers, GPIO relays, HTTP
+  webhooks and serial — a device map with online state, addresses, test/fire buttons and learn mode.
+- **A priority model**: what wins when several things want the screens. Emergency overrides
+  everything, then an operator takeover, then cues, then schedules, then the default layout — with
+  the active priority always visible.
+- **Takeover and zones**: take a group of displays (the bowl, the concourse, everything) with one
+  control, and release it back to the schedule.
+- **Emergency messaging**: a rehearsed, un-interceptable preset for evacuation or weather notices,
+  available from the console and from the phone remote.
+- **Wayfinding**: a content type and schedule for directional boards, distinct from show content.
+- **Exclusive moments**: a full-venue sequence that runs once, triggered by one GO, that ordinary
+  cues cannot partially override.
+- **Custom integrations**: an authenticated local API plus webhooks so house systems can read state
+  and fire cues.
+- **Timecode**: LTC/MTC as a cue master with drift shown, alongside manual GO.
 
 UI changes: a **Venue Control** window that replaces the ad-hoc control-surface entries in Keybinds
-and the hardware window's one-off connection settings — one device list with online state, addresses
-and test buttons, and existing entries imported as devices. A **Send** step is a new step kind in
-the existing macro editor (`MacroActionKind`), not a second scripting language. The timeline view
-extends the run-of-show list rather than adding a separate track editor.
+and the hardware window's one-off connection settings — tabs for Devices, Takeover, Emergency,
+Integrations and Timecode, with one device list, zone pickers and test buttons. A **Send** step is a
+new step kind in the existing macro editor (`MacroActionKind`), not a second scripting language. The
+timeline view extends the run-of-show list rather than adding a separate track editor.
 
-Program changes: device adapters in the desktop app behind a Core `VenueCommand` abstraction; rate
-limiting and confirmation for destructive commands; everything logged in the event log; venue
-configuration stored per venue, not per game.
+Program changes: device adapters in the desktop app behind a Core `VenueCommand` abstraction;
+priority arbitration in the publish path (emergency and takeover validated before cue and schedule
+work); a zone model over displays and nodes; authenticated integration endpoints; rate limiting and
+confirmation for destructive commands; everything logged in the event log; venue configuration
+stored per venue, not per game.
 
-Exit: one GO fires graphic + lighting + audio in a demo rig, and an inbound MIDI note can run a cue.
+Exit: one GO fires graphic + lighting + audio in a demo rig, an inbound MIDI note runs a cue, an
+emergency preset takes every screen in under a second, and the priority that won is shown.
 
-## Stage 7 — Operations at scale
+## Stage 8 — Operations at scale
 
 Ships: primary/backup with hot standby and documented failover, role-based operator accounts with
-audit, LAN monitoring, versioned backups, and a rehearsal mode that runs cues without publishing.
+audit, LAN monitoring, versioned backups, node update rollouts, and a rehearsal mode that runs cues
+without publishing.
 
 UI changes: Preferences → Operators/Roles, a failover indicator in the status bar, a monitoring
-page, and a Rehearse/Live toggle in the show menu.
+page covering machines and nodes, a rollout page, and a Rehearse/Live toggle in the show menu.
 
 Program changes: show-state replication of the existing show file and event log, lease/election
-between machines, encrypted LAN transport, audit log — no second show format and no second remote
-page.
+between machines, encrypted LAN transport, audit log, signed node packages with staged rollout — no
+second show format and no second remote page.
 
-Exit: pulling the primary machine leaves the backup running, by a procedure that is written down and
-tested.
+Exit: pulling the primary machine leaves the backup running, and a node update can be staged,
+rolled back and verified, by procedures that are written down and tested.
 
 ## Cross-cutting work (every stage)
 
 - **Performance budget**: 60 fps audience output on integrated graphics; profile at each stage; no
   blocking IO on the UI thread.
+- **One time base**: cues, nodes and stream share a clock; drift is measured and displayed, never
+  assumed.
 - **Reliability**: preview/backup output path, crash-safe autosave, undo that covers new state
-  (cues, bindings, fleet changes).
-- **Compatibility**: schema version + migration for game files, layouts, themes, cue lists and
-  content packs; b1.2 files must keep opening.
+  (cues, bindings, fleet and node changes), and nodes that degrade instead of blanking.
+- **Compatibility**: schema version + migration for game files, layouts, themes, cue lists, node
+  packages and content packs; b1.2 files must keep opening.
 - **Testing**: Core unit tests per new model, UiSmoke assertions for every new dock and window (fits
-  without scrolling, named controls, handlers exist), and a simulated full-show smoke run.
+  without scrolling, named controls, handlers exist), two-agent node tests, and a simulated
+  full-show smoke run.
 - **Docs**: every new surface needs a one-page operator explanation, because a control room cannot
   adopt what it cannot read.
 - **No parallel surfaces**: a stage that introduces a control must retire the old one in the same
@@ -278,10 +377,11 @@ tested.
 
 - Two stages only: **0 + 1**. The cue list is the single biggest operator win.
 - Three: **+ 2**. Bindings and the team switch make every later graphic cheap.
-- Then **3** (content), then **5** (broadcast, the differentiator for venues that stream), then
-  **4**, **6**, **7**.
-- Never start **5** before **2**, and never start **6** before **1** — otherwise there is nothing
-  for devices and timecode to drive.
+- Then **3** (content), then **6** (broadcast, the differentiator for venues that stream), then
+  **4**, **5**, **7**, **8**.
+- Never start **6** before **2**, and never start **7** before **1** — otherwise there is nothing for
+  devices, priorities and timecode to drive.
+- Don't start **5** before **4**: nodes need the output registry and fleet to be told what they are.
 - If a replacement cannot land with its stage, the stage slips. Shipping the new surface beside the
   old one is the one outcome this plan rules out.
 
@@ -292,17 +392,21 @@ tested.
   logic, and an **instance** stays linked to the master.
 - **Key and fill** — broadcast graphics leave as two pictures: the colour **fill** and a
   black-and-white **key** matte, white meaning "show here". The switcher combines them so a scorebug
-  can sit over live camera. **Internal keying** sends one combined picture; **external keying**
-  sends fill and key separately for the switcher to layer.
+  can sit over live camera. **Internal keying** sends one combined picture; **external keying** sends
+  fill and key separately for the router to layer.
 - **NDI and SDI** — NDI is video over ordinary Ethernet with no extra hardware; SDI is the broadcast
   coax standard (3G-SDI carries 1080p60) and needs a capture/playout card.
-- **Key/Fill, timecode, genlock** — timecode keeps every device on the same show clock (LTC as
-  audio, MTC as MIDI); chase follows its position, trigger fires a cue at an exact value; genlock
-  locks devices to one video sync reference.
+- **Timecode and genlock** — timecode keeps every device on the same show clock (LTC as audio, MTC
+  as MIDI); chase follows its position, trigger fires a cue at an exact value; genlock locks devices
+  to one video sync reference.
 - **OSC / MIDI / Art-Net / sACN / GPIO** — the wiring of venue control: UDP message patterns, MIDI
   notes and control changes, DMX lighting over Ethernet, and physical relays.
 - **Feed polling vs push** — asking a provider on a timer versus subscribing to it; the important
   design choice is what happens when the source dies.
+- **Node** — a machine that renders one part of the venue from synced show state; a **sync group**
+  is a set of nodes that change on the same frame.
+- **Priority** — the order that decides who owns the screens: emergency, takeover, cues, schedule,
+  default.
 - **Primary/backup** — two machines run the show with the second mirroring state (**hot standby**);
   a **lease** or election prevents both from believing they are live.
 - **Frame budget** — at 60 fps there is about 16.6 ms per frame for bindings, layout, effects, video
