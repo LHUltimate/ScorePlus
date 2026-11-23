@@ -114,8 +114,14 @@ researched tool set is left out, and nothing here requires dedicated appliance h
 | Clip server: two channels, audio, alpha, internal or external keying | 6 | Single clip player |
 | Audio normalisation and per-clip levels | 6 | Partial |
 | Graphics output to a router as fill+key | 6 | No |
-| Switcher: cameras, clips, graphics, stills, transitions, keys, picture-in-picture, multiview, program record | 6 | Camera wall only |
-| Replay desk: multi-angle, slow motion, mark in/out, save to library | 6 | Basic replay |
+| Switcher: six sources, preview, transitions, M/E buses, keys, keys per bus, picture-in-picture, multiview | 6 | Camera wall only |
+| Independent mix outputs (board and stream composed differently) | 6 | No |
+| Internal media stores: two clip players, two graphics channels, stills, sound | 6 | Media tab |
+| Switcher macros, control surfaces, GPIO triggers | 6 | Keybinds only |
+| Integrated audio mixer with embedded and network audio | 6 | Audio routing only |
+| Latency and genlock reporting, standards-compliant signal chain | 6 | No |
+| Replay desk: multi-angle, variable slow motion, frame stepping, tagged clips, export | 6 | Basic replay |
+| Clip export to social, network share or FTP | 6 | No |
 | Stream overlays (scorebug and stats over a stream) | 6 | No |
 | Stream destinations | 6 | No |
 | Lighting control: cue stacks, fades, effects for small rigs | 7 | No |
@@ -137,6 +143,7 @@ researched tool set is left out, and nothing here requires dedicated appliance h
 | Central software and content rollouts with rollback | 8 | No |
 | Rehearsal mode (run the show without publishing) | 8 | No |
 | In-app guidance: tours, tips, searchable help | Cross-cutting | No |
+| Automatic application updates from a release feed | 5, 8 | Exists |
 
 ## Replacement map — what each stage absorbs
 
@@ -429,12 +436,37 @@ Ships:
 - **A dual-channel clip server**: two independent channels with video, audio and alpha, internal or
   external keying, triggered from cues, with per-clip levels, audio normalisation and shrink-to-fit
   name plates.
-- **A software switcher**: camera inputs, clips, graphics and stills; cut, dissolve, wipe and sting
-  transitions; upstream and downstream keys; picture-in-picture and split layouts; a multiview of
-  program, preview and sources; program record to disk. Uses the existing camera wall as its input
-  rack.
-- **A replay desk**: continuous capture, mark in/out, multi-angle playback, slow motion, save to the
-  media library, and one-button "play that again" from the show.
+- **A software switcher**: six simultaneous sources in any mix of capture inputs (720p60 or
+  1080p60) and resolution-independent network inputs, of which up to two can carry key and fill,
+  with preview of up to four live feeds. Cut, dissolve, wipe and sting transitions with direction and duration;
+  multiple **M/E buses** with video re-entry, one effect channel per bus drawing on up to four
+  sources, four key layers on the main bus and two on each of the others; downstream keys for
+  scorebugs, logos and text; picture-in-picture and split layouts; layer configurations saved and
+  recalled per bus; a multiview of program, preview and sources. Uses the existing camera wall as
+  its input rack.
+- **Independent mix outputs**: up to three separately composed pictures at once — for example one to
+  the venue's scoreboard and a different one to the stream — delivered over IP and SDI
+  simultaneously, each with its own keys and audio mix, plus one resolution-independent stream
+  output that can be archived while it is live.
+- **Media stores inside the switcher**: two clip players, two graphic channels, a sound channel and
+  four still stores, so a show can cut to a clip, a still or a full-frame graphic without leaving the
+  switcher. Supported import formats cover the common video, image and audio types.
+- **A replay desk**: continuous capture on one configurable recording channel, mark in/mark out,
+  multi-angle playback, variable-speed
+  slow motion (including a T-bar style speed control), frame-by-frame stepping, configurable default
+  replay length, replay rating and game tags (clock, period, score) so a saved clip can be searched
+  later, and one-button "play that again" from the show. Saves to the media library and can be
+  exported.
+- **Switcher macros and control surfaces**: record and edit sequences of switcher actions, attach
+  them to internal events and state changes (audio, media, a specific transition), and fire them from
+  a keyboard, a MIDI/control surface, GPIO contacts or on-screen widgets embedded in the operator
+  surface — three ways to run the same show, no separate scripting tool.
+- **An integrated audio mixer**: per-source levels, embedded audio through NDI/SDI, network audio in
+  and out, and the same mix available to a second output.
+- **Precision and standards**: alpha-carrying processing, high sample-rate audio, published
+  processing and throughput latency targets shown in the UI, genlock against SD, HD or a network
+  reference, and a standards-compliant signal chain (3G/HD/SD-SDI, embedded and analog audio
+  levels).
 - **Stream overlays**: a scorebug and stat graphics rendered over any outgoing stream — browser
   source, NDI or key/fill — so streaming audiences see the same data as the venue.
 - **Stream destinations**: saved endpoints for one or more platforms, with the live state and health
@@ -563,6 +595,10 @@ rolled back and verified, by procedures that are written down and tested.
 - **Compositor** — a stack of layers drawn into one picture each frame; **binding** is a live link
   from an element to a value; a **component** is a reusable group of elements with its bindings and
   logic, and an **instance** stays linked to the master.
+- **M/E bus** — a mix/effect bus: an independent layer stack with its own background, keys and
+transitions, which can be re-entered into another bus. **DSK** (downstream key) sits on top of a
+program output; **DDR** is a clip player inside the switcher; a **still store** holds full-frame
+images; a **COMP** is a saved layer configuration for a bus.
 - **Key and fill** — broadcast graphics leave as two pictures: the colour **fill** and a
   black-and-white **key** matte, white meaning "show here". The switcher combines them so a scorebug
   can sit over live camera. **Internal keying** sends one combined picture; **external keying** sends
