@@ -24,7 +24,7 @@ build order, not a wish list, and each stage is self-contained enough to ship on
    adapters. A feature that would only work with a vendor's appliance does not belong here.
 
 Stages are named, not versioned. Each gets cut into releases under whatever version is current
-(b1.2 today).
+(b1.3 today).
 
 | Stage | Theme | Headline | Size |
 | --- | --- | --- | --- |
@@ -62,8 +62,109 @@ PC with windows. Stages 0–4 work on a single machine; Stage 5 distributes them
 
 Two planes run between them: a **control plane** (show state, cues, health, content packages) and a
 **media plane** (SDI or NDI video and audio). A **sync group** ties selected nodes to one frame clock
-so a takeover, sweep or reveal starts on the same frame everywhere. A **priority model** decides who
-owns the screens when several things want them; Stage 7 defines it.
+so a takeover, sweep or reveal starts on the same frame everywhere. A **priority model** decides who owns the screens when several things want them; Stage 7 defines it.
+
+## UI blueprint from the reference screens
+
+The reference screens are dense, dark control-room tools rather than single-purpose dialogs. What
+matters for ScorePlus is the pattern, not the pixels: colour-coded action grids, a strip of display
+thumbnails, tabbed pages, a docked asset tree, and a timeline pinned to the bottom of the editor.
+The four surfaces below are the shape each stage's UI work has to reach. The supplied images are
+small thumbnails (roughly 330×200), so this section records layout and behaviour rather than
+reading their labels.
+
+### The operator surface (Stage 1)
+
+- **Top strip**: one thumbnail per display, showing its current on-air layout and name, plus an
+  **Add display** tile. Tabs reorder by drag, rename by double-click, and carry an on-air dot.
+- **Action grid**: pages of rounded tiles laid out on a snap grid. Each tile carries a label, an
+  optional icon or video thumbnail, and a category colour (score, clock, media, layout, macro,
+  device, show). Tiles can be 1×1, 2×1, 1×2 or 2×2, dragged between pages and into containers, and
+  grouped under a container header.
+- **Tile states**: idle, pressed, running (with a thin progress edge), armed (waiting for GO),
+  disabled (with the reason in the tooltip), and error (red edge plus the last error text). Nothing
+  is ever only a colour: every state also has a label or icon.
+- **Page tabs** along the bottom, plus a page list for shows with more pages than fit; page names
+  are editable and pages can be copied.
+- **Docked panels**: media rail, roster, macro palette and preview are collapsible docks whose
+  width is remembered per workspace. A panel can detach into its own window and re-attach.
+- **Status line**: show name, on-air display, clock state, source health, autosave state and the
+  spine's event/rule counters — the same line in every theme.
+- **Keyboard and pointer**: arrow-key navigation across tiles, Enter fires the focused tile, every
+  bindable action shows its shortcut on the tile, right-click offers edit/duplicate/remove, and
+  drag-and-drop moves media or layouts onto a tile to bind them.
+- **Empty and first-run states**: a new workspace offers a template picker and a "build the first
+  page" card instead of a blank grid.
+
+### The content editor (Stages 2–3)
+
+- **Left**: a searchable tree of show → display → layout → layer, with assets, components and
+  bindings in their own folders. Multi-select works across layouts.
+- **Centre**: the canvas with rulers, safe areas, centre guides, zoom (fit, 25–400 %), snapping and
+  alignment guides, element handles and rotation, layer badges (bound, logic, component, locked,
+  hidden) and an on-canvas quick toolbar for align, distribute, layer order and lock.
+- **Right**: the inspector, always the same frame: **Design**, **Bindings**, **Logic**, **Animate**
+  and **Timing** tabs. Selecting several elements shows only the properties they share, with a
+  mixed-value marker instead of a wrong number.
+- **Bottom**: timeline with a ruler, one track per animated property (position, scale, rotation,
+  opacity, colour, content, effects), keyframes with easing handles, playhead, in/out markers and
+  transport (play, pause, loop, speed, frame step). A storyboard strip above it sequences whole
+  layouts with transitions between scenes. The timeline collapses to a thin bar when only static
+  art is being edited.
+- **Top**: undo/redo with named steps, preview device selector, resolution and theme selectors,
+  publish, and a **Check** button that runs the layout's preflight (missing assets, unbound tokens,
+  broken links, contrast warnings, off-canvas elements).
+- **Status line**: selection, pointer coordinates, live frame rate, data-source health and the last
+  save time.
+
+### The switcher surface (Stage 6)
+
+- **Top left**: the multiview wall, one tile per source with a tally border (program red, preview
+  green), source name and audio meter.
+- **Centre**: large program and preview monitors side by side, with the transition block between
+  them (cut, auto, duration, pattern, T-bar), a bus selector row (main, ME1–ME3), a key row with
+  per-key on/off and source, and a layer-preset row per bus.
+- **Right**: media stores as tabs (two clip players, two graphic channels, sound, stills), each with
+  transport, remaining time and a "take to preview" action.
+- **Bottom**: audio mixer strip with per-source fader, mute/solo, meter and master; macros row;
+  record/replay block with elapsed time, replay rating and game tags; output destinations with
+  per-output live state; latency, genlock and dropped-frame indicators.
+- **Control**: every action is clickable, bindable to a key or MIDI control, and reachable from the
+  operator's workspace as an embedded widget. A touch layout enlarges targets for tablets.
+
+### The venue surface (Stages 4–5, 7)
+
+- **Left**: a list of displays and channels with a status dot (live, stale, offline, error), current
+  content and resolution; groups and zones collapse under headers.
+- **Centre**: preview of the selected display at its real aspect ratio, with safe areas and the
+  active layout's name; a stale display is dimmed with the age of its last frame.
+- **Right**: the schedule and playlist for that display — entries with start, duration, sponsor,
+  priority and status — editable in place, with conflict and exclusivity warnings before saving.
+- **Bottom**: a day timeline showing every scheduled item across the selected group, now-line,
+  drag-to-move, and a gap/overlap highlighter.
+- **Tabs**: Displays, Playlists, Schedule, Proof of play, Channels, Reports, Health. Takeover and
+  Emergency sit above them as their own tab with a confirmation step.
+- **Proof of play**: a filterable table (date range, display, sponsor, layout) with totals, missing
+  play warnings and CSV export; a scheduled item that did not play is called out, never silently
+  counted.
+
+### Where each surface lives in ScorePlus
+
+No screenshot becomes a new application window beside the current ones. Each pattern is absorbed by
+a surface that already exists, which is the only way the console stays one product.
+
+| Reference surface | ScorePlus home | Replaces | Stage |
+| --- | --- | --- | --- |
+| Display thumbnail strip | Header display tabs + Venue fleet row | Display picker dropdown | 1, 4 |
+| Coloured action grid with pages | **RUN OF SHOW** tab, workspace pages | Macro board pages | 1 |
+| Docked asset tree and inspector | Studio's left tree and right inspector | Element list panel | 2 |
+| Timeline and storyboard | Studio bottom timeline, CONTENT storyboard | None (new inside Studio) | 3 |
+| Gallery and brand kit | **CONTENT** gallery inside Studio | Template/preset menus | 3 |
+| Channel list and schedule | **Venue** window tabs | Ticker rotation and display picker | 4 |
+| Proof-of-play table | **Venue → Reports** | None | 4 |
+| Multiview, program/preview, bus and key rows | **Vision** page | Camera wall as a standalone wall | 6 |
+| Audio mixer strip | **Vision** page audio dock | Media tab levels | 6 |
+| Device list, takeover and emergency | **Venue Control** window | Hardware window and Keybinds device entries | 7 |
 
 ## Capability coverage
 
@@ -75,8 +176,9 @@ researched tool set is left out, and nothing here requires dedicated appliance h
 | Layered real-time compositing of graphics, video and text | 2 | Layouts and elements exist; layers are limited |
 | Properties: position, scale, rotation, colour, effects | 2 | Partly |
 | Inline text with auto shrink-to-fit | 2 | Partly |
-| Keyframe animation timeline | 3 | No |
+| Keyframe animation timeline with per-property tracks, easing and markers | 3 | No |
 | Storyboard sequencing with transitions between scenes | 3 | No |
+| Timeline transport (play, loop, speed, frame step) and collapsible panel | 3 | No |
 | Simultaneous playback of several clips in one scene | 2 | Single focus clip |
 | Transition logic: graphics that react to game events | 2 | Automation exists, not per element |
 | Data-bound fields with formatting | 2 | Token substitution |
@@ -84,11 +186,19 @@ researched tool set is left out, and nothing here requires dedicated appliance h
 | Reusable components and instances | 2 | Copy-paste groups |
 | One-switch team identity (colours, logos, wordmarks, rosters) | 2 | Per-layout colours |
 | Canvas zones (video, stats, sponsor, out-of-town scores) | 2 | Layout areas only |
+| Editor tree of show → display → layout → layer, searchable | 2 | Element list |
+| Shared-property multi-select with mixed-value markers | 2 | Single selection |
+| On-canvas align, distribute, order, lock and visibility tools | 2 | Element buttons |
+| Layout preflight (missing assets, unbound tokens, off-canvas, contrast) | 2 | None |
 | 2D/3D primitives and scene lighting | 2 | No |
 | Transition and effects bank | 3 | Basic element transitions |
 | Broadcast-standard template set (scorebug, lower third, comparison) | 3 | Templates exist |
 | Customisable workspaces (pages, tabs, containers, button size, thumbnails, themes) | 1 | Fixed docks |
+| Display thumbnail strip with on-air state, add/rename/reorder | 1 | Display picker |
+| Colour-coded tile categories, tile states (running, armed, disabled, error) | 1 | Macro buttons |
+| Page tabs and page list for large shows | 1 | Macro pages |
 | Smart buttons with step-by-step authoring and broken-reference check | 1 | Macros exist |
+| Detachable docks that re-attach and remember their width | 1 | Fixed layout |
 | Multi-sport scoring: football, basketball, hockey, soccer, volleyball, wrestling, lacrosse, baseball/softball | 1 | Several sports |
 | Per-league rule profiles with updates | 1 | Per-sport settings |
 | Fanfare: score change fires a graphic | 1 | Automation, indirect |
@@ -102,7 +212,9 @@ researched tool set is left out, and nothing here requires dedicated appliance h
 | Weather and other non-sport feeds | 4 | No |
 | Data viewer with filtering and player/team detail | 4 | No |
 | Source health and last-value display | 4 | Partial |
-| Display oversight dashboard with notifications | 4 | Display picker |
+| Display oversight dashboard with notifications and alert centre | 4 | Display picker |
+| Day timeline of scheduled content with gap and overlap warnings | 4 | No |
+| Proof-of-play table with filters, totals, missing-play flags and export | 4 | No |
 | Playlists targeted to one or many displays | 4 | Ticker rotation |
 | Scheduling, including conditional schedules from live data | 4 | No |
 | Proof-of-play reporting with export | 4 | No |
@@ -115,6 +227,9 @@ researched tool set is left out, and nothing here requires dedicated appliance h
 | Audio normalisation and per-clip levels | 6 | Partial |
 | Graphics output to a router as fill+key | 6 | No |
 | Switcher: six sources, preview, transitions, M/E buses, keys, keys per bus, picture-in-picture, multiview | 6 | Camera wall only |
+| Multiview wall with tally borders, source names and per-source meters | 6 | Camera wall |
+| Audio mixer strip with faders, mute/solo, meters and master | 6 | Audio routing only |
+| Touch layout with enlarged targets for tablets | 6 | No |
 | Independent mix outputs (board and stream composed differently) | 6 | No |
 | Internal media stores: two clip players, two graphics channels, stills, sound | 6 | Media tab |
 | Switcher macros, control surfaces, GPIO triggers | 6 | Keybinds only |
@@ -553,6 +668,90 @@ second show format and no second remote page.
 
 Exit: pulling the primary machine leaves the backup running, and a node update can be staged,
 rolled back and verified, by procedures that are written down and tested.
+
+## The polish bar — what "finished" means
+
+A stage is not done when the happy path works. Every one of these applies to every surface it adds;
+they are the difference between a demo and a control-room tool.
+
+- **Every state is designed**: empty, first-run, loading, partial data, stale source, offline,
+  locked, read-only, error, and "too much content to fit". No blank rectangles, no spinner that
+  never ends, no control that silently does nothing.
+- **Every action is recoverable**: undo/redo with named steps for layout, cue, binding, schedule and
+  device edits; a confirmation on anything destructive or on-air; autosave with a visible time and
+  a recovery point after a crash.
+- **Every error is explained**: what failed, why, what it affected, and the next action — in the
+  operator's words, in the log, with a copyable diagnostic. One failure produces one message, not a
+  stack of modal boxes.
+- **Every field is validated**: ranges, units and formats checked on entry and on paste, with the
+  bad value kept visible instead of silently reset; clock fields accept MM:SS and seconds; numbers
+  accept both comma and point decimals.
+- **Keyboard first**: every command has a shortcut, focus is always visible, Tab order follows the
+  screen, Escape cancels a drag, Enter commits, and shortcuts never fire while typing in a field.
+- **Accessible by default**: contrast checked for both themes, targets at least 32 px, screen-reader
+  names on icon-only buttons, no state carried by colour alone, and the whole console usable at
+  200 % scaling and on a 1366×768 laptop.
+- **Scale tested**: a show with 50 displays, 200 layouts, 1 000 elements, 500 clips, 5 000 scheduled
+  entries and 200 rules still opens, saves and plays at frame rate; long names truncate with a
+  tooltip rather than breaking a row.
+- **Performance is visible**: frame rate, dropped frames and source latency on screen, with a budget
+  warning before a show starts rather than a stutter during it.
+- **Data is safe**: atomic writes, migration on read, a backup before a destructive import, and a
+  refusal (not a repair) when a file is newer than the build.
+- **Consistent language**: the same verb for the same action everywhere (Publish, Take, Send,
+  Preview), the same icon set, the same confirmation shape; no two names for one thing.
+- **Learnable**: tooltips on every non-obvious control, a first-run tour per surface, a searchable
+  help panel that opens to the right page from the control that was right-clicked, and sample
+  content that makes the first show possible without reading anything.
+- **Works offline**: no feature that needs a network fails the show when the network is gone; every
+  remote source shows its age and falls back to its last good value.
+
+## Acceptance — screen by screen
+
+Each stage is accepted only when these hold in a real window, not only in tests.
+
+**Stage 0 — spine.** The status line shows a rising event count; the Triggers page lists every rule
+with a live/idle mark that changes within a second; a scoring edit appears on the page as a Score
+event; a version 1 game opens and saves as version 2; killing the app mid-edit still offers the
+recovery point.
+
+**Stage 1 — run of show.** GO advances exactly one cue and reports it; PREV steps back without
+re-running side effects; an armed cue shows its badge; a scoring tile with a fanfare fires the
+animation once; a phone and a laptop can score the same game without overwriting each other; a new
+operator can build a first page from the template and fire it without the manual; every supported
+sport's controls fit one screen at 1366×768.
+
+**Stage 2 — graphics.** Editing a binding updates the preview without a publish; a logic rule
+fires on the exact state change and clears on exit; a component edit updates every instance; the
+team switch shows a diff before it applies; a zone swap leaves the other zones untouched; a missing
+font or asset is caught by the layout preflight before it reaches air.
+
+**Stage 3 — content.** A template opened from the gallery publishes with the show's brand colours;
+a storyboard sequence plays its transitions; a pack exported on one machine imports on another with
+its assets and fonts; the editor stays responsive with a 200-layer layout.
+
+**Stage 4 — data.** A dead feed shows stale age and keeps the last good values; a conditional
+schedule fires on the score and not on the clock; a playlist loops and expires as configured; proof
+of play lists exactly what played and flags what did not; a cancelled sponsor rotation is reported,
+not hidden.
+
+**Stage 5 — nodes.** Two nodes switch on the same frame; pulling the control machine's network cable
+leaves both playing; a node that reconnects catches up without a flash; drift is shown in
+milliseconds; a node update can be rolled back from the console.
+
+**Stage 6 — broadcast.** Program and preview never show the wrong source; a hidden key stays hidden
+through a transition; a replay can be marked, rated, tagged and played again; the stream carries the
+same scorebug as the venue; latency and genlock are visible; no output is ever left on a black frame
+without saying so.
+
+**Stage 7 — venue control.** A lighting cue and a graphic cue fire on the same GO; emergency takes
+every screen in under a second and cannot be dismissed by a cue; releasing a takeover returns the
+schedule where it would have been; a device that goes offline is flagged without blocking the show;
+timecode drift is shown and can be re-chased.
+
+**Stage 8 — operations.** Failover is rehearsed, timed and written down; the audit trail answers
+"who changed the score at 19:42"; a rollout pauses on a failed node; rehearsal mode never reaches an
+audience output.
 
 ## Cross-cutting work (every stage)
 
