@@ -848,7 +848,7 @@ internal static class Program
             // own fields instead of leaving the operator with a score form.
             var kindBox = (ComboBox)macroDock.FindName("KindBox")!;
             var kindLabels = kindBox.Items.OfType<object>().Select(item => item.ToString() ?? "").ToList();
-            foreach (var expected in new[] { "Clock —", "Clock message —", "Level —", "Ticker —", "Run macro —", "Note —" })
+            foreach (var expected in new[] { "Clock —", "Clock message —", "Level —", "Ticker —", "Run macro —", "Note —", "Storyboard scene —", "Layer effect —" })
                 if (!kindLabels.Any(label => label.StartsWith(expected, StringComparison.Ordinal)))
                     throw new Exception($"FAIL: the macro editor does not offer a {expected} step ({string.Join(" | ", kindLabels)})");
             kindBox.SelectedItem = kindBox.Items.OfType<object>()
@@ -862,6 +862,20 @@ internal static class Program
             if (macroDock.FindName("AmountLabel") is not TextBlock { Text: var amountLabel }
                 || !amountLabel.Contains("RESET TO", StringComparison.Ordinal))
                 throw new Exception("FAIL: a clock step's number field is not labelled as reset seconds");
+            kindBox.SelectedItem = kindBox.Items.OfType<object>()
+                .First(item => (item.ToString() ?? "").StartsWith("Storyboard scene —", StringComparison.Ordinal));
+            Pump(TimeSpan.FromMilliseconds(60));
+            if (macroDock.FindName("ScenePanel") is not StackPanel { Visibility: Visibility.Visible }
+                || macroDock.FindName("EffectPanel") is not StackPanel { Visibility: Visibility.Collapsed })
+                throw new Exception("FAIL: a storyboard scene step did not show its scene picker");
+            kindBox.SelectedItem = kindBox.Items.OfType<object>()
+                .First(item => (item.ToString() ?? "").StartsWith("Layer effect —", StringComparison.Ordinal));
+            Pump(TimeSpan.FromMilliseconds(60));
+            if (macroDock.FindName("EffectPanel") is not StackPanel { Visibility: Visibility.Visible }
+                || macroDock.FindName("EffectBox") is not ComboBox { Items.Count: 3 })
+                throw new Exception("FAIL: a layer effect step did not show its layer and WPF effect picker");
+            kindBox.SelectedIndex = 0;
+            Pump(TimeSpan.FromMilliseconds(60));
             if (!new UserPreferences().MultiviewCameraSoundBars)
                 throw new Exception("FAIL: multiview camera sound bars are off by default");
             // A show saved before the sound-bar toggle existed must take the new default once, while
@@ -1115,6 +1129,36 @@ internal static class Program
                         || extendedEngine.State.PenaltyType != flagType
                         || !directResult.Contains("3 steps run", StringComparison.Ordinal))
                         throw new Exception($"FAIL: direct macro steps did not put media, layout and a flag on air ({directResult})");
+                    extendedEngine.ClearMacroOutputHold();
+
+                    // Cue-triggered scenes and layer effects: one step takes the scene and its
+                    // transition, the next sets a real WPF effect on that layout's layer.
+                    macroCatalog.UpdateLayout(secondLayout.Id, edit =>
+                    {
+                        edit.Elements.Clear();
+                        edit.Elements.Add(new ScorebugElement { Name = "Timeline layer", Content = "LIVE" });
+                    });
+                    var cueLayerId = macroCatalog.Displays[0].Layouts.First(layout => layout.Id == secondLayout.Id).Elements[0].Id;
+                    macroCatalog.Storyboard.Scenes.Add(new StoryboardScene
+                    {
+                        Name = "Halftime scene", LayoutId = secondLayout.Id, Transition = LayoutTransition.Fade, TransitionSeconds = 0.2
+                    });
+                    macroCatalog.SaveStoryboard(macroCatalog.Storyboard);
+                    var sceneCue = new SavedMacro
+                    {
+                        Label = "Scene and effect",
+                        Actions =
+                        [
+                            new MacroAction { Kind = MacroActionKind.StoryboardScene, Path = macroCatalog.Storyboard.Scenes[0].Id, Label = "Halftime scene" },
+                            new MacroAction { Kind = MacroActionKind.LayerEffect, DisplayId = macroCatalog.Displays[0].Id, LayoutId = secondLayout.Id, Path = cueLayerId, Label = "Timeline layer", Value = 1, Amount = 65, Text = "#FFFF0000" }
+                        ]
+                    };
+                    var sceneResult = RunMacro(new MacroRunner(extendedEngine, extendedSession, catalog: macroCatalog, publishOutput: () => { }), sceneCue);
+                    var cuedLayer = macroCatalog.Displays[0].Layouts.First(layout => layout.Id == secondLayout.Id).Elements[0];
+                    if (!sceneResult.Contains("2 steps run", StringComparison.Ordinal)
+                        || macroCatalog.PublishedIndex != secondIndex
+                        || cuedLayer.Effect != LayerEffectKind.Blur || Math.Abs(cuedLayer.EffectAmount - 0.65) > 0.001)
+                        throw new Exception($"FAIL: a cue did not take a storyboard scene and set its layer effect ({sceneResult}, {cuedLayer.Effect}, {cuedLayer.EffectAmount})");
                     extendedEngine.ClearMacroOutputHold();
 
                     var bypassPublished = 0;
@@ -6659,6 +6703,90 @@ internal static class Program
                     Console.WriteLine("PASS: the phone remote needs its password, serves the console state and drives score, sport values and live output");
                 }
             }
+
+            // Stage 3 surfaces: the Content Studio gallery, storyboard strip, Live Switch multiview,
+            // Live Channel output strip and the Show Control Map hub all open as real windows.
+            var contentStudio = new ContentStudioWindow(smokeCatalog, smokeEngine, "Dark");
+            ShowForSmoke(contentStudio);
+            contentStudio.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(180));
+            if (contentStudio.FindName("LibraryTree") is not TreeView libraryTree || libraryTree.Items.Count < 5)
+                throw new Exception("FAIL: the Content Studio gallery tree is missing its templates and content sections");
+            if (contentStudio.FindName("SceneStrip") is not StackPanel sceneStrip || contentStudio.FindName("PreviewHost") is not ContentControl contentPreview)
+                throw new Exception("FAIL: the Content Studio preview or storyboard strip did not build");
+            var addTemplate = (Button)contentStudio.FindName("AddToDisplayButton")!;
+            addTemplate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            contentStudio.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(150));
+            if (!smokeCatalog.ActiveDisplay.Layouts.Any(layout => layout.Name == "Classic Scorebug"))
+                throw new Exception("FAIL: adding a gallery template did not create a layout in the show");
+            ((Button)contentStudio.FindName("UseStoryboardButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            contentStudio.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (sceneStrip.Children.Count == 0)
+                throw new Exception("FAIL: the Content Studio did not show the storyboard scene it added");
+            if (contentPreview.Content is not ScorebugCanvasView)
+                throw new Exception("FAIL: the Content Studio preview did not render a layout");
+            if (!FindAll<TextBlock>(contentStudio).Any(text => text.Text.Contains("LAYER TIMELINE", StringComparison.OrdinalIgnoreCase)))
+                throw new Exception("FAIL: the Content Studio scene inspector has no layer timeline");
+            if (!FindAll<ComboBox>(contentStudio).Any(box => box.Items.Contains("Blur") && box.Items.Contains("Glow")))
+                throw new Exception("FAIL: a scene layer has no editable WPF effect choice");
+            contentStudio.Close();
+
+            for (var extra = 0; extra < 7; extra++) smokeCatalog.AddLayout($"Preview {extra + 1}");
+            var liveSwitch = new LiveSwitchWindow(smokeCatalog, smokeEngine, "Dark");
+            ShowForSmoke(liveSwitch);
+            liveSwitch.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(150));
+            var switchWall = (UniformGrid)liveSwitch.FindName("MultiviewGrid")!;
+            var switchSources = (WrapPanel)liveSwitch.FindName("SourcePanel")!;
+            var switchLayers = (WrapPanel)liveSwitch.FindName("LayerPanel")!;
+            if (switchWall.Children.Count == 0 || switchSources.Children.Count == 0)
+                throw new Exception("FAIL: the Live Switch multiview or source rows are empty");
+            if (switchLayers.Children.Count == 0)
+                throw new Exception("FAIL: the Live Switch layer row did not list the layout's layers");
+            var multiviewPageLabel = (TextBlock)liveSwitch.FindName("MultiviewPageLabel")!;
+            if (switchSources.Children.Count <= 6 || multiviewPageLabel.Text == "1 / 1")
+                throw new Exception($"FAIL: more than six sources are not paged in the multiview ({switchSources.Children.Count} sources, {multiviewPageLabel.Text})");
+            var gameData = (StackPanel)liveSwitch.FindName("GameDataPanel")!;
+            if (gameData.Children.Count < 5)
+                throw new Exception("FAIL: the Live Switch game data panel does not show the current game values");
+            var displaysBefore = smokeCatalog.Displays.Count;
+            FindAll<Button>(liveSwitch).First(button => button.Content as string == "+ Display")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            liveSwitch.UpdateLayout();
+            if (smokeCatalog.Displays.Count != displaysBefore + 1)
+                throw new Exception("FAIL: the Live Switch could not add a display beyond the original set");
+            ((Button)switchSources.Children[0]).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            liveSwitch.UpdateLayout();
+            liveSwitch.Close();
+
+            var liveChannel = new LiveChannelWindow(smokeCatalog, smokeEngine, null, null, "Dark");
+            ShowForSmoke(liveChannel);
+            liveChannel.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(150));
+            var outputs = (StackPanel)liveChannel.FindName("OutputStrip")!;
+            var actions = (StackPanel)liveChannel.FindName("ActionPanel")!;
+            var events = (ListBox)liveChannel.FindName("EventList")!;
+            if (outputs.Children.Count == 0 || actions.Children.Count == 0)
+                throw new Exception("FAIL: the Live Channel outputs or graphics actions are empty");
+            if (events.Items.Count == 0)
+                throw new Exception("FAIL: the Live Channel event feed did not show the game's events");
+            liveChannel.Close();
+
+            var controlRoom = new ControlRoomWindow(smokeCatalog, smokeEngine, null, null, "Dark");
+            ShowForSmoke(controlRoom);
+            controlRoom.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(120));
+            var displayCount = (TextBlock)controlRoom.FindName("DisplayCount")!;
+            var contentNames = (TextBlock)controlRoom.FindName("ContentNames")!;
+            if (controlRoom.FindName("DisplayStudioCard") is not Button || controlRoom.FindName("LiveSwitchCard") is not Button
+                || controlRoom.FindName("LiveChannelCard") is not Button)
+                throw new Exception("FAIL: the Show Control Map is missing one of its four program cards");
+            if (displayCount.Text == "—" || !contentNames.Text.Contains("brand", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("FAIL: the Show Control Map did not read the show's displays or content");
+            controlRoom.Close();
+            Console.WriteLine("PASS: Content Studio, Live Switch, Live Channel and the Show Control Map open with their galleries, multiviews and status");
 
             Console.WriteLine("ALL UI SMOKE CHECKS PASSED");
 

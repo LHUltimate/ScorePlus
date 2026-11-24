@@ -223,6 +223,34 @@ public sealed class ScorebugElement
     /// <summary>For a live-layout element: keep the source layout's shape instead of stretching it.</summary>
     public bool NestedPreserveAspect { get; set; } = true;
 
+    /// <summary>
+    /// Which part of the show brand this element follows. Brand roles are how one kit repaints a
+    /// template without touching hand-made artwork: only marked elements change.
+    /// </summary>
+    public BrandRole BrandRole { get; set; }
+
+    /// <summary>A named sponsor region, filled from the sponsor inventory (for example "Ribbon sponsor").</summary>
+    public string SponsorTag { get; set; } = "";
+
+    /// <summary>A real-time layer effect. Blur and glow are drawn by the compositor on every output.</summary>
+    public LayerEffectKind Effect { get; set; }
+
+    /// <summary>Strength of <see cref="Effect"/>: 0 is none, 1 is the full effect.</summary>
+    public double EffectAmount { get; set; } = 0.5;
+
+    /// <summary>The colour a glow effect uses.</summary>
+    public string EffectColor { get; set; } = "#FF38D7A3";
+
+    /// <summary>When this layer enters on the CONTENT timeline, in seconds from the scene start.</summary>
+    public double TimelineIn { get; set; }
+
+    /// <summary>When this layer leaves, in seconds; 0 keeps it up for the whole scene.</summary>
+    public double TimelineOut { get; set; }
+
+    /// <summary>True when this layer is timed and must be shown or hidden as the scene plays.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasTimeline => TimelineIn > 0 || TimelineOut > 0;
+
     /// <summary>For image elements: follow the selected home or visitors player's uploaded photo.</summary>
     public ScorebugPlayerPhotoSide PlayerPhotoSide { get; set; }
 
@@ -656,6 +684,9 @@ public sealed class ScorebugLayout
     /// </summary>
     public List<LayoutHandover> Handover { get; set; } = [];
 
+    /// <summary>True makes the brand kit's background colour the canvas colour for this layout.</summary>
+    public bool UseBrandBackground { get; set; }
+
     public static readonly (string Name, int Width, int Height)[] SizePresets =
     [
         ("HD · 1280 × 720", 1280, 720),
@@ -757,6 +788,10 @@ public sealed class ScorebugDisplay
     /// <summary>The layout this display is currently sending to its audience output.</summary>
     public int PublishedIndex { get; set; }
 
+    /// <summary>When the current layout went on air, used to play its layer timeline from zero.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public DateTime PublishedAtUtc { get; set; } = DateTime.UtcNow;
+
     /// <summary>
     /// Extra layouts layered on the same on-air feed. The published layout is always included; these
     /// ids keep lower thirds, bugs and other items on screen alongside it instead of replacing it.
@@ -786,6 +821,15 @@ public sealed class ScorebugDocument
     /// <summary>The show's saved animations, for reuse across elements and layouts.</summary>
     public List<MotionClip> Animations { get; set; } = [];
 
+    /// <summary>The show's brand kit, shared by every layout and template.</summary>
+    public BrandKit Brand { get; set; } = new();
+
+    /// <summary>The ordered scene sequence used by the CONTENT storyboard.</summary>
+    public Storyboard Storyboard { get; set; } = new();
+
+    /// <summary>Named sponsor regions and the assets attached to them.</summary>
+    public List<SponsorSlot> Sponsors { get; set; } = [];
+
     /// <summary>A v3 file held one flat list of layouts for one screen; read so it still opens.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public List<ScorebugLayout>? Layouts { get; set; }
@@ -811,6 +855,15 @@ public sealed class ScorebugCatalog
 
     /// <summary>Saved animations the makers can apply again.</summary>
     public List<MotionClip> Animations { get; private set; } = [];
+
+    /// <summary>The show's brand kit. Every template and every layout marked with a brand role follows it.</summary>
+    public BrandKit Brand { get; private set; } = new();
+
+    /// <summary>The CONTENT storyboard sequence. Scenes point at real layouts, never copies.</summary>
+    public Storyboard Storyboard { get; private set; } = new();
+
+    /// <summary>Named sponsor regions and the assets attached to them.</summary>
+    public List<SponsorSlot> Sponsors { get; private set; } = [];
 
     public ScorebugCatalog(string? path = null)
     {
@@ -1094,6 +1147,12 @@ public sealed class ScorebugCatalog
             ActiveDisplayIndex = document.ActiveDisplayIndex;
             Transitions = document.Transitions ?? [];
             Animations = document.Animations ?? [];
+            Brand = document.Brand ?? new BrandKit();
+            Storyboard = document.Storyboard ?? new Storyboard();
+            Sponsors = document.Sponsors ?? [];
+            Brand.Normalize();
+            Storyboard.Normalize();
+            foreach (var sponsor in Sponsors) sponsor.Normalize();
             // A v4 file kept one hand-over per display; every layout now carries its own. Each layout
             // inherits the display transition it was last saved with, so an existing game still
             // switches the way the operator set it up.
@@ -1155,7 +1214,10 @@ public sealed class ScorebugCatalog
             Displays = Displays,
             ActiveDisplayIndex = ActiveDisplayIndex,
             Transitions = Transitions,
-            Animations = Animations
+            Animations = Animations,
+            Brand = Brand,
+            Storyboard = Storyboard,
+            Sponsors = Sponsors
         };
         var temp = _path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true }));
@@ -1167,6 +1229,20 @@ public sealed class ScorebugCatalog
     {
         edit(Layout); Validate();
         Save(); Changed?.Invoke();
+    }
+
+    /// <summary>Edits one layout by id, whichever display owns it. Used by the scene timeline.</summary>
+    public bool UpdateLayout(string? layoutId, Action<ScorebugLayout> edit)
+    {
+        var display = FindDisplayOfLayout(layoutId);
+        var layout = display?.Layouts.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, layoutId, StringComparison.OrdinalIgnoreCase));
+        if (layout is null) return false;
+        edit(layout);
+        Validate();
+        Save();
+        Changed?.Invoke();
+        return true;
     }
 
     /// <summary>
@@ -1267,6 +1343,9 @@ public sealed class ScorebugCatalog
                     item.Rotation = Math.Clamp(double.IsFinite(item.Rotation) ? item.Rotation : 0, -360, 360);
                     item.BorderThickness = Math.Clamp(double.IsFinite(item.BorderThickness) ? item.BorderThickness : 0, 0, 40);
                     item.TransitionSeconds = Math.Clamp(double.IsFinite(item.TransitionSeconds) ? item.TransitionSeconds : 0.2, 0, 5);
+                    item.TimelineIn = Math.Clamp(double.IsFinite(item.TimelineIn) ? item.TimelineIn : 0, 0, 3600);
+                    item.TimelineOut = Math.Clamp(double.IsFinite(item.TimelineOut) ? item.TimelineOut : 0, 0, 3600);
+                    if (item.TimelineOut > 0 && item.TimelineOut < item.TimelineIn) item.TimelineOut = item.TimelineIn;
                     // Older layouts saved the generic 0.2-second default onto Jump Flip and Shrink
                     // Wheel before those presets had a readable default. Promote that untouched
                     // default once on load; a deliberately different speed is left alone.
@@ -1444,7 +1523,11 @@ public sealed class ScorebugCatalog
         var next = Math.Clamp(index, 0, display.Layouts.Count - 1);
         if (next == display.ActiveIndex && !publish) return;
         display.ActiveIndex = next;
-        if (publish) display.PublishedIndex = next;
+        if (publish)
+        {
+            display.PublishedIndex = next;
+            display.PublishedAtUtc = DateTime.UtcNow;
+        }
         Save(); Changed?.Invoke();
     }
 
@@ -1461,6 +1544,7 @@ public sealed class ScorebugCatalog
         var next = Math.Clamp(layoutIndex, 0, display.Layouts.Count - 1);
         if (display.PublishedIndex == next) return;
         display.PublishedIndex = next;
+        display.PublishedAtUtc = DateTime.UtcNow;
         Save(); Changed?.Invoke();
         // Every layout that actually reaches an audience is one event on the show spine, whichever
         // path put it there: the operator, a macro, a rule or a remote page.
@@ -1656,7 +1740,10 @@ public sealed class ScorebugCatalog
     /// </summary>
     public void ResetToDefault(string? presetId = null)
     {
-        Displays = [DefaultDisplay(presetId)];
+        // A new game starts in the show's identity, not the factory grey-green: a gallery template
+        // must publish with the brand kit that was already saved.
+        var layout = ContentTemplateCatalog.Build(presetId ?? ScorebugPresets.Classic, Brand);
+        Displays = [new ScorebugDisplay { Name = "Program", Layouts = [layout] }];
         ActiveDisplayIndex = 0;
         Save(); Changed?.Invoke();
     }
@@ -1672,7 +1759,10 @@ public sealed class ScorebugCatalog
             Displays = Displays,
             ActiveDisplayIndex = ActiveDisplayIndex,
             Transitions = Transitions,
-            Animations = Animations
+            Animations = Animations,
+            Brand = Brand,
+            Storyboard = Storyboard,
+            Sponsors = Sponsors
         });
         return JsonSerializer.Deserialize<ScorebugDocument>(json) ?? new ScorebugDocument();
     }
@@ -1691,9 +1781,141 @@ public sealed class ScorebugCatalog
         ActiveDisplayIndex = copy.ActiveDisplayIndex;
         Transitions = copy.Transitions ?? [];
         Animations = copy.Animations ?? [];
+        Brand = copy.Brand ?? new BrandKit();
+        Storyboard = copy.Storyboard ?? new Storyboard();
+        Sponsors = copy.Sponsors ?? [];
+        Brand.Normalize();
+        Storyboard.Normalize();
+        foreach (var sponsor in Sponsors) sponsor.Normalize();
         Validate();
         Save();
         Changed?.Invoke();
+    }
+
+    // ---------- content: brand, templates, storyboard, sponsors ----------
+
+    /// <summary>Fills every tagged placeholder with the sponsor asset that carries the same tag.</summary>
+    public int ApplySponsors(ScorebugLayout layout)
+    {
+        var painted = 0;
+        foreach (var element in layout.Elements)
+        {
+            if (string.IsNullOrWhiteSpace(element.SponsorTag)) continue;
+            var sponsor = Sponsors.FirstOrDefault(slot =>
+                string.Equals(slot.Tag, element.SponsorTag, StringComparison.OrdinalIgnoreCase));
+            if (sponsor is null || string.IsNullOrWhiteSpace(sponsor.AssetPath) || !File.Exists(sponsor.AssetPath)) continue;
+            element.ImagePath = sponsor.AssetPath;
+            if (element.Kind != ScorebugElementKind.Image) element.Kind = ScorebugElementKind.Image;
+            painted++;
+        }
+        return painted;
+    }
+
+    /// <summary>Stores the show's identity without repainting existing artwork; ApplyBrandToAll does that.</summary>
+    public void SaveBrand(BrandKit brand)
+    {
+        Brand = (brand ?? new BrandKit()).Copy();
+        Brand.Normalize();
+        Save();
+        Changed?.Invoke();
+    }
+
+    /// <summary>Repaints every layout element that declares a brand role, and every brand-background canvas.</summary>
+    public int ApplyBrandToAll()
+    {
+        var painted = 0;
+        foreach (var display in Displays)
+            foreach (var layout in display.Layouts)
+            {
+                if (layout.UseBrandBackground || layout.Elements.Any(element => element.BrandRole != BrandRole.None)) painted++;
+                Brand.ApplyTo(layout);
+            }
+        Save();
+        Changed?.Invoke();
+        return painted;
+    }
+
+    /// <summary>
+    /// Publishes the layout a storyboard scene points at, using the scene's transition and hold
+    /// timing. The scene edits the same layout document the rest of the show does.
+    /// </summary>
+    public bool PublishStoryboardScene(StoryboardScene scene)
+    {
+        if (scene is null || string.IsNullOrWhiteSpace(scene.LayoutId)) return false;
+        var display = FindDisplayOfLayout(scene.LayoutId);
+        if (display is null) return false;
+        var index = display.Layouts.FindIndex(layout => string.Equals(layout.Id, scene.LayoutId, StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return false;
+        var layout = display.Layouts[index];
+        layout.Transition = scene.Transition;
+        layout.TransitionSeconds = scene.TransitionSeconds;
+        display.PublishedIndex = index;
+        display.PublishedAtUtc = DateTime.UtcNow;
+        Save();
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>Seconds since a display's current layout went on air, for its per-layer timeline.</summary>
+    public double PublishedElapsedSeconds(string? displayId)
+    {
+        var display = FindDisplay(displayId) ?? ActiveDisplay;
+        return Math.Max(0, (DateTime.UtcNow - display.PublishedAtUtc).TotalSeconds);
+    }
+
+    public void SaveStoryboard(Storyboard storyboard)
+    {
+        Storyboard = (storyboard ?? new Storyboard()).Copy();
+        Storyboard.Normalize();
+        Save();
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Edits the live storyboard in place. The Content Studio keeps a scene open while the operator
+    /// types, so replacing the storyboard with a copy on every keystroke would leave its fields
+    /// writing into an orphaned scene.
+    /// </summary>
+    public void UpdateStoryboard(Action<Storyboard> edit)
+    {
+        edit(Storyboard);
+        Storyboard.Normalize();
+        Save();
+        Changed?.Invoke();
+    }
+
+    public void SaveSponsors(IEnumerable<SponsorSlot> sponsors)
+    {
+        Sponsors = sponsors.Select(sponsor => sponsor.Copy()).ToList();
+        foreach (var sponsor in Sponsors) sponsor.Normalize();
+        Save();
+        Changed?.Invoke();
+    }
+
+    public IReadOnlySet<string> AllLayoutIds() => Displays
+        .SelectMany(display => display.Layouts)
+        .Select(layout => layout.Id)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Adds one gallery template to a display as a real, editable layout, branded with the show kit.
+    /// This is the single path behind "new from template", so the old preset menu has nothing to do.
+    /// </summary>
+    public int AddTemplate(string templateId, string? displayId = null, bool publish = false)
+    {
+        var display = FindDisplay(displayId) ?? ActiveDisplay;
+        var layout = ContentTemplateCatalog.Build(templateId, Brand);
+        var sameName = display.Layouts.Count(candidate => string.Equals(candidate.Name, layout.Name, StringComparison.OrdinalIgnoreCase));
+        if (sameName > 0) layout.Name = $"{layout.Name} {sameName + 1}";
+        ApplySponsors(layout);
+        display.Layouts.Add(layout);
+        display.ActiveIndex = display.Layouts.Count - 1;
+        if (publish) display.PublishedIndex = display.ActiveIndex;
+        ActiveDisplayIndex = Displays.IndexOf(display);
+        Validate();
+        Save();
+        Changed?.Invoke();
+        return display.ActiveIndex;
     }
 
     // ---------- transitions and animations ----------
@@ -1857,6 +2079,28 @@ public sealed class ScorebugCatalog
     /// Makes one display use a layout, from a quick button. It edits that display's choice and, when
     /// asked, puts the layout on air in the same save — so one press is one change, not two.
     /// </summary>
+    /// <summary>
+    /// Sets one layer's real-time effect from a cue or the timeline editor. Only the effects WPF
+    /// actually renders are accepted; an unknown value falls back to clearing the effect.
+    /// </summary>
+    public bool SetLayerEffect(string? displayId, string? layoutId, string? elementId,
+        LayerEffectKind effect, double amount, string? color)
+    {
+        var display = FindDisplay(displayId) ?? ActiveDisplay;
+        var layout = string.IsNullOrWhiteSpace(layoutId)
+            ? display.Layouts.ElementAtOrDefault(display.PublishedIndex)
+            : display.Layouts.FirstOrDefault(candidate => string.Equals(candidate.Id, layoutId, StringComparison.OrdinalIgnoreCase));
+        var element = layout?.Elements.FirstOrDefault(candidate => string.Equals(candidate.Id, elementId, StringComparison.OrdinalIgnoreCase));
+        if (element is null) return false;
+        element.Effect = Enum.IsDefined(effect) ? effect : LayerEffectKind.None;
+        element.EffectAmount = Math.Clamp(double.IsFinite(amount) ? amount : 0.5, 0, 1);
+        if (!string.IsNullOrWhiteSpace(color))
+            element.EffectColor = IsColor(color) ? color.Trim() : element.EffectColor;
+        Save();
+        Changed?.Invoke();
+        return true;
+    }
+
     public bool ActivateLayout(string? displayId, string? layoutId, bool publish)
     {
         var displayIndex = Displays.FindIndex(display => string.Equals(display.Id, displayId, StringComparison.OrdinalIgnoreCase));
@@ -1867,7 +2111,11 @@ public sealed class ScorebugCatalog
         var changed = ActiveDisplayIndex != displayIndex || display.ActiveIndex != layoutIndex || (publish && display.PublishedIndex != layoutIndex);
         ActiveDisplayIndex = displayIndex;
         display.ActiveIndex = layoutIndex;
-        if (publish) display.PublishedIndex = layoutIndex;
+        if (publish)
+        {
+            display.PublishedIndex = layoutIndex;
+            display.PublishedAtUtc = DateTime.UtcNow;
+        }
         if (!changed) return true;
         Save();
         Changed?.Invoke();

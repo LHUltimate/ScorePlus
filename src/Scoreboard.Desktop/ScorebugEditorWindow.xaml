@@ -8,10 +8,10 @@
     <local:IconNameConverter x:Key="IconNameConverter"/>
     <local:MotionNameConverter x:Key="MotionNameConverter"/>
     <Style x:Key="ToolButton" TargetType="Button">
-      <Setter Property="FontSize" Value="12"/>
-      <Setter Property="Padding" Value="12,8"/>
-      <Setter Property="MinHeight" Value="36"/>
-      <Setter Property="Margin" Value="3,0,0,0"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Padding" Value="5,5"/>
+      <Setter Property="MinHeight" Value="30"/>
+      <Setter Property="Margin" Value="2,0,0,0"/>
     </Style>
     <Style x:Key="SectionTitle" TargetType="TextBlock">
       <Setter Property="FontSize" Value="11"/>
@@ -62,7 +62,8 @@
           <Button Content="IMAGE +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddImage_Click"
                   ToolTip="Import a picture onto the graphic — a sponsor board, a crest, a full-frame image"/>
           <Button Content="SHAPE +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddShape_Click"/>
-          <Button Content="SPORT DATA +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddData_Click"/>
+          <Button Content="SPORT DATA +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddData_Click"
+                  ToolTip="A live sport value from the game"/>
           <Button Content="PLAYER DATA +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddPlayerData_Click"
                   ToolTip="A value from the player currently on the graphic, set in the Rosters tab"/>
           <Button Content="VIDEO +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddVideo_Click"/>
@@ -78,10 +79,9 @@
                   IsEnabled="False" ToolTip="Undo the last studio edit (Ctrl+Z)"/>
           <Button x:Name="RedoButton" Content="REDO" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="Redo_Click"
                   IsEnabled="False" ToolTip="Redo the last undone edit (Ctrl+Y or Ctrl+Shift+Z)"/>
-          <Button Content="REMOVE" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="Remove_Click" ToolTip="Delete the selected element"/>
         </StackPanel>
         <StackPanel Orientation="Horizontal">
-          <TextBlock Text="SCOREPLUS · DISPLAY STUDIO" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"/>
+          <TextBlock Text="DISPLAY STUDIO" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"/>
           <TextBlock x:Name="HeaderHint" Text="   Arrange audience graphics · edits save automatically" Foreground="#93A0B2" VerticalAlignment="Center"/>
         </StackPanel>
       </DockPanel>
@@ -91,6 +91,8 @@
         <StackPanel>
           <DockPanel>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <Button Content="Content Studio…" Style="{StaticResource LayoutButton}" Click="ContentStudio_Click"
+                      ToolTip="Open the CONTENT gallery, brand kit, storyboard and sponsor inventory"/>
               <Button Content="New display…" Style="{StaticResource LayoutButton}" Click="DisplayNew_Click" ToolTip="Add another screen, for example a lower-thirds display"/>
               <Button Content="Import .spd…" Style="{StaticResource LayoutButton}" Click="DisplayImport_Click" ToolTip="Add a whole ScorePlus Display file — every layout it holds — to this game"/>
               <Button Content="Export .spd…" Style="{StaticResource LayoutButton}" Click="DisplayExport_Click" ToolTip="Write this display and all its layouts to a ScorePlus Display file"/>
@@ -108,6 +110,12 @@
               <TextBlock x:Name="DisplayHintText" Text="  Each display gets its own audience window." Foreground="#5C6B7E" FontSize="10" VerticalAlignment="Center" Margin="10,0,0,0"/>
             </StackPanel>
           </DockPanel>
+          <!-- One thumbnail per display, the way a production switcher shows its outputs: what is
+               on air, which display is being edited, and a click to move the studio there. -->
+          <ScrollViewer Margin="0,7,0,0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                        MaxHeight="104">
+            <StackPanel x:Name="DisplayStrip" Orientation="Horizontal"/>
+          </ScrollViewer>
           <!-- Transitions and score celebrations live in their own window; this hidden host is
                reparented when the operator opens Motions… so the normal studio bar stays compact. -->
           <StackPanel x:Name="MotionRows" Visibility="Collapsed">
@@ -200,6 +208,8 @@
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="New layout" Style="{StaticResource LayoutButton}" Click="LayoutNew_Click" ToolTip="Start a blank scorebug layout"/>
+            <Button Content="Templates…" Style="{StaticResource LayoutButton}" Click="ContentStudio_Click"
+                    ToolTip="Start from a branded gallery template instead of a blank canvas"/>
             <Button Content="Duplicate" Style="{StaticResource LayoutButton}" Click="LayoutDuplicate_Click" ToolTip="Copy this layout, artwork and all"/>
             <Button Content="Move to…" Style="{StaticResource LayoutButton}" Click="LayoutMove_Click"
                     ToolTip="Move this layout, artwork and all, onto another display"/>

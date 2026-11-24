@@ -1,0 +1,184 @@
+<Window x:Class="Scoreboard.Desktop.LiveSwitchWindow" Icon="app.ico"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ScorePlus — Live Switch" Width="1480" Height="940" MinWidth="1120" MinHeight="740"
+        WindowStartupLocation="CenterOwner" Background="#0E1218" Foreground="#F4F7FB" FontFamily="Segoe UI">
+  <Window.Resources>
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="Background" Value="#171C25"/>
+      <Setter Property="CornerRadius" Value="9"/>
+      <Setter Property="Padding" Value="9"/>
+    </Style>
+    <Style x:Key="SectionTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="Foreground" Value="#93A0B2"/>
+    </Style>
+    <Style x:Key="ToolButton" TargetType="Button">
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="Margin" Value="4,0,0,0"/>
+    </Style>
+    <Style x:Key="TakeButton" TargetType="Button">
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="MinHeight" Value="48"/>
+      <Setter Property="Margin" Value="0,5,0,0"/>
+      <Setter Property="Background" Value="#163C32"/>
+      <Setter Property="Foreground" Value="#8DEBCB"/>
+      <Setter Property="BorderBrush" Value="#38D7A3"/>
+    </Style>
+  </Window.Resources>
+
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="320"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="154"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <DockPanel Grid.Row="0" Margin="2,0,2,9">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+        <Button Content="+ Display" Style="{StaticResource ToolButton}" Click="AddDisplay_Click"
+                ToolTip="Add another program display and select it for preview"/>
+        <Button Content="Update Output" Style="{StaticResource ToolButton}" Click="UpdateOutput_Click"
+                ToolTip="Publish the previewed layout to the selected display"/>
+        <Button Content="Clear" Style="{StaticResource ToolButton}" Click="Clear_Click"
+                ToolTip="Publish the display's first layout, the show's safe default"/>
+      </StackPanel>
+      <StackPanel Orientation="Horizontal">
+        <Border Background="#0E1218" CornerRadius="7" Padding="7,4" Margin="0,0,10,0" VerticalAlignment="Center">
+          <TextBlock Text="LIVE" FontSize="12" FontWeight="Bold" Foreground="#FF5D5D"/>
+        </Border>
+        <TextBlock Text="SCOREPLUS · LIVE SWITCH" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"/>
+        <TextBlock Text="   Multiview · program and preview · layout sources and layers"
+                   Foreground="#93A0B2" VerticalAlignment="Center"/>
+      </StackPanel>
+    </DockPanel>
+
+    <!-- ============ MULTIVIEW ============ -->
+    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,8">
+      <DockPanel>
+        <DockPanel DockPanel.Dock="Top" Margin="1,0,1,6">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button Content="‹" Style="{StaticResource ToolButton}" MinWidth="26" Padding="6,2" Click="MultiviewPrev_Click"
+                    ToolTip="Previous page of sources"/>
+            <TextBlock x:Name="MultiviewPageLabel" Text="1 / 1" Foreground="#5C6B7E" FontSize="9" VerticalAlignment="Center" Margin="3,0"/>
+            <Button Content="›" Style="{StaticResource ToolButton}" MinWidth="26" Padding="6,2" Click="MultiviewNext_Click"
+                    ToolTip="Next page of sources"/>
+            <TextBlock x:Name="MultiviewHint" Text="PROGRAM RED · PREVIEW GREEN"
+                       Foreground="#5C6B7E" FontSize="9" VerticalAlignment="Center" Margin="8,0,4,0"/>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal">
+            <Border Width="3" Height="12" CornerRadius="2" Background="{DynamicResource Accent}" Margin="0,0,7,0"/>
+            <TextBlock Text="MULTIVIEW" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
+            <TextBlock x:Name="MultiviewDisplayName" Text="   Program" Foreground="#5C6B7E" FontSize="10" VerticalAlignment="Center"/>
+          </StackPanel>
+        </DockPanel>
+        <UniformGrid x:Name="MultiviewGrid" Columns="3" Rows="2"/>
+      </DockPanel>
+    </Border>
+
+    <!-- ============ PROGRAM / PREVIEW ============ -->
+    <Grid Grid.Row="2" Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="8"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="8"/>
+        <ColumnDefinition Width="280"/>
+      </Grid.ColumnDefinitions>
+
+      <Border Grid.Column="0" Style="{StaticResource Card}">
+        <DockPanel>
+          <DockPanel DockPanel.Dock="Top" Margin="1,0,1,6">
+            <Border DockPanel.Dock="Right" Background="#3A1717" CornerRadius="4" Padding="7,3">
+              <TextBlock Text="PROGRAM · ON AIR" FontSize="9" FontWeight="Bold" Foreground="#FF9B9B"/>
+            </Border>
+            <TextBlock x:Name="ProgramLabel" Text="PROGRAM" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
+          </DockPanel>
+          <Border Background="#070B10" CornerRadius="6" BorderBrush="#7A2B2B" BorderThickness="1" ClipToBounds="True">
+            <ContentControl x:Name="ProgramHost" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+          </Border>
+        </DockPanel>
+      </Border>
+
+      <Border Grid.Column="2" Style="{StaticResource Card}">
+        <DockPanel>
+          <DockPanel DockPanel.Dock="Top" Margin="1,0,1,6">
+            <Border DockPanel.Dock="Right" Background="#163C32" CornerRadius="4" Padding="7,3">
+              <TextBlock Text="PREVIEW · NEXT" FontSize="9" FontWeight="Bold" Foreground="#8DEBCB"/>
+            </Border>
+            <TextBlock x:Name="PreviewLabel" Text="PREVIEW" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
+          </DockPanel>
+          <Border Background="#070B10" CornerRadius="6" BorderBrush="#2B7A62" BorderThickness="1" ClipToBounds="True">
+            <ContentControl x:Name="PreviewHost" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+          </Border>
+        </DockPanel>
+      </Border>
+
+      <Border Grid.Column="4" Style="{StaticResource Card}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel>
+          <TextBlock Text="SWITCH" Style="{StaticResource SectionTitle}" Margin="1,0,1,6"/>
+          <TextBlock Text="Display" FontSize="10" Foreground="#7C8A9C" Margin="0,0,0,2"/>
+          <ComboBox x:Name="DisplayBox" MinHeight="30" Margin="0,0,0,5" SelectionChanged="Display_Changed"/>
+          <TextBlock Text="Transition" FontSize="10" Foreground="#7C8A9C" Margin="0,0,0,2"/>
+          <ComboBox x:Name="TransitionBox" MinHeight="30" Margin="0,0,0,5" SelectionChanged="Transition_Changed"/>
+          <DockPanel>
+            <TextBlock Text="Duration" FontSize="10" Foreground="#7C8A9C" VerticalAlignment="Center"/>
+            <TextBox x:Name="DurationInput" Width="60" MinHeight="28" Text="0.5" Margin="8,0,0,0"
+                     TextChanged="Duration_Changed" ToolTip="Seconds for a dissolve, slide or zoom"/>
+            <TextBlock Text="s" FontSize="10" Foreground="#7C8A9C" VerticalAlignment="Center" Margin="3,0,0,0"/>
+          </DockPanel>
+          <Button Content="TAKE" Style="{StaticResource TakeButton}" Click="Take_Click"
+                  ToolTip="Publish the previewed layout with its transition"/>
+          <Button Content="CUT" Style="{StaticResource ToolButton}" MinHeight="38" Click="Cut_Click"
+                  ToolTip="Publish instantly, ignoring the transition"/>
+          <TextBlock x:Name="SwitchStatus" Text="Ready" Foreground="#5C6B7E" FontSize="10" Margin="0,7,0,0" TextWrapping="Wrap"/>
+          <Expander Header="GAME DATA" Foreground="#93A0B2" FontSize="10" Margin="0,10,0,0"
+                    ToolTip="Every live value the current game is tracking">
+            <ScrollViewer MaxHeight="270" Margin="0,5,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel x:Name="GameDataPanel"/>
+            </ScrollViewer>
+          </Expander>
+        </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+
+    <!-- ============ SOURCES ============ -->
+    <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,8">
+      <DockPanel>
+        <DockPanel DockPanel.Dock="Top" Margin="1,0,1,5">
+          <TextBlock DockPanel.Dock="Right" Text="CLICK TO PREVIEW · DOUBLE-CLICK TO TAKE"
+                     Foreground="#5C6B7E" FontSize="9" VerticalAlignment="Center"/>
+          <StackPanel Orientation="Horizontal">
+            <Border Width="3" Height="12" CornerRadius="2" Background="{DynamicResource Accent}" Margin="0,0,7,0"/>
+            <TextBlock Text="SOURCES" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
+          </StackPanel>
+        </DockPanel>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel>
+            <WrapPanel x:Name="SourcePanel"/>
+            <DockPanel Margin="0,5,0,0">
+              <TextBlock Text="LAYERS" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" VerticalAlignment="Center"/>
+              <WrapPanel x:Name="LayerPanel"/>
+            </DockPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </DockPanel>
+    </Border>
+
+    <Border Grid.Row="4" Background="#171C25" CornerRadius="7" Padding="10,5">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Right" x:Name="ClockStatus" Text="—" Foreground="#93A0B2" FontSize="10" FontFamily="Consolas"/>
+        <TextBlock x:Name="StatusText" Text="LIVE SWITCH READY · choose a layout to preview."
+                   Foreground="#93A0B2" FontSize="10" TextTrimming="CharacterEllipsis"/>
+      </DockPanel>
+    </Border>
+  </Grid>
+</Window>

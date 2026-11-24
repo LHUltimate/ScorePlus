@@ -944,6 +944,18 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _log.Show();
     }
 
+    void ControlRoom_Click(object sender, RoutedEventArgs e)
+    {
+        var hub = new ControlRoomWindow(_scorebug, _engine, _playback, _automation, _preferences.Theme) { Owner = this };
+        hub.Show();
+    }
+
+    void ContentStudio_Click(object sender, RoutedEventArgs e)
+    {
+        var studio = new ContentStudioWindow(_scorebug, _engine, _preferences.Theme) { Owner = this };
+        studio.Show();
+    }
+
     void ScorebugStudio_Click(object sender, RoutedEventArgs e)
     {
         // The studio edits exactly the display and layout this window is previewing.

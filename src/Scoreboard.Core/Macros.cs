@@ -54,7 +54,11 @@ public enum MacroActionKind
     /// <summary>A heading in the step list. It runs nothing; it keeps a long macro readable.</summary>
     Note,
     /// <summary>Replay speed, setting up a replay at a point, and starting it on air.</summary>
-    Replay
+    Replay,
+    /// <summary>Publish one storyboard scene, using the scene's transition and layout.</summary>
+    StoryboardScene,
+    /// <summary>Set or clear a real WPF layer effect on one element of a layout.</summary>
+    LayerEffect
 }
 
 /// <summary>A single console, media or roster change saved inside a macro.</summary>
@@ -87,8 +91,11 @@ public sealed class MacroAction
     public string PlayerId { get; set; } = "";
     public string PlayerName { get; set; } = "";
     public string StatName { get; set; } = "";
-    /// <summary>The display a SwitchLayout step targets.</summary>
+    /// <summary>The display a SwitchLayout or LayerEffect step targets.</summary>
     public string DisplayId { get; set; } = "";
+
+    /// <summary>The layout a LayerEffect step targets. Empty means the display's published layout.</summary>
+    public string LayoutId { get; set; } = "";
 
     /// <summary>How long a Wait step pauses before the next step runs.</summary>
     public double WaitSeconds { get; set; } = 1;
@@ -116,6 +123,7 @@ public sealed class MacroAction
         Path = Path,
         Label = Label,
         DisplayId = DisplayId,
+        LayoutId = LayoutId,
         PlayerId = PlayerId,
         PlayerName = PlayerName,
         StatName = StatName,
@@ -131,6 +139,7 @@ public sealed class MacroAction
         Path = (Path ?? "").Trim();
         Label = (Label ?? "").Trim();
         DisplayId = (DisplayId ?? "").Trim();
+        LayoutId = (LayoutId ?? "").Trim();
         PlayerId = (PlayerId ?? "").Trim();
         PlayerName = (PlayerName ?? "").Trim();
         StatName = (StatName ?? "").Trim();
@@ -185,6 +194,9 @@ public sealed class MacroAction
         MacroActionKind.RunMacro => $"Run macro · {(string.IsNullOrWhiteSpace(Label) ? Path : Label)}",
         MacroActionKind.Note => string.IsNullOrWhiteSpace(Text) ? "Note" : $"▸ {Text}",
         MacroActionKind.Replay => ReplayTitle,
+        MacroActionKind.StoryboardScene => $"Storyboard scene · {(string.IsNullOrWhiteSpace(Label) ? Path : Label)}",
+        MacroActionKind.LayerEffect => $"Layer effect · {(string.IsNullOrWhiteSpace(Label) ? Path : Label)} · " +
+            $"{(Value == 1 ? "blur" : Value == 2 ? "glow" : "none")}{ (Value == 0 ? "" : $" {(Math.Clamp(Amount, 0, 100))}%") }",
         _ => Kind.ToString()
     };
 

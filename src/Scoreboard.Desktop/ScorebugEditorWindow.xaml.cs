@@ -623,7 +623,9 @@ public partial class ScorebugEditorWindow : Window
         RefreshLogicPanel();
         BuildBlendPanel();
         RefreshBlendPanel();
-        Layers.SelectionChanged += (_, _) => { RefreshLogicPanel(); RefreshBlendPanel(); };
+        BuildEffectPanel();
+        RefreshEffectPanel();
+        Layers.SelectionChanged += (_, _) => { RefreshLogicPanel(); RefreshBlendPanel(); RefreshEffectPanel(); };
         // Saved clips are offered beside the presets by RefreshMotionLists.
         // Built-in arrivals plus the show's named transitions, by RefreshLayoutTransitionChoices.
         ShapeInput.ItemsSource=Enum.GetValues<ScorebugShape>();
@@ -731,6 +733,10 @@ public partial class ScorebugEditorWindow : Window
     TextBox? _logicValue;
     ComboBox? _blendBox;
     bool _blendSync;
+    ComboBox? _effectBox;
+    Slider? _effectAmount;
+    TextBlock? _effectReadout;
+    bool _effectSync;
 
     ScorebugElement? Selected => _selectedId is null ? null : _catalog.Layout.Elements.FirstOrDefault(x=>x.Id==_selectedId);
 
@@ -982,6 +988,7 @@ public partial class ScorebugEditorWindow : Window
                 Width=264,
                 Height=148
             };
+            view.ShowAllLayers();
             view.Measure(new Size(264,148));
             view.Arrange(new Rect(0,0,264,148));
             view.UpdateLayout();
@@ -1033,8 +1040,76 @@ public partial class ScorebugEditorWindow : Window
             TransitionCaption.Text=layout.TransitionClip is { } custom
                 ? $"  Custom “{custom.Name}” — the transition maker's hand-over, saved with {layout.Name}."
                 : $"  Saved with {layout.Name} — every layout can arrive differently.";
+            SyncDisplayStrip();
         }
         finally { _displayLoading=false; }
+    }
+
+    /// <summary>
+    /// The display wall above the artwork: a picture of each output, its name and an on-air dot.
+    /// Clicking a tile moves the studio to that display without changing what is on air.
+    /// </summary>
+    void SyncDisplayStrip()
+    {
+        if (DisplayStrip is null) return;
+        DisplayStrip.Children.Clear();
+        for (var index = 0; index < _catalog.Displays.Count; index++)
+        {
+            var display = _catalog.Displays[index];
+            var active = index == _catalog.ActiveDisplayIndex;
+            var layout = display.Layouts[Math.Clamp(display.ActiveIndex, 0, Math.Max(0, display.Layouts.Count - 1))];
+            var tile = new Button
+            {
+                Width = 154, Height = 94, Padding = new Thickness(4), Margin = new Thickness(0, 0, 6, 0),
+                Background = Brushes.Transparent, Cursor = Cursors.Hand,
+                BorderThickness = new Thickness(active ? 2 : 1),
+                BorderBrush = active ? null : new SolidColorBrush(Color.FromRgb(0x2E, 0x3B, 0x4A)),
+                ToolTip = active ? $"{display.Name} — being designed now" : $"Move the studio to {display.Name}"
+            };
+            if (active) tile.SetResourceReference(Control.BorderBrushProperty, "Accent");
+            var image = new Image
+            {
+                Source = layout is null ? null : ThumbnailFor(layout),
+                Width = 142, Height = 72, Stretch = Stretch.UniformToFill
+            };
+            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+            var nameRow = new DockPanel { Margin = new Thickness(2, 3, 2, 0) };
+            var onAir = display.PublishedIndex == display.ActiveIndex;
+            var dot = new Border
+            {
+                Width = 6, Height = 6, CornerRadius = new CornerRadius(3), Margin = new Thickness(0, 0, 5, 0),
+                Background = new SolidColorBrush(onAir ? Color.FromRgb(0xFF, 0x5D, 0x5D) : Color.FromRgb(0x5C, 0x6B, 0x7E)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            DockPanel.SetDock(dot, Dock.Left);
+            nameRow.Children.Add(dot);
+            nameRow.Children.Add(new TextBlock
+            {
+                Text = $"{index + 1}. {display.Name}", FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = active ? null : new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2))
+            });
+            var stack = new StackPanel();
+            stack.Children.Add(new Border { Height = 72, ClipToBounds = true, Background = new SolidColorBrush(Color.FromRgb(7, 11, 16)), Child = image });
+            stack.Children.Add(nameRow);
+            tile.Content = stack;
+            ThemeManager.SetSkipTheme(tile, true);
+            var target = index;
+            tile.Click += (_, _) =>
+            {
+                if (_catalog.ActiveDisplayIndex == target) return;
+                ClearSelection();
+                _catalog.SelectDisplay(target);
+                Render();
+            };
+            DisplayStrip.Children.Add(tile);
+        }
+    }
+
+    void ContentStudio_Click(object sender, RoutedEventArgs e)
+    {
+        var studio = new ContentStudioWindow(_catalog, _engine, _theme) { Owner = this };
+        studio.ShowDialog();
+        Render();
     }
 
     void Transition_Changed(object sender,SelectionChangedEventArgs e)
@@ -3355,6 +3430,86 @@ public partial class ScorebugEditorWindow : Window
     }
 
     // ---------- per-element logic ----------
+
+    void BuildEffectPanel()
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 2, 0, 8) };
+        panel.Children.Add(new TextBlock { Text = "EFFECTS BANK", Style = (Style)FindResource("SectionTitle") });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "A real-time effect on this layer. Blur and glow render on the studio and every audience output.",
+            Foreground = new SolidColorBrush(Color.FromRgb(147, 160, 178)),
+            FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 0, 10, 4)
+        });
+        _effectBox = new ComboBox
+        {
+            Margin = new Thickness(10, 0, 10, 4),
+            ItemsSource = new[] { "None", "Blur", "Glow" },
+            SelectedIndex = 0
+        };
+        _effectBox.SelectionChanged += (_, _) =>
+        {
+            if (_effectSync || Selected is not { } element || _effectBox.SelectedItem is not string name) return;
+            var kind = name switch { "Blur" => LayerEffectKind.Blur, "Glow" => LayerEffectKind.Glow, _ => LayerEffectKind.None };
+            var id = element.Id;
+            _catalog.Update(layout =>
+            {
+                var target = layout.Elements.FirstOrDefault(item => item.Id == id);
+                if (target is not null) target.Effect = kind;
+            });
+            RefreshAllVisuals();
+            Render();
+        };
+        panel.Children.Add(_effectBox);
+        _effectReadout = new TextBlock
+        {
+            Text = "50%", Foreground = new SolidColorBrush(Color.FromRgb(147, 160, 178)), FontSize = 10,
+            HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(10, 0, 10, 0)
+        };
+        panel.Children.Add(_effectReadout);
+        _effectAmount = new Slider
+        {
+            Minimum = 0, Maximum = 100, Value = 50, Margin = new Thickness(10, 0, 10, 4),
+            ToolTip = "How strong the effect is on this layer"
+        };
+        _effectAmount.ValueChanged += (_, _) =>
+        {
+            if (_effectSync || Selected is not { } element) return;
+            var id = element.Id;
+            var amount = _effectAmount.Value / 100.0;
+            if (_effectReadout is not null) _effectReadout.Text = $"{_effectAmount.Value:0}%";
+            _catalog.Update(layout =>
+            {
+                var target = layout.Elements.FirstOrDefault(item => item.Id == id);
+                if (target is not null) target.EffectAmount = amount;
+            });
+            RefreshAllVisuals();
+            Render();
+        };
+        panel.Children.Add(_effectAmount);
+        PropertyPanel.Children.Add(panel);
+    }
+
+    void RefreshEffectPanel()
+    {
+        if (_effectBox is null || _effectAmount is null) return;
+        _effectSync = true;
+        try
+        {
+            var effect = Selected?.Effect ?? LayerEffectKind.None;
+            _effectBox.SelectedItem = effect switch
+            {
+                LayerEffectKind.Blur => "Blur",
+                LayerEffectKind.Glow => "Glow",
+                _ => "None"
+            };
+            _effectAmount.Value = Math.Clamp((Selected?.EffectAmount ?? 0.5) * 100, 0, 100);
+            _effectBox.IsEnabled = Selected is not null;
+            _effectAmount.IsEnabled = Selected is not null && effect != LayerEffectKind.None;
+            if (_effectReadout is not null) _effectReadout.Text = $"{_effectAmount.Value:0}%";
+        }
+        finally { _effectSync = false; }
+    }
 
     void BuildLogicPanel()
     {

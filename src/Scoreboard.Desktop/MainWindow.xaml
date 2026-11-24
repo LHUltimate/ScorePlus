@@ -89,6 +89,10 @@
           <Button Style="{StaticResource HeaderButton}" Content="Animation Maker" Click="AnimationMaker_Click" ToolTip="Key motion a value follows — a loop while it is up, or a flourish when it changes"/>
           <Button Style="{StaticResource HeaderButton}" Content="Multiview" Click="Multiview_Click" ToolTip="Every camera at once, with the replay preview beside the live picture"/>
           <Button Style="{StaticResource HeaderButton}" Content="Replay Booth" Click="ReplayBooth_Click" ToolTip="Review the last replay window of every camera with the clocks that were showing"/>
+          <Button Style="{StaticResource HeaderButton}" Content="Control Room" Click="ControlRoom_Click"
+                  ToolTip="Show Control Map — Display Studio, Content Studio, Live Switch and Live Channel, each in its own window"/>
+          <Button Style="{StaticResource HeaderButton}" Content="Content Studio" Click="ContentStudio_Click"
+                  ToolTip="Template gallery, brand kit, storyboards, sponsor inventory and content packs"/>
           <Button Style="{StaticResource HeaderButton}" Content="Display Studio" Click="ScorebugStudio_Click"/>
           <Button Style="{StaticResource HeaderButton}" Content="Sport Profiles" Click="SportProfiles_Click"/>
           <Button Style="{StaticResource HeaderButton}" Content="Swap Teams" Click="SwapTeams_Click"

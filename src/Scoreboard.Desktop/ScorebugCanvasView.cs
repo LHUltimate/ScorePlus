@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -104,6 +105,12 @@ public sealed class ScorebugCanvasView : Grid
     // Time-of-day text is not driven by the game clock, so it gets its own one-second pulse;
     // otherwise a layout with {{TIME}} freezes whenever no clock is running.
     readonly System.Windows.Threading.DispatcherTimer _wallClock = new() { Interval = TimeSpan.FromSeconds(1) };
+    // Per-layer in/out points. The clock only runs while a layout actually has a timed layer, so
+    // an ordinary scorebug pays nothing for the timeline feature.
+    readonly System.Windows.Threading.DispatcherTimer _timelineClock = new() { Interval = TimeSpan.FromMilliseconds(100) };
+    readonly Func<double>? _timelineProvider;
+    double? _timelineOverride;
+    bool _timelineSuppressed;
 
     /// <param name="publishedLayout">True for the audience output: it follows the layout that was
     /// actually published, not the one being designed in the preview.</param>
@@ -112,9 +119,10 @@ public sealed class ScorebugCanvasView : Grid
     /// <param name="layoutProvider">Draws exactly the layout this view belongs to (a specific
     /// display's on-air layout, or a window's staged one). Overrides <paramref name="publishedLayout"/>.</param>
     public ScorebugCanvasView(ScorebugCatalog catalog, GameEngine engine, Func<GameState>? stateProvider=null, MediaPlayback? playback=null, bool muteVideo=true, bool publishedLayout=false, Func<ScorebugLayout>? layoutProvider=null, bool onAirVideo=false, string? displayId=null, AutomationRuntime? automation=null,
-        IReadOnlySet<string>? layoutChain=null, bool liveValues=false, bool fillBox=false)
+        IReadOnlySet<string>? layoutChain=null, bool liveValues=false, bool fillBox=false, Func<double>? timelineProvider=null)
     {
         _catalog=catalog;_engine=engine;_live=stateProvider is null;_automation=automation;
+        _timelineProvider=timelineProvider;
         _liveValues=liveValues;
         _layoutChain=layoutChain is null
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -136,6 +144,7 @@ public sealed class ScorebugCanvasView : Grid
         _blendTimer.Tick+=(_,_)=>{_blendTimer.Stop();ApplyBlending();};
         _wallClock.Tick+=(_,_)=>{if(UsesWallClock())UpdateValues();};
         _wallClock.Start();
+        _timelineClock.Tick+=(_,_)=>ApplyTimelineToVisuals();
         _layoutChain.Add(Layout.Id);
         _lastScoreSequence=_stateProvider().LastScoreSequence;
         Rebuild();
@@ -292,7 +301,14 @@ public sealed class ScorebugCanvasView : Grid
             if(!_canvas.Children.Contains(host))_canvas.Children.Add(host);
             live.Add(host);
             ApplyAnimation(item,host);
+            ApplyLayerEffect(item,host);
         }
+        ApplyTimelineToVisuals();
+        if (layout.Elements.Any(item => item.HasTimeline) && !_timelineSuppressed)
+        {
+            if (!_timelineClock.IsEnabled) _timelineClock.Start();
+        }
+        else _timelineClock.Stop();
         foreach(var child in _canvas.Children.OfType<UIElement>().ToList())
             if(!live.Contains(child))_canvas.Children.Remove(child);
         foreach(var (id,orphan) in previousVideos)
@@ -306,6 +322,7 @@ public sealed class ScorebugCanvasView : Grid
         UpdateValues();
         _drawnLayoutId=layout.Id;
         _drawnLayout=layout;
+        ApplyTimelineToVisuals();
         if(outgoing is not null) PlaySwap(outgoing,outgoingLayout,incoming);
     }
 
@@ -1061,6 +1078,66 @@ public sealed class ScorebugCanvasView : Grid
         _canvas.RenderTransformOrigin=new Point(0.5,0.5);
     }
 
+    /// <summary>
+    /// Real-time layer effects from the CONTENT effects bank. The effect is set on every rebuild,
+    /// so switching a layer back to None clears it without rebuilding the artwork.
+    /// </summary>
+    /// <summary>Shows every layer of the design, for authoring and still thumbnails.</summary>
+    public void ShowAllLayers()
+    {
+        _timelineSuppressed = true;
+        _timelineOverride = null;
+        _timelineClock.Stop();
+        ApplyTimelineToVisuals();
+    }
+
+    /// <summary>Plays the selected scene's layer timeline at an explicit time.</summary>
+    public void SetTimeline(double seconds)
+    {
+        _timelineSuppressed = false;
+        _timelineOverride = Math.Max(0, double.IsFinite(seconds) ? seconds : 0);
+        ApplyTimelineToVisuals();
+        if (_drawnLayout?.Elements.Any(item => item.HasTimeline) == true && !_timelineClock.IsEnabled)
+            _timelineClock.Start();
+    }
+
+    void ApplyTimelineToVisuals()
+    {
+        if (_drawnLayout is null || _timelineSuppressed) return;
+        var seconds = _timelineOverride ?? _timelineProvider?.Invoke() ?? _catalog.PublishedElapsedSeconds(_displayId);
+        foreach (var item in _drawnLayout.Elements)
+        {
+            if (!_visuals.TryGetValue(item.Id, out var visual)) continue;
+            var timed = !item.HasTimeline || (seconds >= item.TimelineIn && (item.TimelineOut <= 0 || seconds < item.TimelineOut));
+            visual.Host.Visibility = item.Visible && timed ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    void ApplyLayerEffect(ScorebugElement item,FrameworkElement host)
+    {
+        var amount=Math.Clamp(item.EffectAmount,0,1);
+        switch(item.Effect)
+        {
+            case LayerEffectKind.Blur when amount>0:
+                host.Effect=new BlurEffect{Radius=amount*24,RenderingBias=RenderingBias.Performance};
+                break;
+            case LayerEffectKind.Glow when amount>0:
+                host.Effect=new DropShadowEffect
+                {
+                    Color=TryParseColor(item.EffectColor,out var glow)?glow:Color.FromRgb(0x38,0xD7,0xA3),
+                    BlurRadius=4+amount*40,
+                    ShadowDepth=0,
+                    Direction=0,
+                    Opacity=Math.Clamp(0.35+amount*0.65,0,1),
+                    RenderingBias=RenderingBias.Performance
+                };
+                break;
+            default:
+                host.Effect=null;
+                break;
+        }
+    }
+
     void ApplyAnimation(ScorebugElement item,FrameworkElement host)
     {
         var motion=item.MotionAnimation is { UseOnValueChange:false, IsEmpty:false } clip?clip.Summary:"";
@@ -1712,6 +1789,7 @@ public sealed class ScorebugCanvasView : Grid
         ClearValuePieces();
         ClearScoreAnimation();
         _wallClock.Stop();
+        _timelineClock.Stop();
         foreach(var (id,_) in _pendingText.ToArray()) CancelPending(id);
         _catalog.Changed-=Rebuild;
         if(_automation is not null)_automation.Changed-=Rebuild;

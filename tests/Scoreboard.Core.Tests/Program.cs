@@ -1675,3 +1675,84 @@ finally
         &&twiceEngine.State.YardsToGo==4&&twiceEngine.State.Period==4,
         $"undoing the end restores the clock, down, distance and period ({twiceEngine.State.ClockSeconds}s, {twiceEngine.State.Down} & {twiceEngine.State.YardsToGo}, period {twiceEngine.State.Period})");
 }
+
+// Stage 3 content is one show document: the brand kit, gallery templates, storyboard, sponsors and
+// effects survive a save, and a portable pack brings its layouts and images to another machine.
+{
+    var contentPath=Path.Combine(Path.GetTempPath(),$"content-{Guid.NewGuid():N}.json");
+    var packPath=Path.Combine(Path.GetTempPath(),$"content-{Guid.NewGuid():N}.spk");
+    var assetPath=Path.Combine(Path.GetTempPath(),$"sponsor-{Guid.NewGuid():N}.png");
+    try
+    {
+        Check(ContentTemplateCatalog.All.Count>=10,"the content gallery offers templates across the broadcast slots");
+        Check(ContentTemplateCatalog.Slots.Contains("Scorebug")&&ContentTemplateCatalog.Slots.Contains("Lower third")
+            &&ContentTemplateCatalog.Slots.Contains("Comparison")&&ContentTemplateCatalog.Slots.Contains("Sponsor"),
+            "the gallery is grouped by slot, not only by sport");
+        Check(ContentTemplateCatalog.Sports.Contains("Basketball")&&ContentTemplateCatalog.Sports.Contains("Hockey")
+            &&ContentTemplateCatalog.All.First(template=>template.Id==ScorebugPresets.Classic).Sports.Count>2,
+            "the gallery carries real sport groups, not one generic sport");
+        Check(ScorebugPresets.Build("comparison").Elements.Any(element=>element.BrandRole==BrandRole.Primary),
+            "a new game can start from a gallery template outside the old preset list");
+        var catalog=new ScorebugCatalog(contentPath);
+        var brand=new BrandKit{Name="Venue",Primary="#FF123456",Accent="#FFABCDEF",Background="#FF101820",Text="#FFF0F0F0",Wordmark="VENUE"};
+        catalog.SaveBrand(brand);
+        var index=catalog.AddTemplate("comparison");
+        var layout=catalog.Layout;
+        Check(index>=0&&layout.Elements.Count>4,"a template opens from the gallery into the active display");
+        Check(layout.Elements.Any(element=>element.BrandRole==BrandRole.Primary&&element.Foreground==brand.Primary),
+            "a gallery template takes its marked colours from the show brand kit");
+        Check(layout.UseBrandBackground&&layout.Background==brand.Background,
+            "a full-frame template takes the brand background");
+        catalog.Storyboard.Scenes.Add(new StoryboardScene{Name=layout.Name,LayoutId=layout.Id,Transition=LayoutTransition.Fade,TransitionSeconds=0.75,HoldSeconds=4});
+        catalog.SaveStoryboard(catalog.Storyboard);
+        catalog.SaveSponsors([new SponsorSlot{Name="Presenting partner",Tag="Presenting sponsor"}]);
+        catalog.Update(edit=>edit.Elements[0].Effect=LayerEffectKind.Glow);
+        var reloaded=new ScorebugCatalog(contentPath);
+        Check(reloaded.Brand.Name=="Venue"&&reloaded.Brand.Primary==brand.Primary,"the brand kit is saved with the show");
+        Check(reloaded.Storyboard.Scenes.Count==1&&reloaded.Storyboard.Scenes[0].TransitionSeconds==0.75,
+            "the storyboard sequence and its transitions are saved with the show");
+        Check(reloaded.Sponsors.Count==1&&reloaded.Sponsors[0].Tag=="Presenting sponsor","sponsor slots are saved with the show");
+        Check(reloaded.Layout.Elements[0].Effect==LayerEffectKind.Glow,"a layer effect survives a save and reopen");
+        var timelineLayout=reloaded.Layout;
+        var timelineId=timelineLayout.Elements[0].Id;
+        reloaded.UpdateLayout(timelineLayout.Id,edit=>{
+            var element=edit.Elements[0];element.TimelineIn=1;element.TimelineOut=3;
+        });
+        reloaded.SetLayerEffect(null,timelineLayout.Id,timelineId,LayerEffectKind.Blur,0.7,"#FFFF0000");
+        Check(reloaded.Layout.Elements[0].TimelineIn==1&&reloaded.Layout.Elements[0].TimelineOut==3
+            &&reloaded.Layout.Elements[0].Effect==LayerEffectKind.Blur
+            &&Math.Abs(reloaded.Layout.Elements[0].EffectAmount-0.7)<0.001,
+            "a layer keeps editable in/out points and a cue can set its real WPF effect");
+        var sceneDisplay=reloaded.FindDisplayOfLayout(reloaded.Storyboard.Scenes[0].LayoutId)!;
+        var beforePublish=reloaded.PublishedElapsedSeconds(sceneDisplay.Id);
+        Check(reloaded.PublishStoryboardScene(reloaded.Storyboard.Scenes[0]),"a storyboard scene publishes its layout");
+        Check(reloaded.PublishedElapsedSeconds(sceneDisplay.Id)<=beforePublish+0.01,
+            "publishing a scene restarts the layer timeline");
+
+        File.WriteAllBytes(assetPath,[137,80,78,71,13,10,26,10]);
+        var display=reloaded.SnapshotDisplay(0)!;
+        display.Layouts[0].Elements[0].ImagePath=assetPath;
+        reloaded.Brand.LogoPath=assetPath;
+        reloaded.SaveBrand(reloaded.Brand);
+        var pack=new ContentPack
+        {
+            Name="Venue pack", Brand=reloaded.Brand.Copy(), Storyboard=reloaded.Storyboard.Copy(),
+            Displays=[display],             Sponsors=reloaded.Sponsors.Select(slot=>slot.Copy()).ToList(),
+            Fonts=["Segoe UI"], FontFiles=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase){["Packed Font"]=assetPath}
+        };
+        ContentPacks.Export(packPath,pack);
+        Check(File.Exists(packPath)&&new FileInfo(packPath).Length>0,"a content pack writes to one portable file");
+        var imported=ContentPacks.Import(packPath);
+        Check(imported.Pack.Displays.Count==1&&imported.Pack.Displays[0].Layouts.Count==display.Layouts.Count,
+            "a content pack brings its layouts back");
+        Check(imported.RestoredAssets.Count>=1&&imported.Pack.Displays[0].Layouts[0].Elements[0].ImagePath is { } restoredImage&&File.Exists(restoredImage),
+            "a content pack restores embedded images on the importing machine");
+        Check(imported.Pack.Brand.LogoPath is { } logo&&File.Exists(logo),"a content pack restores the brand logo too");
+        Check(imported.RestoredFonts.Count==1&&File.Exists(imported.RestoredFonts["Packed Font"]),
+            "a content pack carries imported font files to the importing machine");
+    }
+    finally
+    {
+        foreach(var contentFile in new[]{contentPath,packPath,assetPath}) try{if(File.Exists(contentFile))File.Delete(contentFile);}catch{}
+    }
+}

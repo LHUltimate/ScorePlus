@@ -36,15 +36,26 @@ public static class ScorebugPresets
         ? All.First(preset => string.Equals(preset.Id, id, StringComparison.OrdinalIgnoreCase)).Id
         : Classic;
 
-    public static ScorebugLayout Build(string? id) => Normalize(id) switch
+    public static ScorebugLayout Build(string? id)
     {
-        CornerBug => CornerBugLayout(),
-        TopBar => TopBarLayout(),
-        Stadium => StadiumLayout(),
-        Jumbotron => JumbotronLayout(),
-        LowerThird => LowerThirdLayout(),
-        _ => ScorebugLayout.Default()
-    };
+        // The CONTENT gallery's newer templates are not in this file's legacy list. Their builders
+        // live in one catalog, so a new game can start from any gallery template instead of only
+        // the six originals.
+        var key = (id ?? "").Trim();
+        if (ContentTemplateCatalog.All.Any(template =>
+                string.Equals(template.Id, key, StringComparison.OrdinalIgnoreCase))
+            && All.All(preset => !string.Equals(preset.Id, key, StringComparison.OrdinalIgnoreCase)))
+            return ContentTemplateCatalog.Build(key);
+        return Normalize(id) switch
+        {
+            CornerBug => CornerBugLayout(),
+            TopBar => TopBarLayout(),
+            Stadium => StadiumLayout(),
+            Jumbotron => JumbotronLayout(),
+            LowerThird => LowerThirdLayout(),
+            _ => ScorebugLayout.Default()
+        };
+    }
 
     static ScorebugLayout CornerBugLayout() => new()
     {

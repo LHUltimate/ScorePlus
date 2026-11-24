@@ -70,6 +70,29 @@ internal static class Program
             Capture(studio, Path.Combine(output, "studio.png"), 1892, 1004, selectLayer: true);
             studio.Close();
 
+            // Stage 3 surfaces, captured at the same sizes as the reference screens.
+            var contentStudio = new ContentStudioWindow(catalog, engine) { Width = 1520, Height = 950 };
+            Capture(contentStudio, Path.Combine(output, "content-studio.png"), 1520, 950,
+                beforeCapture: window =>
+                {
+                    if (window.FindName("UseStoryboardButton") is Button addScene)
+                    {
+                        addScene.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        Pump(180);
+                        window.UpdateLayout();
+                    }
+                });
+            contentStudio.Close();
+            var liveSwitch = new LiveSwitchWindow(catalog, engine) { Width = 1480, Height = 940 };
+            Capture(liveSwitch, Path.Combine(output, "live-switch.png"), 1480, 940);
+            liveSwitch.Close();
+            var liveChannel = new LiveChannelWindow(catalog, engine) { Width = 1420, Height = 900 };
+            Capture(liveChannel, Path.Combine(output, "live-channel.png"), 1420, 900);
+            liveChannel.Close();
+            var controlRoom = new ControlRoomWindow(catalog, engine) { Width = 1260, Height = 790 };
+            Capture(controlRoom, Path.Combine(output, "show-control-map.png"), 1260, 790);
+            controlRoom.Close();
+
             var ruleCatalog = new ScorebugCatalog(Path.Combine(appData, "rules.sbd"));
             ApplyShowcase(ruleCatalog);
             var active = ruleCatalog.ActiveDisplay;
@@ -420,7 +443,8 @@ internal static class Program
         window.UpdateLayout();
     }
 
-    static void Capture(Window window, string path, int width, int height, bool selectLayer = false, bool borderless = false)
+    static void Capture(Window window, string path, int width, int height, bool selectLayer = false, bool borderless = false,
+        Action<Window>? beforeCapture = null)
     {
         window.WindowState = WindowState.Normal;
         window.Width = width;
@@ -447,6 +471,7 @@ internal static class Program
             Pump(120);
             window.UpdateLayout();
         }
+        beforeCapture?.Invoke(window);
         var content = window.Content as FrameworkElement ?? window;
         // Several dialogs leave their content transparent and paint the window behind it. Rendering
         // the content alone made those screenshots white, with white labels invisible.

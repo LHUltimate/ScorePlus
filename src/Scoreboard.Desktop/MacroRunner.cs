@@ -64,7 +64,8 @@ public sealed class MacroRunner
     static bool IsDirect(MacroAction action) => action.BypassOutput || action.Kind is MacroActionKind.PlayVideo
         or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir or MacroActionKind.SwitchLayout
         or MacroActionKind.Wait or MacroActionKind.Note or MacroActionKind.RunMacro
-        or MacroActionKind.MediaVolume or MacroActionKind.Replay;
+        or MacroActionKind.MediaVolume or MacroActionKind.Replay
+        or MacroActionKind.StoryboardScene or MacroActionKind.LayerEffect;
 
     async Task RunStepsAsync(IEnumerable<MacroAction> steps, RunScope scope, int depth)
     {
@@ -158,6 +159,10 @@ public sealed class MacroRunner
                 return TakeOffAir(action.Path);
             case MacroActionKind.SwitchLayout:
                 return SwitchLayout(action);
+            case MacroActionKind.StoryboardScene:
+                return PublishStoryboardScene(action);
+            case MacroActionKind.LayerEffect:
+                return ApplyLayerEffect(action);
             case MacroActionKind.PenaltyFlag:
                 _engine.SetPenalty(action.Value != 0, action.Path, action.Home);
                 return true;
@@ -241,6 +246,23 @@ public sealed class MacroRunner
         if (!restartClip && _session.IsOnAir(entry)) return true;
         _session.Play(entry);
         return true;
+    }
+
+    bool PublishStoryboardScene(MacroAction action)
+    {
+        if (_catalog is null) return false;
+        var scene = _catalog.Storyboard.Scenes.FirstOrDefault(candidate =>
+                (!string.IsNullOrWhiteSpace(action.Path) && string.Equals(candidate.Id, action.Path, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(action.Label) && string.Equals(candidate.Name, action.Label, StringComparison.OrdinalIgnoreCase)));
+        return scene is not null && _catalog.PublishStoryboardScene(scene);
+    }
+
+    bool ApplyLayerEffect(MacroAction action)
+    {
+        if (_catalog is null || string.IsNullOrWhiteSpace(action.Path)) return false;
+        var effect = (LayerEffectKind)Math.Clamp(action.Value, 0, 2);
+        var amount = action.Amount > 0 ? action.Amount / 100.0 : 0.5;
+        return _catalog.SetLayerEffect(action.DisplayId, action.LayoutId, action.Path, effect, amount, action.Text);
     }
 
     bool SwitchLayout(MacroAction action)

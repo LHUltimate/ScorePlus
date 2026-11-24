@@ -446,6 +446,34 @@
                        Text="The chosen layout is put on air as soon as this step runs."/>
           </StackPanel>
 
+          <StackPanel x:Name="ScenePanel">
+            <TextBlock Text="STORYBOARD SCENE" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="SceneBox" Style="{StaticResource MacroCombo}"
+                      ToolTip="Publishes the scene's layout with that scene's transition and hold timing"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="A cue can take a whole scene, including the transition built for it, without switching layouts one by one."/>
+          </StackPanel>
+          <StackPanel x:Name="EffectPanel">
+            <TextBlock Text="LAYOUT" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="EffectLayoutBox" Style="{StaticResource MacroCombo}" SelectionChanged="EffectLayout_Changed"
+                      ToolTip="The layout whose layer is being changed"/>
+            <TextBlock Text="LAYER" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="EffectElementBox" Style="{StaticResource MacroCombo}"
+                      ToolTip="Every element in the chosen layout"/>
+            <TextBlock Text="EFFECT" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="EffectBox" Style="{StaticResource MacroCombo}">
+              <ComboBoxItem Content="None — clear the effect"/>
+              <ComboBoxItem Content="Blur"/>
+              <ComboBoxItem Content="Glow"/>
+            </ComboBox>
+            <TextBlock Text="STRENGTH · 0–100" Style="{StaticResource MacroLabel}"/>
+            <TextBox x:Name="EffectAmountBox" Style="{StaticResource MacroBox}" Text="50"/>
+            <TextBlock Text="GLOW COLOUR" Style="{StaticResource MacroLabel}"/>
+            <TextBox x:Name="EffectColorBox" Style="{StaticResource MacroBox}" Text="#FF38D7A3"
+                     ToolTip="A colour such as #FF38D7A3. Blur ignores it."/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="These are the effects WPF actually draws: blur and glow. A cue can set one layer or clear it again."/>
+          </StackPanel>
           <StackPanel x:Name="ClockPanel">
             <TextBlock Text="CLOCK" Style="{StaticResource MacroLabel}"/>
             <ComboBox x:Name="ClockBox" Style="{StaticResource MacroCombo}"/>
@@ -529,7 +557,7 @@
             <Button x:Name="UpdateStepButton" Style="{StaticResource MacroAction}" Content="Update selected" Click="UpdateStep_Click" Margin="0"/>
           </WrapPanel>
           <TextBlock Style="{StaticResource MacroHint}" Margin="0,8,0,0"
-                     Text="A macro starts from step 1 every time. Score, down, timeouts, clocks and clock messages, levels and mutes, ticker headlines, period, media, cameras, microphones, speaker buses, layouts, roster stats, custom values, console buttons, chained macros and any sport value can be mixed freely; a step that needs a missing player or source is skipped and the rest still run."/>
+                     Text="A macro starts from step 1 every time. Score, down, timeouts, clocks and clock messages, levels and mutes, ticker headlines, period, media, cameras, microphones, speaker buses, layouts, storyboard scenes with their transitions, blur/glow layer effects, roster stats, custom values, console buttons, chained macros and any sport value can be mixed freely; a step that needs a missing player or source is skipped and the rest still run."/>
         </StackPanel>
       </ScrollViewer>
     </Border>

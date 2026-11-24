@@ -46,7 +46,7 @@ public sealed class SportPickerWindow : Window
     public string GameName => _gameName.Text.Trim();
 
     /// <summary>The starting scorebug or stadium design chosen for this game.</summary>
-    public string TemplateId => (_template.SelectedItem as ScorebugPreset)?.Id ?? ScorebugPresets.Classic;
+    public string TemplateId => (_template.SelectedItem as ContentTemplate)?.Id ?? ScorebugPresets.Classic;
 
     sealed record SportChoice(string Id, string Label, string Detail)
     {
@@ -121,10 +121,10 @@ public sealed class SportPickerWindow : Window
             Foreground = new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2)),
             Margin = new Thickness(0, 0, 0, 5)
         });
-        _template.ItemsSource = ScorebugPresets.All;
-        _template.DisplayMemberPath = nameof(ScorebugPreset.Name);
+        _template.ItemsSource = ContentTemplateCatalog.All;
+        _template.DisplayMemberPath = nameof(Scoreboard.Core.ContentTemplate.Name);
         _template.SelectionChanged += (_, _) =>
-            _templateDetail.Text = (_template.SelectedItem as ScorebugPreset)?.Description ?? "";
+            _templateDetail.Text = (_template.SelectedItem as ContentTemplate)?.Description ?? "";
         _template.SelectedIndex = 0;
         root.Children.Add(_template);
         root.Children.Add(_templateDetail);

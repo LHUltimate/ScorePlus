@@ -70,6 +70,16 @@ public partial class MacroDock : UserControl
         public override string ToString() => Label;
     }
 
+    sealed record SceneChoice(string Id, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    sealed record EffectElementChoice(string Id, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
     sealed record CommandChoice(string Id, string Label)
     {
         public override string ToString() => Label;
@@ -197,6 +207,8 @@ public partial class MacroDock : UserControl
             new KindChoice(MacroActionKind.PutOnAir, "Media — take a clip, mic, speaker or camera on air"),
             new KindChoice(MacroActionKind.TakeOffAir, "Media — take a clip, mic, speaker or camera off air"),
             new KindChoice(MacroActionKind.SwitchLayout, "Layout — switch a display to a layout"),
+            new KindChoice(MacroActionKind.StoryboardScene, "Storyboard scene — take a scene and its transition"),
+            new KindChoice(MacroActionKind.LayerEffect, "Layer effect — set blur or glow on one layer"),
             new KindChoice(MacroActionKind.PenaltyFlag, "Flag — put a flag down or clear it"),
             new KindChoice(MacroActionKind.RosterStat, "Roster stat — change any player's stat"),
             new KindChoice(MacroActionKind.Control, "Console button — run any control action"),
@@ -885,6 +897,8 @@ public partial class MacroDock : UserControl
         VideoPanel.Visibility = mediaStep ? Visibility.Visible : Visibility.Collapsed;
         FlagPanel.Visibility = kind == MacroActionKind.PenaltyFlag ? Visibility.Visible : Visibility.Collapsed;
         LayoutPanel.Visibility = kind == MacroActionKind.SwitchLayout ? Visibility.Visible : Visibility.Collapsed;
+        ScenePanel.Visibility = kind == MacroActionKind.StoryboardScene ? Visibility.Visible : Visibility.Collapsed;
+        EffectPanel.Visibility = kind == MacroActionKind.LayerEffect ? Visibility.Visible : Visibility.Collapsed;
         CommandPanel.Visibility = kind == MacroActionKind.Control ? Visibility.Visible : Visibility.Collapsed;
         SportValuePanel.Visibility = kind == MacroActionKind.SportValue ? Visibility.Visible : Visibility.Collapsed;
         CustomValuePanel.Visibility = kind == MacroActionKind.CustomValue ? Visibility.Visible : Visibility.Collapsed;
@@ -925,6 +939,8 @@ public partial class MacroDock : UserControl
         if (kind is MacroActionKind.CopyValue) RefreshCopyValueChoices();
         if (kind is MacroActionKind.PenaltyFlag) RefreshFlagChoices();
         if (kind is MacroActionKind.SwitchLayout) RefreshLayoutChoices();
+        if (kind is MacroActionKind.StoryboardScene) RefreshSceneChoices();
+        if (kind is MacroActionKind.LayerEffect) RefreshEffectLayoutChoices();
         if (kind is MacroActionKind.MediaVolume) RefreshVolumeChoices();
         if (kind is MacroActionKind.RunMacro) RefreshMacroChoices();
         if (mediaStep) RefreshMediaChoices();
@@ -933,6 +949,7 @@ public partial class MacroDock : UserControl
         // reflects that rather than offering an option that does nothing.
         var directStep = AlwaysDirect(kind);
         if (directStep) BypassOutputBox.IsChecked = true;
+        else if (kind is not (MacroActionKind.Wait or MacroActionKind.Note)) BypassOutputBox.IsChecked = false;
         if (kind is MacroActionKind.Wait or MacroActionKind.Note) BypassOutputBox.IsChecked = false;
         BypassOutputBox.IsEnabled = !directStep && kind is not (MacroActionKind.Wait or MacroActionKind.Note);
     }
@@ -940,7 +957,8 @@ public partial class MacroDock : UserControl
     /// <summary>Steps that act immediately, with no staged value waiting for Update Output.</summary>
     static bool AlwaysDirect(MacroActionKind kind) => kind is MacroActionKind.PlayVideo
         or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir or MacroActionKind.SwitchLayout
-        or MacroActionKind.MediaVolume or MacroActionKind.Replay;
+        or MacroActionKind.MediaVolume or MacroActionKind.Replay
+        or MacroActionKind.StoryboardScene or MacroActionKind.LayerEffect;
 
     /// <summary>The step path for each entry in the replay action picker.</summary>
     static string ReplayPath(int index) => Math.Clamp(index, 0, 4) switch
@@ -1026,6 +1044,54 @@ public partial class MacroDock : UserControl
         LayoutBox.SelectedItem = choices.FirstOrDefault(choice =>
             string.Equals(choice.DisplayId, selectedDisplay, StringComparison.OrdinalIgnoreCase)
             && string.Equals(choice.LayoutId, selectedLayout, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
+    }
+
+    /// <summary>Every saved scene, so a cue can take the scene with its own transition.</summary>
+    void RefreshSceneChoices()
+    {
+        var selected = (SceneBox.SelectedItem as SceneChoice)?.Id;
+        var choices = _catalog?.Storyboard.Scenes
+            .Select((scene, index) => new SceneChoice(scene.Id, $"{index + 1}. {scene.Name} · {scene.Transition}"))
+            .ToList() ?? [];
+        SceneBox.ItemsSource = choices;
+        SceneBox.SelectedItem = choices.FirstOrDefault(choice =>
+            string.Equals(choice.Id, selected, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
+    }
+
+    void RefreshEffectLayoutChoices()
+    {
+        var selectedDisplay = (EffectLayoutBox.SelectedItem as LayoutChoice)?.DisplayId;
+        var selectedLayout = (EffectLayoutBox.SelectedItem as LayoutChoice)?.LayoutId;
+        var choices = _catalog?.Displays
+            .SelectMany(display => display.Layouts.Select(layout =>
+                new LayoutChoice(display.Id, layout.Id, $"{display.Name} · {layout.Name}")))
+            .ToList() ?? [];
+        EffectLayoutBox.ItemsSource = choices;
+        EffectLayoutBox.SelectedItem = choices.FirstOrDefault(choice =>
+            string.Equals(choice.DisplayId, selectedDisplay, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(choice.LayoutId, selectedLayout, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
+        RefreshEffectElements();
+    }
+
+    void RefreshEffectElements()
+    {
+        if (EffectLayoutBox.SelectedItem is not LayoutChoice choice)
+        {
+            EffectElementBox.ItemsSource = Array.Empty<EffectElementChoice>();
+            return;
+        }
+        var selected = (EffectElementBox.SelectedItem as EffectElementChoice)?.Id;
+        var layout = _catalog?.FindLayout(choice.DisplayId, choice.LayoutId);
+        var choices = layout?.Elements.Select(element =>
+            new EffectElementChoice(element.Id, $"{element.Name} · {element.Kind}")).ToList() ?? [];
+        EffectElementBox.ItemsSource = choices;
+        EffectElementBox.SelectedItem = choices.FirstOrDefault(element =>
+            string.Equals(element.Id, selected, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
+    }
+
+    void EffectLayout_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_syncing) RefreshEffectElements();
     }
 
     void SyncRoster()
@@ -1736,6 +1802,11 @@ public partial class MacroDock : UserControl
         var customClock = CustomClockBox.SelectedItem as CustomValueChoice;
         var flagType = FlagTypeBox.SelectedItem as string ?? "";
         var layout = LayoutBox.SelectedItem as LayoutChoice;
+        var scene = SceneBox.SelectedItem as SceneChoice;
+        var effectLayout = EffectLayoutBox.SelectedItem as LayoutChoice;
+        var effectElement = EffectElementBox.SelectedItem as EffectElementChoice;
+        var effectIndex = Math.Clamp(EffectBox.SelectedIndex, 0, 2);
+        var effectAmount = Math.Clamp(int.TryParse(EffectAmountBox.Text, out var parsedEffect) ? parsedEffect : 50, 0, 100);
         var value = int.TryParse(ValueBox.Text, out var parsedValue) ? parsedValue : 0;
         if (kind == MacroActionKind.SetGameClock && TryParseClock(ValueBox.Text, out var clockSeconds)) value = clockSeconds;
         if (kind == MacroActionKind.PenaltyFlag) value = ClearFlagBox.IsChecked == true ? 0 : 1;
@@ -1744,6 +1815,7 @@ public partial class MacroDock : UserControl
         if (kind == MacroActionKind.ClockMessage) value = Math.Clamp(ClockMessageBox.SelectedIndex, 0, 2);
         if (kind == MacroActionKind.MediaVolume)
             value = Math.Clamp(int.TryParse(VolumePercentBox.Text, out var percent) ? percent : 100, 0, 100);
+        if (kind == MacroActionKind.LayerEffect) value = effectIndex;
         var replaySeconds = double.TryParse(ReplaySecondsBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var replayBack)
             ? Math.Clamp(replayBack, 0, 600) : 8;
         var replaySpeed = double.TryParse(ReplaySpeedBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var replayRate)
@@ -1755,13 +1827,16 @@ public partial class MacroDock : UserControl
             MacroActionKind.TickerNews => TickerTextBox.Text.Trim(),
             MacroActionKind.Note => NoteTextBox.Text.Trim(),
             MacroActionKind.CopyValue => copySource?.Source.Token ?? "",
+            MacroActionKind.LayerEffect => (EffectColorBox.Text ?? "").Trim(),
             _ => ""
         };
         return new MacroAction
         {
             Kind = kind,
             Home = SideBox.SelectedIndex != 1,
-            Amount = int.TryParse(AmountBox.Text, out var amount) ? amount : 1,
+            Amount = kind == MacroActionKind.LayerEffect
+                ? effectAmount
+                : int.TryParse(AmountBox.Text, out var amount) ? amount : 1,
             Value = value,
             Text = text,
             Mute = kind == MacroActionKind.MediaVolume && volumeMode != 0,
@@ -1770,6 +1845,8 @@ public partial class MacroDock : UserControl
             {
                 MacroActionKind.PlayVideo or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir => VideoPathBox.Text.Trim(),
                 MacroActionKind.SwitchLayout => layout?.LayoutId ?? "",
+                MacroActionKind.StoryboardScene => scene?.Id ?? "",
+                MacroActionKind.LayerEffect => effectElement?.Id ?? "",
                 MacroActionKind.PenaltyFlag => flagType,
                 MacroActionKind.Control => command?.Id ?? "",
                 MacroActionKind.SportValue => sportValue?.Id ?? "",
@@ -1788,6 +1865,8 @@ public partial class MacroDock : UserControl
                 : kind == MacroActionKind.CustomValue ? customValue?.Label ?? ""
                 : kind == MacroActionKind.CopyValue ? copyTarget?.Label ?? ""
                 : kind == MacroActionKind.SwitchLayout ? layout?.Label ?? ""
+                : kind == MacroActionKind.StoryboardScene ? scene?.Label ?? ""
+                : kind == MacroActionKind.LayerEffect ? effectElement?.Label ?? ""
                 : kind == MacroActionKind.PenaltyFlag ? flagType
                 : kind == MacroActionKind.MediaVolume ? volumeMedia?.Label ?? ""
                 : kind == MacroActionKind.RunMacro ? chained?.Label ?? ""
@@ -1795,7 +1874,9 @@ public partial class MacroDock : UserControl
                     && string.Equals(media.Path, VideoPathBox.Text.Trim(), StringComparison.OrdinalIgnoreCase)
                     ? media.Label
                     : "",
-            DisplayId = kind == MacroActionKind.SwitchLayout ? layout?.DisplayId ?? "" : "",
+            DisplayId = kind == MacroActionKind.SwitchLayout ? layout?.DisplayId ?? ""
+                : kind == MacroActionKind.LayerEffect ? effectLayout?.DisplayId ?? "" : "",
+            LayoutId = kind == MacroActionKind.LayerEffect ? effectLayout?.LayoutId ?? "" : "",
             PlayerId = (PlayerBox.SelectedItem as PlayerChoice)?.Id ?? "",
             PlayerName = (PlayerBox.SelectedItem as PlayerChoice)?.Label ?? "",
             StatName = StatBox.Text.Trim(),
@@ -1833,6 +1914,7 @@ public partial class MacroDock : UserControl
         action.Value = replacement.Value;
         action.Path = replacement.Path;
         action.DisplayId = replacement.DisplayId;
+        action.LayoutId = replacement.LayoutId;
         action.Label = replacement.Label;
         action.PlayerId = replacement.PlayerId;
         action.PlayerName = replacement.PlayerName;
@@ -1913,6 +1995,27 @@ public partial class MacroDock : UserControl
                 LayoutBox.SelectedItem = LayoutBox.Items.OfType<LayoutChoice>().FirstOrDefault(choice =>
                     string.Equals(choice.DisplayId, action.DisplayId, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(choice.LayoutId, action.Path, StringComparison.OrdinalIgnoreCase));
+            }
+            if (action.Kind == MacroActionKind.StoryboardScene)
+            {
+                RefreshSceneChoices();
+                SceneBox.SelectedItem = SceneBox.Items.OfType<SceneChoice>()
+                    .FirstOrDefault(choice => string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase))
+                    ?? SceneBox.Items.OfType<SceneChoice>().FirstOrDefault(choice =>
+                        string.Equals(choice.Label, action.Label, StringComparison.OrdinalIgnoreCase));
+            }
+            if (action.Kind == MacroActionKind.LayerEffect)
+            {
+                RefreshEffectLayoutChoices();
+                EffectLayoutBox.SelectedItem = EffectLayoutBox.Items.OfType<LayoutChoice>().FirstOrDefault(choice =>
+                    string.Equals(choice.DisplayId, action.DisplayId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(choice.LayoutId, action.LayoutId, StringComparison.OrdinalIgnoreCase));
+                RefreshEffectElements();
+                EffectElementBox.SelectedItem = EffectElementBox.Items.OfType<EffectElementChoice>()
+                    .FirstOrDefault(choice => string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase));
+                EffectBox.SelectedIndex = Math.Clamp(action.Value, 0, 2);
+                EffectAmountBox.Text = Math.Clamp(action.Amount, 0, 100).ToString();
+                EffectColorBox.Text = string.IsNullOrWhiteSpace(action.Text) ? "#FF38D7A3" : action.Text;
             }
             if (action.Kind == MacroActionKind.ClockControl)
             {

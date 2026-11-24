@@ -5,7 +5,7 @@ using Scoreboard.Core;
 namespace Scoreboard.Desktop;
 
 /// <summary>One choice in the studio's font picker. <see cref="Source"/> is what an element stores.</summary>
-public sealed record FontChoice(string Label, string Source, bool Imported = false)
+public sealed record FontChoice(string Label, string Source, bool Imported = false, string? FilePath = null)
 {
     public override string ToString() => Imported ? $"{Label}  ·  imported" : Label;
 }
@@ -72,7 +72,7 @@ public static class FontCatalog
             catch { /* a damaged file is skipped, not fatal */ }
             if (family is null) continue;
             var label = family.Source.Contains('#') ? family.Source[(family.Source.LastIndexOf('#') + 1)..] : Path.GetFileNameWithoutExtension(path);
-            yield return new FontChoice(label, family.Source, Imported: true);
+            yield return new FontChoice(label, family.Source, Imported: true, path);
         }
     }
 
