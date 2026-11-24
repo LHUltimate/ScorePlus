@@ -379,13 +379,6 @@ public sealed class ScorebugElement
     public List<ElementLogicRule> Logic { get; set; } = [];
 
     /// <summary>
-    /// A region of the canvas composed from another layout. Zones reuse the live-layout element,
-    /// so switching one zone never touches the rest of the board.
-    /// </summary>
-    public bool IsZone { get; set; }
-    public string ZoneName { get; set; } = "";
-
-    /// <summary>
     /// How this layer composites over the layers below it. Normal paints as-is; the other modes
     /// are applied by the canvas compositor where the platform supports them.
     /// </summary>
@@ -1594,6 +1587,26 @@ public sealed class ScorebugCatalog
         if (index < 0 || index >= layouts.Count || string.IsNullOrWhiteSpace(name)) return;
         layouts[index].Name = name.Trim();
         Save(); Changed?.Invoke();
+    }
+
+    /// <summary>Reorders the layouts shown to the operator, for a custom switcher order.</summary>
+    public bool MoveLayout(int index, int targetIndex)
+    {
+        var display = ActiveDisplay;
+        var layouts = display.Layouts;
+        if (index < 0 || index >= layouts.Count || targetIndex < 0 || targetIndex >= layouts.Count || index == targetIndex)
+            return false;
+        var layout = layouts[index];
+        layouts.RemoveAt(index);
+        layouts.Insert(targetIndex, layout);
+        if (display.ActiveIndex == index) display.ActiveIndex = targetIndex;
+        else if (index < display.ActiveIndex && targetIndex >= display.ActiveIndex) display.ActiveIndex--;
+        else if (index > display.ActiveIndex && targetIndex <= display.ActiveIndex) display.ActiveIndex++;
+        if (display.PublishedIndex == index) display.PublishedIndex = targetIndex;
+        else if (index < display.PublishedIndex && targetIndex >= display.PublishedIndex) display.PublishedIndex--;
+        else if (index > display.PublishedIndex && targetIndex <= display.PublishedIndex) display.PublishedIndex++;
+        Save(); Changed?.Invoke();
+        return true;
     }
 
     /// <summary>

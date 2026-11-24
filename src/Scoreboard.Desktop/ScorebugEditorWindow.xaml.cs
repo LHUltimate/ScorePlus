@@ -547,10 +547,10 @@ public partial class ScorebugEditorWindow : Window
     }
 
     /// <summary>Where the value sits inside its box, offered beside the text content.</summary>
-    sealed record AlignOption(ScorebugTextAlign Align, string Label)
-    {
-        public override string ToString() => Label;
-    }
+        sealed record AlignOption(ScorebugTextAlign Align, string Label) { public override string ToString() => Label; }
+    sealed record LogicFieldChoice(AutomationField Field, string Label) { public override string ToString() => Label; }
+    sealed record LogicOperatorChoice(AutomationOperator Operator, string Label) { public override string ToString() => Label; }
+    sealed record LogicActionChoice(ElementLogicAction Action, string Label) { public override string ToString() => Label; }
 
     static readonly AlignOption[] AlignOptions =
     [
@@ -824,6 +824,7 @@ public partial class ScorebugEditorWindow : Window
         RefreshMotionLists();
         RefreshLogicPanel();
         RefreshBlendPanel();
+        RefreshEffectPanel();
         SyncLayoutPicker();
         SyncDisplayPicker();
         SyncScoreVideos();
@@ -1060,7 +1061,7 @@ public partial class ScorebugEditorWindow : Window
             var layout = display.Layouts[Math.Clamp(display.ActiveIndex, 0, Math.Max(0, display.Layouts.Count - 1))];
             var tile = new Button
             {
-                Width = 154, Height = 94, Padding = new Thickness(4), Margin = new Thickness(0, 0, 6, 0),
+                Width = 154, Height = 108, Padding = new Thickness(4), Margin = new Thickness(0, 0, 6, 0),
                 Background = Brushes.Transparent, Cursor = Cursors.Hand,
                 BorderThickness = new Thickness(active ? 2 : 1),
                 BorderBrush = active ? null : new SolidColorBrush(Color.FromRgb(0x2E, 0x3B, 0x4A)),
@@ -1070,7 +1071,7 @@ public partial class ScorebugEditorWindow : Window
             var image = new Image
             {
                 Source = layout is null ? null : ThumbnailFor(layout),
-                Width = 142, Height = 72, Stretch = Stretch.UniformToFill
+                Width = 142, Height = 80, Stretch = Stretch.UniformToFill
             };
             RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
             var nameRow = new DockPanel { Margin = new Thickness(2, 3, 2, 0) };
@@ -1085,11 +1086,13 @@ public partial class ScorebugEditorWindow : Window
             nameRow.Children.Add(dot);
             nameRow.Children.Add(new TextBlock
             {
-                Text = $"{index + 1}. {display.Name}", FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis,
-                Foreground = active ? null : new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2))
+                Text = $"{index + 1}. {display.Name}", FontSize = 10, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = active
+                    ? new SolidColorBrush(Color.FromRgb(0x38, 0xD7, 0xA3))
+                    : new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2))
             });
             var stack = new StackPanel();
-            stack.Children.Add(new Border { Height = 72, ClipToBounds = true, Background = new SolidColorBrush(Color.FromRgb(7, 11, 16)), Child = image });
+            stack.Children.Add(new Border { Height = 80, ClipToBounds = true, Background = new SolidColorBrush(Color.FromRgb(7, 11, 16)), Child = image });
             stack.Children.Add(nameRow);
             tile.Content = stack;
             ThemeManager.SetSkipTheme(tile, true);
@@ -1690,6 +1693,10 @@ public partial class ScorebugEditorWindow : Window
         _loading=false;
         UpdatePropertyVisibility();
         RefreshColorSwatches();
+        // Picking an element on the canvas does not raise Layers.SelectionChanged (the layer list is
+        // synced under a guard), so these two programmatic panels must follow every LoadProperties.
+        RefreshBlendPanel();
+        RefreshEffectPanel();
     }
 
     /// <summary>
@@ -1764,6 +1771,7 @@ public partial class ScorebugEditorWindow : Window
         LogoSection.Visibility=kind==ScorebugElementKind.Logo?Visibility.Visible:Visibility.Collapsed;
         PlayerPhotoSection.Visibility=kind==ScorebugElementKind.Image?Visibility.Visible:Visibility.Collapsed;
         LayoutSection.Visibility=kind==ScorebugElementKind.Layout?Visibility.Visible:Visibility.Collapsed;
+        NestedSectionTitle.Text="LIVE LAYOUT";
         ShapePanel.Visibility=kind==ScorebugElementKind.Shape?Visibility.Visible:Visibility.Collapsed;
         var rectangleShape=kind==ScorebugElementKind.Shape&&e?.Shape==ScorebugShape.Rectangle;
         CornerRadiusLabel.Visibility=rectangleShape?Visibility.Visible:Visibility.Collapsed;
@@ -3521,13 +3529,25 @@ public partial class ScorebugEditorWindow : Window
             Foreground = new SolidColorBrush(Color.FromRgb(147, 160, 178)),
             FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 0, 10, 6)
         });
-        _logicList = new ListBox { Height = 96, Margin = new Thickness(10, 0, 10, 4) };
+        _logicList = new ListBox
+        {
+            Height = 112, Margin = new Thickness(10, 0, 10, 4),
+            Background = new SolidColorBrush(Color.FromRgb(0x10, 0x15, 0x1D)),
+            Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFB)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0x3B, 0x4A))
+        };
+        _logicList.PreviewMouseWheel += (_, args) => ScrollNestedList(_logicList, args);
         panel.Children.Add(_logicList);
-        _logicField = Choice(Enum.GetValues<AutomationField>().Cast<object>().ToArray());
-        _logicOperator = Choice(Enum.GetValues<AutomationOperator>().Cast<object>().ToArray());
+        // The picker prints the operator label ("Play Clock"), not the enum name ("PlayClock").
+        _logicField = Choice(AutomationRules.Fields.Select(field =>
+            (object)new LogicFieldChoice(field.Field, field.Label)).ToArray());
+        _logicOperator = Choice(Enum.GetValues<AutomationOperator>()
+            .Select(op => (object)new LogicOperatorChoice(op, AutomationRules.OperatorLabel(op))).ToArray());
         _logicValue = new TextBox { Margin = new Thickness(10, 0, 10, 4), MinHeight = 28, Padding = new Thickness(8, 4, 8, 4) };
-        _logicEnter = Choice(Enum.GetValues<ElementLogicAction>().Cast<object>().ToArray());
-        _logicExit = Choice(Enum.GetValues<ElementLogicAction>().Cast<object>().ToArray());
+        _logicEnter = Choice(Enum.GetValues<ElementLogicAction>()
+            .Select(action => (object)new LogicActionChoice(action, LogicActionLabel(action))).ToArray());
+        _logicExit = Choice(Enum.GetValues<ElementLogicAction>()
+            .Select(action => (object)new LogicActionChoice(action, LogicActionLabel(action))).ToArray());
         panel.Children.Add(Label("Condition field"));
         panel.Children.Add(_logicField);
         panel.Children.Add(Label("Operator"));
@@ -3570,10 +3590,35 @@ public partial class ScorebugEditorWindow : Window
     {
         var condition = rule.Conditions.Count == 0 ? "no condition" : string.Join(" and ", rule.Conditions.Select(c =>
             AutomationRules.IsTextField(c.Field)
-                ? $"{c.Field} {c.Operator} {c.Text}"
-                : $"{c.Field} {c.Operator} {c.Value:0.##}"));
+                ? $"{AutomationRules.FieldLabel(c.Field)} {AutomationRules.OperatorLabel(c.Operator)} {c.Text}"
+                : $"{AutomationRules.FieldLabel(c.Field)} {AutomationRules.OperatorLabel(c.Operator)} {c.Value:0.##}"));
         var label = string.IsNullOrWhiteSpace(rule.Label) ? "" : $"{rule.Label}: ";
-        return $"{label}{condition} → {rule.Enter}, then {rule.Exit}";
+        return $"{label}{condition} → {LogicActionLabel(rule.Enter)}, then {LogicActionLabel(rule.Exit)}";
+    }
+
+    static string LogicActionLabel(ElementLogicAction action) => action switch
+    {
+        ElementLogicAction.None => "None",
+        ElementLogicAction.Show => "Show",
+        ElementLogicAction.Hide => "Hide",
+        ElementLogicAction.Pulse => "Pulse",
+        ElementLogicAction.Flash => "Flash",
+        _ => action.ToString()
+    };
+
+    /// <summary>Wheel over a short rule list moves the property page instead of stopping dead.</summary>
+    static void ScrollNestedList(ListBox list, MouseWheelEventArgs e)
+    {
+        if (e.Handled) return;
+        var own = Descendants<ScrollViewer>(list).FirstOrDefault();
+        if (own is not null && own.ScrollableHeight > 0.5) return;
+        for (var parent = VisualTreeHelper.GetParent(list); parent is not null; parent = VisualTreeHelper.GetParent(parent))
+        {
+            if (parent is not ScrollViewer scroller || scroller.ScrollableHeight <= 0.5) continue;
+            e.Handled = true;
+            scroller.ScrollToVerticalOffset(scroller.VerticalOffset - e.Delta / 3.0);
+            return;
+        }
     }
 
     void RefreshLogicPanel()
@@ -3588,7 +3633,10 @@ public partial class ScorebugEditorWindow : Window
     void AddLogicRule()
     {
         if (Selected is not { } element) return;
-        if (_logicField?.SelectedItem is not AutomationField field || _logicOperator?.SelectedItem is not AutomationOperator op) return;
+        if (_logicField?.SelectedItem is not LogicFieldChoice fieldChoice
+            || _logicOperator?.SelectedItem is not LogicOperatorChoice operatorChoice) return;
+        var field = fieldChoice.Field;
+        var op = operatorChoice.Operator;
         var condition = new AutomationCondition { Field = field, Operator = op };
         var text = (_logicValue?.Text ?? "").Trim();
         if (AutomationRules.IsTextField(field)) condition.Text = text;
@@ -3596,8 +3644,8 @@ public partial class ScorebugEditorWindow : Window
         var rule = new ElementLogicRule
         {
             Conditions = [condition],
-            Enter = _logicEnter?.SelectedItem is ElementLogicAction enter ? enter : ElementLogicAction.Pulse,
-            Exit = _logicExit?.SelectedItem is ElementLogicAction exit ? exit : ElementLogicAction.None
+            Enter = _logicEnter?.SelectedItem is LogicActionChoice enter ? enter.Action : ElementLogicAction.Pulse,
+            Exit = _logicExit?.SelectedItem is LogicActionChoice exit ? exit.Action : ElementLogicAction.None
         };
         var id = element.Id;
         _catalog.Update(layout => layout.Elements.FirstOrDefault(item => item.Id == id)?.Logic.Add(rule));
@@ -3616,30 +3664,6 @@ public partial class ScorebugEditorWindow : Window
         });
         RefreshLogicPanel();
         RefreshAllVisuals();
-    }
-
-    /// <summary>A zone is a live layout region: it follows its source layout and can be swapped on its own.</summary>
-    void AddZone_Click(object sender, RoutedEventArgs e)
-    {
-        var choice = NestedLayoutCandidates().FirstOrDefault();
-        if (choice.Id is null)
-        {
-            NoticeWindow.Tell(this, "No layout to use", "Create another layout first, then add a zone from it.");
-            return;
-        }
-        var source = _catalog.FindLayout(choice.Id);
-        if (source is null) return;
-        var count = _catalog.Layout.Elements.Count(item => item.IsZone);
-        var width = Math.Max(180, Math.Round(_catalog.Layout.Width * 0.36));
-        var height = Math.Max(110, Math.Round(_catalog.Layout.Height * 0.30));
-        Add(new ScorebugElement
-        {
-            Name = $"Zone {count + 1} · {source.Name}", Kind = ScorebugElementKind.Layout,
-            IsZone = true, ZoneName = $"Zone {count + 1}", Content = "",
-            NestedLayoutId = source.Id, NestedPreserveAspect = true,
-            X = 32 + (count % 2) * 40, Y = 32 + (count % 3) * 40,
-            Width = width, Height = height, TransparentBackground = true, BorderThickness = 1
-        });
     }
 
     void Add(ScorebugElement item)

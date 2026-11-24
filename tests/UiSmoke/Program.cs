@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.IO;
+using System.Net.Http;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -104,6 +105,32 @@ internal static class Program
             smokeEditor.UpdateLayout();
             if (smokeTarget.TransitionDown != ScorebugTransition.SlideUp)
                 throw new Exception($"FAIL: the down transition did not stick ({smokeTarget.TransitionDown})");
+            // The programmatic blend/effect panels must follow canvas selection. They used to stay
+            // disabled because only the layer list refreshed them.
+            var blendBox = FindAll<ComboBox>(smokeEditor).First(box => box.Items.Contains("Multiply"));
+            var effectBox = FindAll<ComboBox>(smokeEditor).First(box => box.Items.Contains("Glow"));
+            if (!blendBox.IsEnabled || !effectBox.IsEnabled)
+                throw new Exception("FAIL: the layer blend or effects picker is still disabled after selection");
+            blendBox.SelectedItem = "Multiply";
+            effectBox.SelectedItem = "Glow";
+            smokeEditor.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(80));
+            if (smokeTarget.BlendMode != "Multiply" || smokeTarget.Effect != LayerEffectKind.Glow)
+                throw new Exception($"FAIL: the blend/effect picker did not reach the layer ({smokeTarget.BlendMode}, {smokeTarget.Effect})");
+            // Wheel over a closed picker must move the properties panel instead of being swallowed.
+            var propertyScroll = FindAll<ScrollViewer>(smokeEditor).First(scroller => scroller.Content is StackPanel { Name: "PropertyPanel" });
+            propertyScroll.ScrollToTop();
+            smokeEditor.UpdateLayout();
+            blendBox.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -120)
+            {
+                RoutedEvent = UIElement.PreviewMouseWheelEvent
+            });
+            Pump(TimeSpan.FromMilliseconds(80));
+            if (propertyScroll.VerticalOffset <= 0)
+                throw new Exception("FAIL: a wheel over a closed picker did not scroll the element properties");
+            var logicField = FindAll<ComboBox>(smokeEditor).First(box => box.Items.OfType<object>().Any(item => item.ToString() == "Play Clock"));
+            if (logicField.Items.OfType<object>().Any(item => item.ToString() == "PlayClock"))
+                throw new Exception("FAIL: a condition still prints its enum name instead of Play Clock");
             smokeEditor.Close();
             // The rebuilt motion makers are code-built windows, so opening them is itself a smoke
             // test: the layout timeline must draw, and a temporary piece must join the clip.
@@ -4082,7 +4109,7 @@ internal static class Program
                 var ruleCombos = FindAll<ComboBox>(nodeWindow).Where(combo => combo.SelectedItem is not null).ToArray();
                 if (ruleCombos.Any(combo => combo.SelectedItem.ToString()?.Contains("Choice", StringComparison.Ordinal) == true))
                     throw new Exception("FAIL: a node dropdown is showing its CLR type name");
-                if (!ruleCombos.Any(combo => combo.SelectedItem.ToString() == "Play clock"))
+                if (!ruleCombos.Any(combo => combo.SelectedItem.ToString() == "Play Clock"))
                     throw new Exception("FAIL: the node field dropdown is not showing the field label");
                 if (!FindAll<Button>(nodeWindow).Any(button => (button.Content as string) == "Export…")
                     || !FindAll<Button>(nodeWindow).Any(button => (button.Content as string) == "Import…"))
@@ -6733,7 +6760,7 @@ internal static class Program
                 throw new Exception("FAIL: a scene layer has no editable WPF effect choice");
             contentStudio.Close();
 
-            for (var extra = 0; extra < 7; extra++) smokeCatalog.AddLayout($"Preview {extra + 1}");
+            for (var extra = 0; extra < 8; extra++) smokeCatalog.AddLayout($"Preview {extra + 1}");
             var liveSwitch = new LiveSwitchWindow(smokeCatalog, smokeEngine, "Dark");
             ShowForSmoke(liveSwitch);
             liveSwitch.UpdateLayout();
@@ -6748,6 +6775,13 @@ internal static class Program
             var multiviewPageLabel = (TextBlock)liveSwitch.FindName("MultiviewPageLabel")!;
             if (switchSources.Children.Count <= 6 || multiviewPageLabel.Text == "1 / 1")
                 throw new Exception($"FAIL: more than six sources are not paged in the multiview ({switchSources.Children.Count} sources, {multiviewPageLabel.Text})");
+            if (switchWall.Children.Count != 8)
+                throw new Exception($"FAIL: the multiview should show eight source spots per page ({switchWall.Children.Count})");
+            var firstPreview = smokeCatalog.ActiveDisplay.Layouts[0].Name;
+            FindAll<Button>(liveSwitch).First(button => button.Content as string == "↓").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            liveSwitch.UpdateLayout();
+            if (smokeCatalog.ActiveDisplay.Layouts[0].Name == firstPreview)
+                throw new Exception("FAIL: the Live Switch custom layout order did not move the previewed source");
             var gameData = (StackPanel)liveSwitch.FindName("GameDataPanel")!;
             if (gameData.Children.Count < 5)
                 throw new Exception("FAIL: the Live Switch game data panel does not show the current game values");
@@ -6767,11 +6801,28 @@ internal static class Program
             Pump(TimeSpan.FromMilliseconds(150));
             var outputs = (StackPanel)liveChannel.FindName("OutputStrip")!;
             var actions = (StackPanel)liveChannel.FindName("ActionPanel")!;
+            var healthPanel = (StackPanel)liveChannel.FindName("HealthPanel")!;
             var events = (ListBox)liveChannel.FindName("EventList")!;
             if (outputs.Children.Count == 0 || actions.Children.Count == 0)
                 throw new Exception("FAIL: the Live Channel outputs or graphics actions are empty");
             if (events.Items.Count == 0)
                 throw new Exception("FAIL: the Live Channel event feed did not show the game's events");
+            if (healthPanel.Children.Count == 0)
+                throw new Exception("FAIL: the Live Channel has no display/channel health rows");
+            var smokeCamera = BitmapSource.Create(2, 2, 96, 96, PixelFormats.Bgra32, null,
+                new byte[] { 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255 }, 8);
+            var frameMethod = typeof(LiveChannelWindow).GetMethod("JpegFrame", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("FAIL: Live Channel has no frame renderer");
+            var composite = (byte[])frameMethod.Invoke(liveChannel,
+                new object?[] { new ScorebugLayout { Width = 480, Height = 270, Background = "#00000000" }, 480, 270, smokeCamera })!;
+            if (composite.Length == 0)
+                throw new Exception("FAIL: the channel camera compositor produced no JPEG");
+            using var compositeStream = new MemoryStream(composite);
+            var decoded = new JpegBitmapDecoder(compositeStream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            var corner = new byte[4];
+            decoded.Frames[0].CopyPixels(new Int32Rect(0, 0, 1, 1), corner, 4, 0);
+            if (corner[2] < 180)
+                throw new Exception($"FAIL: the camera was not rendered behind the scorebug (red={corner[2]})");
             liveChannel.Close();
 
             var controlRoom = new ControlRoomWindow(smokeCatalog, smokeEngine, null, null, "Dark");
@@ -6787,6 +6838,101 @@ internal static class Program
                 throw new Exception("FAIL: the Show Control Map did not read the show's displays or content");
             controlRoom.Close();
             Console.WriteLine("PASS: Content Studio, Live Switch, Live Channel and the Show Control Map open with their galleries, multiviews and status");
+
+            // Stage 4: the DATA tab owns a real source editor and viewer, and the Venue window owns
+            // the fleet, rotations, schedules and proof surface.
+            var dataShell = new MainWindow(LaunchMode.New) { Width = 1280, Height = 800 };
+            ShowForSmoke(dataShell);
+            dataShell.UpdateLayout();
+            ((Button)dataShell.FindName("DataTab")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            dataShell.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (dataShell.FindName("DataHost") is not ContentControl { Content: DataDock dataDock })
+                throw new Exception("FAIL: the DATA tab does not host the data source editor");
+            var smokeFeed = dataDock.Store.Add("Smoke source");
+            smokeFeed.Kind = DataFeedKind.Manual;
+            smokeFeed.Location = "HomeScore=21";
+            smokeFeed.Mappings.Add(new DataFeedMapping { Key = "HomeScore", Target = DataFeedTarget.HomeScore });
+            smokeFeed.Values = DataFeedParser.Parse(DataFeedKind.Manual, smokeFeed.Location).ToList();
+            dataDock.RefreshView();
+            dataDock.UpdateLayout();
+            if (dataDock.FindName("FeedList") is not ListBox || dataDock.FindName("ValueList") is not ListBox
+                || dataDock.FindName("MappingPanel") is not StackPanel mappingPanel || mappingPanel.Children.Count == 0)
+                throw new Exception("FAIL: the DATA tab did not build its source list, mapping editor and viewer");
+            if (dataDock.FindName("CloudFeedBox") is not TextBox || dataDock.FindName("CloudEnabledBox") is not CheckBox
+                || dataDock.FindName("TickerNewsBox") is not TextBox || dataDock.FindName("TickerGamesPanel") is not StackPanel)
+                throw new Exception("FAIL: the DATA tab does not own the League Cloud and ticker controls");
+            FindAll<Button>(dataDock).First(button => button.Content as string == "Apply mapped values")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (dataShell.Engine.State.HomeScore != 21)
+                throw new Exception("FAIL: a DATA-tab mapping did not reach the game");
+            dataShell.Close();
+
+            var venueFile = Path.Combine(Path.GetTempPath(), $"smoke-venue-{Guid.NewGuid():N}.json");
+            try
+            {
+                var venueStore = new VenueStore(venueFile);
+                var venuePlaylist = venueStore.AddPlaylist("Smoke rotation");
+                venuePlaylist.Items.Add(new VenuePlaylistItem
+                {
+                    Kind = VenueItemKind.Layout, LayoutId = smokeCatalog.Layout.Id,
+                    Label = smokeCatalog.Layout.Name, Seconds = 10, Sponsor = "Smoke sponsor"
+                });
+                var venueEngine = new VenueEngine(smokeCatalog, smokeEngine, venueStore);
+                venueEngine.BeginPlaylist(venuePlaylist.Id, DateTimeOffset.Now);
+                var venueWindow = new VenueWindow(venueEngine, smokeCatalog, smokeEngine, null, null, "Dark");
+                ShowForSmoke(venueWindow);
+                venueWindow.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(120));
+                if (venueWindow.FindName("DisplayPanel") is not WrapPanel fleet || fleet.Children.Count == 0)
+                    throw new Exception("FAIL: the Venue window has no fleet cards");
+                var venueTabs = (TabControl)venueWindow.FindName("Tabs")!;
+                venueTabs.SelectedIndex = 1;
+                venueWindow.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(80));
+                if (venueWindow.FindName("PlaylistList") is not ListBox playlists || playlists.Items.Count == 0)
+                    throw new Exception("FAIL: the Venue window did not list its playlist");
+                venueTabs.SelectedIndex = 4;
+                venueWindow.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(80));
+                if (venueWindow.FindName("ProofList") is not ListBox proof || proof.Items.Count == 0)
+                    throw new Exception("FAIL: the Venue window has no proof-of-play line");
+                venueWindow.Close();
+            }
+            finally { try { if (File.Exists(venueFile)) File.Delete(venueFile); } catch { } }
+            Console.WriteLine("PASS: the DATA tab maps a source into the game and Venue shows fleet, rotation and proof");
+
+            var comparison = new TeamComparisonWindow(smokeEngine, "Dark");
+            ShowForSmoke(comparison);
+            comparison.UpdateLayout();
+            if (!FindAll<TextBlock>(comparison).Any(text => text.Text == "TEAM COMPARISON"))
+                throw new Exception("FAIL: the sport-data comparison view did not render");
+            comparison.Close();
+            Console.WriteLine("PASS: the DATA tab opens the sport-data team and player comparison view");
+
+            var headend = new ChannelStreamServer();
+            try
+            {
+                if (!headend.Start(18099)) throw new Exception($"FAIL: the channel headend did not start ({headend.Error})");
+                headend.HealthProvider = () => [new ChannelHealth("program", "Program", "Broadcast Classic", "READY", "http://127.0.0.1:18099/display/program.mjpeg")];
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                var health = client.GetStringAsync("http://127.0.0.1:18099/health").GetAwaiter().GetResult();
+                if (!health.Contains("Program", StringComparison.Ordinal) || !health.Contains("Broadcast Classic", StringComparison.Ordinal))
+                    throw new Exception("FAIL: the channel headend did not report display health");
+                headend.UpdateFrame("program", [0xFF, 0xD8, 0xFF, 0xD9]);
+                using var streamResponse = client.GetAsync("http://127.0.0.1:18099/display/program.mjpeg",
+                    HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+                if (!streamResponse.IsSuccessStatusCode
+                    || streamResponse.Content.Headers.ContentType?.MediaType != "multipart/x-mixed-replace")
+                    throw new Exception("FAIL: the channel headend did not serve an MJPEG stream");
+                using var stream = streamResponse.Content.ReadAsStream();
+                var frame = new byte[128];
+                if (stream.Read(frame, 0, frame.Length) <= 0)
+                    throw new Exception("FAIL: the channel headend produced no MJPEG bytes");
+                Console.WriteLine("PASS: Live Channel exposes a real HTTP/MJPEG headend with display health");
+            }
+            finally { headend.Dispose(); }
 
             Console.WriteLine("ALL UI SMOKE CHECKS PASSED");
 

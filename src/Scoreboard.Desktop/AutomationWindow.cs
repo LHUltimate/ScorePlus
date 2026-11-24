@@ -167,7 +167,7 @@ public sealed class AutomationWindow : Window
         header.Children.Add(_displayLabel);
         header.Children.Add(new TextBlock
         {
-            Text = "Conditions decide when actions fire. A condition marked “Wait until” holds the rule after it matches, then its “After wait” actions run.",
+            Text = "Conditions decide when actions fire. A condition marked “Wait until” holds the rule after it matches, then its “After Wait” actions run.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 10,
             Foreground = MutedBrush,
@@ -200,6 +200,15 @@ public sealed class AutomationWindow : Window
         _ruleList.FontSize = 12;
         _ruleList.BorderBrush = EdgeBrush;
         _ruleList.Background = PanelBrush;
+        _ruleList.PreviewMouseWheel += (_, e) =>
+        {
+            var viewer = FindScrollViewer(_ruleList);
+            if (viewer is null) return;
+            var canScroll = viewer.ScrollableHeight > 0.5
+                && (e.Delta < 0 ? viewer.VerticalOffset < viewer.ScrollableHeight : viewer.VerticalOffset > 0);
+            if (canScroll) return;
+            e.Handled = true;
+        };
         railStack.Children.Add(_ruleList);
         rail.Child = railStack;
         root.Children.Add(rail);
@@ -270,6 +279,17 @@ public sealed class AutomationWindow : Window
         Grid.SetColumn(workspace, 1);
         root.Children.Add(workspace);
         return root;
+    }
+
+    static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is ScrollViewer viewer) return viewer;
+            if (FindScrollViewer(child) is { } nested) return nested;
+        }
+        return null;
     }
 
     Button SmallButton(string text, RoutedEventHandler click)
@@ -656,7 +676,7 @@ public sealed class AutomationWindow : Window
         panel.Children.Add(new TextBlock
         {
             Text = hasWait
-                ? "When matched actions run on the match. The rule then waits for its wait-until condition and runs After wait actions; Else actions run while it is not matching."
+                ? "When Matched actions run on the match. The rule then waits for its wait-until condition and runs After Wait actions; Else actions run while it is not matching."
                 : rule.BypassOutputUpdate
                     ? "Reads the live game and applies immediately. It does not wait for Update Output."
                     : "Runs when the published game changes. Layout switches happen once per match, not every tick.",
@@ -793,7 +813,7 @@ public sealed class AutomationWindow : Window
             Foreground = TextBrush,
             FontSize = 10,
             Margin = new Thickness(0, 7, 0, 0),
-            ToolTip = "Hold the rule after its trigger matches until this condition becomes true, then run the actions marked After wait."
+            ToolTip = "Hold the rule after its trigger matches until this condition becomes true, then run the actions marked After Wait."
         };
         waitUntil.Checked += (_, _) => { condition.WaitUntil = true; Persist(); RefreshGraph(); };
         waitUntil.Unchecked += (_, _) => { condition.WaitUntil = false; Persist(); RefreshGraph(); };

@@ -1,0 +1,277 @@
+<UserControl x:Class="Scoreboard.Desktop.DataDock"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FontFamily="Segoe UI" Background="#080A0D">
+  <UserControl.Resources>
+    <SolidColorBrush x:Key="DataPanel" Color="#14161A"/>
+    <SolidColorBrush x:Key="DataSurface" Color="#0C0E11"/>
+    <SolidColorBrush x:Key="DataBorder" Color="#2A2D33"/>
+    <SolidColorBrush x:Key="DataText" Color="#F4F7FB"/>
+    <SolidColorBrush x:Key="DataMuted" Color="#93A0B2"/>
+    <Style x:Key="DataCard" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource DataPanel}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource DataBorder}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="9"/>
+      <Setter Property="Padding" Value="10"/>
+    </Style>
+    <Style x:Key="DataTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="Foreground" Value="{DynamicResource DataMuted}"/>
+      <Setter Property="Margin" Value="0,10,0,4"/>
+    </Style>
+    <Style x:Key="DataField" TargetType="TextBox">
+      <Setter Property="MinHeight" Value="28"/>
+      <Setter Property="Padding" Value="7,4"/>
+      <Setter Property="Background" Value="{DynamicResource DataSurface}"/>
+      <Setter Property="Foreground" Value="{DynamicResource DataText}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource DataBorder}"/>
+      <Setter Property="Margin" Value="0,0,0,4"/>
+    </Style>
+    <Style x:Key="DataSecret" TargetType="PasswordBox">
+      <Setter Property="MinHeight" Value="28"/>
+      <Setter Property="Padding" Value="7,4"/>
+      <Setter Property="Background" Value="{DynamicResource DataSurface}"/>
+      <Setter Property="Foreground" Value="{DynamicResource DataText}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource DataBorder}"/>
+      <Setter Property="Margin" Value="0,0,0,4"/>
+    </Style>
+    <Style x:Key="DataAction" TargetType="Button">
+      <Setter Property="MinHeight" Value="26"/>
+      <Setter Property="Padding" Value="8,3"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Margin" Value="0,0,5,0"/>
+      <Setter Property="Background" Value="{DynamicResource DataSurface}"/>
+      <Setter Property="Foreground" Value="{DynamicResource DataText}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource DataBorder}"/>
+    </Style>
+  </UserControl.Resources>
+
+  <Grid Margin="8">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="250"/>
+      <ColumnDefinition Width="7"/>
+      <ColumnDefinition Width="*"/>
+      <ColumnDefinition Width="7"/>
+      <ColumnDefinition Width="320"/>
+    </Grid.ColumnDefinitions>
+
+    <Border Grid.Column="0" Style="{StaticResource DataCard}">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Top">
+          <TextBlock Text="DATA SOURCES" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource DataText}" Margin="2,0,0,2"/>
+          <TextBlock Text="Files and APIs become live game values. Manual and file sources need no network."
+                     FontSize="10" Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap" Margin="2,0,0,8"/>
+          <UniformGrid Columns="2" Margin="0,0,0,5">
+            <Button Content="+ Source" Style="{StaticResource DataAction}" Click="AddFeed_Click"/>
+            <Button Content="Refresh all" Style="{StaticResource DataAction}" Click="RefreshAll_Click"/>
+          </UniformGrid>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom">
+          <Button Content="Delete source" Style="{StaticResource DataAction}" Click="DeleteFeed_Click" Margin="0,5,0,0"/>
+        </StackPanel>
+        <ListBox x:Name="FeedList" Background="{DynamicResource DataSurface}" Foreground="{DynamicResource DataText}"
+                 BorderBrush="{DynamicResource DataBorder}" SelectionChanged="Feed_Selected" Margin="0,4,0,0">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <StackPanel Margin="3,4">
+                <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding Health}" FontSize="9" Foreground="{DynamicResource DataMuted}" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
+
+    <GridSplitter Grid.Column="1" Width="7" HorizontalAlignment="Center" VerticalAlignment="Stretch"/>
+
+    <ScrollViewer x:Name="FeedScroll" Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel>
+        <Border Style="{StaticResource DataCard}">
+          <StackPanel>
+            <DockPanel>
+              <TextBlock x:Name="EditorTitle" Text="SOURCE SETUP" FontSize="12" FontWeight="Bold"
+                         Foreground="{DynamicResource DataText}" TextTrimming="CharacterEllipsis"/>
+              <TextBlock x:Name="EditorHealth" DockPanel.Dock="Right" Text="" FontSize="10" Foreground="{DynamicResource DataMuted}"
+                         VerticalAlignment="Center" Margin="12,0,0,0" MaxWidth="170" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+            <TextBlock Text="Name" Style="{StaticResource DataTitle}"/>
+            <TextBox x:Name="NameBox" Style="{StaticResource DataField}" TextChanged="Editor_Changed"/>
+            <TextBlock Text="Source type" Style="{StaticResource DataTitle}"/>
+            <ComboBox x:Name="KindBox" MinHeight="28" Margin="0,0,0,4" SelectionChanged="Editor_Changed"/>
+            <TextBlock x:Name="LocationLabel" Text="Address or key=value lines" Style="{StaticResource DataTitle}"/>
+            <DockPanel>
+              <Button x:Name="BrowseButton" DockPanel.Dock="Right" Content="Browse…" Style="{StaticResource DataAction}" Click="Browse_Click" Margin="5,0,0,4"/>
+              <TextBox x:Name="LocationBox" Style="{StaticResource DataField}" TextChanged="Editor_Changed" AcceptsReturn="True"
+                       TextWrapping="Wrap" MinHeight="56" MaxHeight="130" VerticalScrollBarVisibility="Auto"/>
+            </DockPanel>
+            <DockPanel Margin="0,4,0,0">
+              <TextBlock Text="Refresh (seconds)" FontSize="10" Foreground="{DynamicResource DataMuted}" VerticalAlignment="Center"/>
+              <TextBox x:Name="RefreshBox" Width="62" Style="{StaticResource DataField}" Margin="8,0,0,0" TextChanged="Editor_Changed"/>
+              <CheckBox x:Name="AutoBox" Content="Poll automatically" Margin="14,0,0,0" Foreground="{DynamicResource DataText}"
+                        FontSize="10" VerticalAlignment="Center" Checked="Editor_Changed" Unchecked="Editor_Changed"/>
+              <CheckBox x:Name="EnabledBox" Content="Enabled" Margin="14,0,0,0" Foreground="{DynamicResource DataText}"
+                        FontSize="10" VerticalAlignment="Center" Checked="Editor_Changed" Unchecked="Editor_Changed"/>
+            </DockPanel>
+            <DockPanel Margin="0,8,0,0">
+              <Button Content="Test / refresh" Style="{StaticResource DataAction}" Click="RefreshFeed_Click"/>
+              <Button Content="Apply mapped values" Style="{StaticResource DataAction}" Click="Apply_Click"/>
+              <TextBlock x:Name="StatusText" Text="Choose a source." FontSize="10" Foreground="{DynamicResource DataMuted}"
+                         VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+            <TextBlock x:Name="ErrorText" Text="" FontSize="10" Foreground="#FF9A9A" TextWrapping="Wrap" Margin="0,4,0,0"/>
+          </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource DataCard}" Margin="0,8,0,0">
+          <StackPanel>
+            <DockPanel>
+              <TextBlock Text="VALUE MAPPING" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource DataText}"/>
+              <Button DockPanel.Dock="Right" Content="+ Mapping" Style="{StaticResource DataAction}" Click="AddMapping_Click"/>
+            </DockPanel>
+            <TextBlock Text="Key is a JSON path (game.score), CSV header, XML path, manual key, or row number."
+                       FontSize="10" Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap" Margin="0,2,0,6"/>
+            <StackPanel x:Name="MappingPanel"/>
+            <TextBlock Text="Scale and offset are optional: value × scale + offset. Custom values accept text as well as numbers."
+                       FontSize="10" Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <GridSplitter Grid.Column="3" Width="7" HorizontalAlignment="Center" VerticalAlignment="Stretch"/>
+
+    <Border Grid.Column="4" Style="{StaticResource DataCard}">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel>
+          <TextBlock Text="DATA VIEWER" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource DataText}"/>
+          <TextBlock x:Name="ViewerSummary" Text="Refresh a source to browse its rows." FontSize="10"
+                     Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap" Margin="0,2,0,6"/>
+          <TextBlock Text="Current game" Style="{StaticResource DataTitle}"/>
+          <TextBlock x:Name="GameSummary" Text="" FontSize="10" Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap"/>
+          <TextBlock x:Name="CloudSummary" Text="LEAGUE CLOUD · Off · TICKER · waiting" FontSize="9"
+                     Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+          <Button Content="Compare teams…" Style="{StaticResource DataAction}" Click="Compare_Click"
+                  HorizontalAlignment="Left" Margin="0,4,0,0"/>
+          <Expander Header="LEAGUE CLOUD" IsExpanded="True" Foreground="{DynamicResource DataMuted}"
+                    FontSize="10" FontWeight="Bold" Margin="0,8,0,0">
+            <StackPanel>
+              <CheckBox x:Name="CloudEnabledBox" Content="Publish this game and poll the league"
+                        Foreground="{DynamicResource DataText}" FontSize="10" Margin="0,3,0,2"/>
+              <TextBlock Text="Upload endpoint (POST)" Style="{StaticResource DataTitle}"/>
+              <TextBox x:Name="CloudUploadBox" Style="{StaticResource DataField}" ToolTip="Receives the current game snapshot"/>
+              <TextBlock Text="League feed endpoint (GET)" Style="{StaticResource DataTitle}"/>
+              <TextBox x:Name="CloudFeedBox" Style="{StaticResource DataField}" ToolTip="Returns the league games for the ticker"/>
+              <Grid Margin="0,3,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="76"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,6,0">
+                  <TextBlock Text="League id" Style="{StaticResource DataTitle}"/>
+                  <TextBox x:Name="CloudLeagueBox" Style="{StaticResource DataField}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Text="Poll (s)" Style="{StaticResource DataTitle}"/>
+                  <TextBox x:Name="CloudPollBox" Style="{StaticResource DataField}"/>
+                </StackPanel>
+              </Grid>
+              <TextBlock Text="API key / bearer token (optional)" Style="{StaticResource DataTitle}"/>
+              <PasswordBox x:Name="CloudKeyBox" Style="{StaticResource DataSecret}"/>
+              <WrapPanel Margin="0,4,0,0">
+                <Button Content="Save cloud" Style="{StaticResource DataAction}" Click="CloudSave_Click"/>
+                <Button Content="Upload now" Style="{StaticResource DataAction}" Click="CloudUpload_Click"/>
+                <Button Content="Fetch now" Style="{StaticResource DataAction}" Click="CloudFetch_Click"/>
+              </WrapPanel>
+              <TextBlock x:Name="CloudStatus" Text="Off · configure the league feed" FontSize="10"
+                         Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+              <Button Content="Open full league editor…" Style="{StaticResource DataAction}" Click="CloudConfigure_Click"
+                      HorizontalAlignment="Left" Margin="0,4,0,0"/>
+            </StackPanel>
+          </Expander>
+          <Expander Header="TICKER ROTATION" IsExpanded="True" Foreground="{DynamicResource DataMuted}"
+                    FontSize="10" FontWeight="Bold" Margin="0,6,0,0">
+            <StackPanel>
+              <CheckBox x:Name="TickerAutoBox" Content="Rotate one card at a time"
+                        Foreground="{DynamicResource DataText}" FontSize="10" Margin="0,3,0,1"/>
+              <CheckBox x:Name="TickerAlertsBox" Content="Interrupt with score alerts"
+                        Foreground="{DynamicResource DataText}" FontSize="10" Margin="0,0,0,2"/>
+              <Grid Margin="0,2,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,5,0">
+                  <TextBlock Text="Hold (seconds)" Style="{StaticResource DataTitle}"/>
+                  <TextBox x:Name="TickerDwellBox" Style="{StaticResource DataField}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Margin="5,0,0,0">
+                  <TextBlock Text="Fade (seconds)" Style="{StaticResource DataTitle}"/>
+                  <TextBox x:Name="TickerFadeBox" Style="{StaticResource DataField}"/>
+                </StackPanel>
+              </Grid>
+              <TextBlock Text="Games in the rotation" Style="{StaticResource DataTitle}"/>
+              <StackPanel x:Name="TickerGamesPanel"/>
+              <TextBlock x:Name="TickerGamesHint" Text="No league games have arrived yet." FontSize="9"
+                         Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap" Margin="0,2,0,3"/>
+              <TextBlock Text="News headlines" Style="{StaticResource DataTitle}"/>
+              <TextBox x:Name="TickerNewsBox" Style="{StaticResource DataField}" AcceptsReturn="True"
+                       TextWrapping="Wrap" MinHeight="54" MaxHeight="92" VerticalScrollBarVisibility="Auto"/>
+              <WrapPanel Margin="0,4,0,0">
+                <Button Content="Save ticker" Style="{StaticResource DataAction}" Click="TickerSave_Click"/>
+                <Button Content="Clear games" Style="{StaticResource DataAction}" Click="TickerClear_Click"/>
+                <Button Content="Open full ticker editor…" Style="{StaticResource DataAction}" Click="TickerConfigure_Click"/>
+              </WrapPanel>
+              <TextBlock x:Name="TickerStatus" Text="" FontSize="10" Foreground="{DynamicResource DataMuted}"
+                         TextWrapping="Wrap" Margin="0,4,0,0"/>
+              <TextBlock Text="Live ticker cards" Style="{StaticResource DataTitle}"/>
+              <ListBox x:Name="TickerList" Height="70" Background="{DynamicResource DataSurface}" Foreground="{DynamicResource DataText}"
+                       BorderBrush="{DynamicResource DataBorder}" FontSize="9" Margin="0,0,0,4">
+                <ListBox.ItemTemplate>
+                  <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="2,2"/></DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+          </Expander>
+          <Expander Header="LEAGUE SCORES" IsExpanded="False" Foreground="{DynamicResource DataMuted}"
+                    FontSize="10" FontWeight="Bold" Margin="0,6,0,0">
+            <StackPanel>
+              <TextBox x:Name="LeagueFilter" Style="{StaticResource DataField}" ToolTip="Filter league games by either team"
+                       TextChanged="LeagueFilter_Changed"/>
+              <ListBox x:Name="LeagueList" Height="118" Background="{DynamicResource DataSurface}" Foreground="{DynamicResource DataText}"
+                       BorderBrush="{DynamicResource DataBorder}" SelectionChanged="League_Selected" Margin="0,0,0,4">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding TickerLine}" FontSize="10" TextTrimming="CharacterEllipsis" Margin="2,2"/>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <Button Content="Pin selected league game" Style="{StaticResource DataAction}" Click="UseLeague_Click" Margin="0,0,0,6"/>
+            </StackPanel>
+          </Expander>
+          <TextBlock Text="Pin a source value to a custom value" Style="{StaticResource DataTitle}"/>
+          <TextBox x:Name="PinNameBox" Style="{StaticResource DataField}" Text="Feed value" ToolTip="The custom value name shown on the graphic"/>
+          <Button Content="Send selected value to graphic" Style="{StaticResource DataAction}" Click="SendStat_Click" Margin="0,0,0,6"/>
+          <ListBox x:Name="ValueList" Height="220" Background="{DynamicResource DataSurface}" Foreground="{DynamicResource DataText}"
+                   BorderBrush="{DynamicResource DataBorder}" SelectionChanged="Value_Selected" Margin="0,6,0,0">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Key}" FontSize="10" Foreground="{DynamicResource DataMuted}" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10" Foreground="{DynamicResource DataText}"
+                           MaxWidth="120" TextTrimming="CharacterEllipsis" Margin="8,0,0,0"/>
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+          </ListBox>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+  </Grid>
+</UserControl>

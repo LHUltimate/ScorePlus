@@ -14,6 +14,8 @@ public partial class ControlRoomWindow : Window
     ContentStudioWindow? _contentStudio;
     LiveSwitchWindow? _liveSwitch;
     LiveChannelWindow? _liveChannel;
+    Window? _ownerWindow;
+    WindowState? _ownerState;
 
     public ControlRoomWindow(ScorebugCatalog catalog, GameEngine engine, MediaPlayback? playback = null,
         AutomationRuntime? automation = null, string theme = "Dark")
@@ -24,6 +26,12 @@ public partial class ControlRoomWindow : Window
         _playback = playback;
         _automation = automation;
         _theme = theme;
+        Loaded += (_, _) =>
+        {
+            _ownerWindow = Owner;
+            _ownerState = _ownerWindow?.WindowState;
+        };
+        Closing += (_, e) => { if (!e.Cancel) Owner = null; };
         ThemeManager.Apply(this, theme);
         _catalog.Changed += Changed;
         _engine.Changed += Changed;
@@ -36,7 +44,17 @@ public partial class ControlRoomWindow : Window
             _contentStudio?.Close();
             _liveSwitch?.Close();
             _liveChannel?.Close();
+            Dispatcher.BeginInvoke(new Action(RestoreOwnerIfMinimized));
         };
+    }
+
+    /// <summary>Closing the control map must leave the console visible, not minimized behind it.</summary>
+    void RestoreOwnerIfMinimized()
+    {
+        if (_ownerWindow is not { WindowState: WindowState.Minimized }) return;
+        if (_ownerState is null or WindowState.Minimized) return;
+        _ownerWindow.WindowState = _ownerState.Value;
+        _ownerWindow.Activate();
     }
 
     void Changed()

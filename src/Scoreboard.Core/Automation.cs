@@ -272,105 +272,105 @@ public static class AutomationRules
 {
     public static readonly (AutomationField Field, string Label)[] Fields =
     [
-        (AutomationField.PlayClock, "Play clock"),
+        (AutomationField.PlayClock, "Play Clock"),
         (AutomationField.GameClock, "Game Clock"),
-        (AutomationField.ShotClock, "Shot clock"),
-        (AutomationField.TimeoutClock, "Timeout clock"),
+        (AutomationField.ShotClock, "Shot Clock"),
+        (AutomationField.TimeoutClock, "Timeout Clock"),
         (AutomationField.Period, "Period"),
-        (AutomationField.HomeScore, "Home score"),
-        (AutomationField.AwayScore, "Visitors score"),
-        (AutomationField.HomeTimeouts, "Home timeouts"),
-        (AutomationField.AwayTimeouts, "Visitors timeouts"),
+        (AutomationField.HomeScore, "Home Score"),
+        (AutomationField.AwayScore, "Visitors Score"),
+        (AutomationField.HomeTimeouts, "Home Timeouts"),
+        (AutomationField.AwayTimeouts, "Visitors Timeouts"),
         (AutomationField.Down, "Down"),
-        (AutomationField.YardsToGo, "Yards to go"),
-        (AutomationField.HomeFouls, "Home fouls"),
-        (AutomationField.AwayFouls, "Visitors fouls"),
+        (AutomationField.YardsToGo, "Yards to Go"),
+        (AutomationField.HomeFouls, "Home Fouls"),
+        (AutomationField.AwayFouls, "Visitors Fouls"),
         (AutomationField.Balls, "Balls"),
         (AutomationField.Strikes, "Strikes"),
         (AutomationField.Outs, "Outs"),
-        (AutomationField.HomePossession, "Home has possession"),
+        (AutomationField.HomePossession, "Home Has Possession"),
         (AutomationField.PossessionSide, "Possession"),
         (AutomationField.ClockRunning, "Game Clock Running"),
-        (AutomationField.PlayClockRunning, "Play clock running"),
+        (AutomationField.PlayClockRunning, "Play Clock Running"),
         (AutomationField.Sport, "Sport"),
-        (AutomationField.CustomStat, "Custom value"),
-        (AutomationField.StoppageClock, "Added time"),
-        (AutomationField.StoppageRunning, "Added time running"),
-        (AutomationField.ShotClockRunning, "Shot clock running"),
-        (AutomationField.TimeoutClockRunning, "Timeout clock running"),
-        (AutomationField.HomeTimeoutLimit, "Home timeouts at start"),
-        (AutomationField.AwayTimeoutLimit, "Visitors timeouts at start"),
-        (AutomationField.YardsToGoal, "Ball on yard line"),
-        (AutomationField.BallOnHomeSide, "Ball on home half"),
-        (AutomationField.DownPending, "Down is waiting for distance"),
-        (AutomationField.HomeYellowCards, "Home yellow cards"),
-        (AutomationField.AwayYellowCards, "Visitors yellow cards"),
-        (AutomationField.HomeRedCards, "Home red cards"),
-        (AutomationField.AwayRedCards, "Visitors red cards"),
-        (AutomationField.HomeHits, "Home hits"),
-        (AutomationField.AwayHits, "Visitors hits"),
-        (AutomationField.HomeYards, "Home yards"),
-        (AutomationField.AwayYards, "Visitors yards"),
-        (AutomationField.HomeTurnovers, "Home turnovers"),
-        (AutomationField.AwayTurnovers, "Visitors turnovers"),
-        (AutomationField.HomeShots, "Home shots"),
-        (AutomationField.AwayShots, "Visitors shots"),
-        (AutomationField.HomeCorners, "Home corners"),
-        (AutomationField.AwayCorners, "Visitors corners"),
-        (AutomationField.PenaltyActive, "Flag is down"),
-        (AutomationField.PenaltyType, "Flag type"),
-        (AutomationField.PenaltyHome, "Flag is on home team"),
-        (AutomationField.GameEnded, "Game ended"),
-        (AutomationField.RecordSettled, "Result recorded")
+        (AutomationField.CustomStat, "Custom Value"),
+        (AutomationField.StoppageClock, "Added Time"),
+        (AutomationField.StoppageRunning, "Added Time Running"),
+        (AutomationField.ShotClockRunning, "Shot Clock Running"),
+        (AutomationField.TimeoutClockRunning, "Timeout Clock Running"),
+        (AutomationField.HomeTimeoutLimit, "Home Timeouts at Start"),
+        (AutomationField.AwayTimeoutLimit, "Visitors Timeouts at Start"),
+        (AutomationField.YardsToGoal, "Ball on Yard Line"),
+        (AutomationField.BallOnHomeSide, "Ball on Home Half"),
+        (AutomationField.DownPending, "Down is Waiting for Distance"),
+        (AutomationField.HomeYellowCards, "Home Yellow Cards"),
+        (AutomationField.AwayYellowCards, "Visitors Yellow Cards"),
+        (AutomationField.HomeRedCards, "Home Red Cards"),
+        (AutomationField.AwayRedCards, "Visitors Red Cards"),
+        (AutomationField.HomeHits, "Home Hits"),
+        (AutomationField.AwayHits, "Visitors Hits"),
+        (AutomationField.HomeYards, "Home Yards"),
+        (AutomationField.AwayYards, "Visitors Yards"),
+        (AutomationField.HomeTurnovers, "Home Turnovers"),
+        (AutomationField.AwayTurnovers, "Visitors Turnovers"),
+        (AutomationField.HomeShots, "Home Shots"),
+        (AutomationField.AwayShots, "Visitors Shots"),
+        (AutomationField.HomeCorners, "Home Corners"),
+        (AutomationField.AwayCorners, "Visitors Corners"),
+        (AutomationField.PenaltyActive, "Flag Is Down"),
+        (AutomationField.PenaltyType, "Flag Type"),
+        (AutomationField.PenaltyHome, "Flag Is On Home Team"),
+        (AutomationField.GameEnded, "Game Ended"),
+        (AutomationField.RecordSettled, "Result Recorded")
     ];
 
     public static readonly (AutomationOperator Operator, string Label)[] Operators =
     [
-        (AutomationOperator.Greater, "greater than"),
-        (AutomationOperator.GreaterOrEqual, "greater than or equal to"),
-        (AutomationOperator.Equal, "equal to"),
-        (AutomationOperator.NotEqual, "not equal to"),
-        (AutomationOperator.LessOrEqual, "less than or equal to"),
-        (AutomationOperator.Less, "less than"),
-        (AutomationOperator.Contains, "contains"),
-        (AutomationOperator.IsTrue, "is true"),
-        (AutomationOperator.IsFalse, "is false")
+        (AutomationOperator.Greater, "Is Greater Than"),
+        (AutomationOperator.GreaterOrEqual, "Is Greater Than or Equal To"),
+        (AutomationOperator.Equal, "Is Equal"),
+        (AutomationOperator.NotEqual, "Is Not Equal"),
+        (AutomationOperator.LessOrEqual, "Is Less Than or Equal To"),
+        (AutomationOperator.Less, "Is Less Than"),
+        (AutomationOperator.Contains, "Contains"),
+        (AutomationOperator.IsTrue, "Is True"),
+        (AutomationOperator.IsFalse, "Is False")
     ];
 
     /// <summary>Colour choices offered by a colour action, including both teams' palettes.</summary>
     public static readonly (ScorebugColorSource Source, string Label)[] ColorSources =
     [
-        (ScorebugColorSource.Custom, "Custom colour"),
-        (ScorebugColorSource.HomePrimary, "Home primary"),
-        (ScorebugColorSource.HomeSecondary, "Home secondary"),
-        (ScorebugColorSource.AwayPrimary, "Away primary"),
-        (ScorebugColorSource.AwaySecondary, "Away secondary")
+        (ScorebugColorSource.Custom, "Custom Color"),
+        (ScorebugColorSource.HomePrimary, "Home Primary"),
+        (ScorebugColorSource.HomeSecondary, "Home Secondary"),
+        (ScorebugColorSource.AwayPrimary, "Away Primary"),
+        (ScorebugColorSource.AwaySecondary, "Away Secondary")
     ];
 
     public static readonly (AutomationActionPhase Phase, string Label)[] ActionPhases =
     [
-        (AutomationActionPhase.OnMatch, "When matched"),
-        (AutomationActionPhase.AfterWait, "After wait"),
+        (AutomationActionPhase.OnMatch, "When Matched"),
+        (AutomationActionPhase.AfterWait, "After Wait"),
         (AutomationActionPhase.Else, "Else")
     ];
 
     public static readonly (AutomationActionKind Kind, string Label)[] Actions =
     [
-        (AutomationActionKind.SetTextColor, "Text color"),
-        (AutomationActionKind.SetBackgroundColor, "Background color"),
-        (AutomationActionKind.SetBorderColor, "Border color"),
+        (AutomationActionKind.SetTextColor, "Text Color"),
+        (AutomationActionKind.SetBackgroundColor, "Background Color"),
+        (AutomationActionKind.SetBorderColor, "Border Color"),
         (AutomationActionKind.SetOpacity, "Opacity"),
-        (AutomationActionKind.MoveBy, "Move by"),
-        (AutomationActionKind.MoveTo, "Move to"),
+        (AutomationActionKind.MoveBy, "Move By"),
+        (AutomationActionKind.MoveTo, "Move To"),
         (AutomationActionKind.Resize, "Resize"),
         (AutomationActionKind.Show, "Show"),
         (AutomationActionKind.Hide, "Hide"),
-        (AutomationActionKind.SetText, "Set text"),
-        (AutomationActionKind.SwitchLayout, "Switch layout"),
-        (AutomationActionKind.RunMacro, "Run macro"),
-        (AutomationActionKind.MediaOnAir, "Media on air"),
-        (AutomationActionKind.MediaOffAir, "Media off air"),
-        (AutomationActionKind.SetClockDecimals, "Clock decimals")
+        (AutomationActionKind.SetText, "Set Text"),
+        (AutomationActionKind.SwitchLayout, "Switch Layout"),
+        (AutomationActionKind.RunMacro, "Run Macro"),
+        (AutomationActionKind.MediaOnAir, "Media On Air"),
+        (AutomationActionKind.MediaOffAir, "Media Off Air"),
+        (AutomationActionKind.SetClockDecimals, "Clock Decimals")
     ];
 
     /// <summary>The values a data condition offers as a list instead of free text.</summary>
@@ -505,10 +505,10 @@ public static class AutomationRules
     public static IReadOnlyList<(AutomationOperator Operator, string Label)> OperatorsFor(AutomationField field)
     {
         if (IsBooleanField(field))
-            return [(AutomationOperator.IsTrue, "is true"), (AutomationOperator.IsFalse, "is false")];
+            return [(AutomationOperator.IsTrue, "Is True"), (AutomationOperator.IsFalse, "Is False")];
         if (IsTextField(field))
-            return [(AutomationOperator.Equal, "equal to"), (AutomationOperator.NotEqual, "not equal to"),
-                (AutomationOperator.Contains, "contains")];
+            return [(AutomationOperator.Equal, "Is Equal"), (AutomationOperator.NotEqual, "Is Not Equal"),
+                (AutomationOperator.Contains, "Contains")];
         return Operators.Where(option => option.Operator is not (AutomationOperator.Contains
             or AutomationOperator.IsTrue or AutomationOperator.IsFalse)).ToArray();
     }

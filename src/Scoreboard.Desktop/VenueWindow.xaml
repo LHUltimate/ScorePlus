@@ -1,0 +1,227 @@
+<Window x:Class="Scoreboard.Desktop.VenueWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ScorePlus · Venue" Height="820" Width="1240"
+        WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
+  <Window.Resources>
+    <SolidColorBrush x:Key="VenuePanel" Color="#14161A"/>
+    <SolidColorBrush x:Key="VenueSurface" Color="#0C0E11"/>
+    <SolidColorBrush x:Key="VenueBorder" Color="#2A2D33"/>
+    <SolidColorBrush x:Key="VenueText" Color="#F4F7FB"/>
+    <SolidColorBrush x:Key="VenueMuted" Color="#93A0B2"/>
+    <Style x:Key="VenueCard" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource VenuePanel}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource VenueBorder}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="9"/>
+      <Setter Property="Padding" Value="10"/>
+    </Style>
+    <Style x:Key="VenueHeading" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="Foreground" Value="{DynamicResource VenueMuted}"/>
+      <Setter Property="Margin" Value="0,10,0,4"/>
+    </Style>
+    <Style x:Key="VenueField" TargetType="TextBox">
+      <Setter Property="MinHeight" Value="28"/>
+      <Setter Property="Padding" Value="7,4"/>
+      <Setter Property="Background" Value="{DynamicResource VenueSurface}"/>
+      <Setter Property="Foreground" Value="{DynamicResource VenueText}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource VenueBorder}"/>
+      <Setter Property="Margin" Value="0,0,0,4"/>
+    </Style>
+    <Style TargetType="TabItem">
+      <Setter Property="Foreground" Value="{DynamicResource VenueMuted}"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TabItem">
+            <Border x:Name="Header" Background="{DynamicResource VenuePanel}" BorderBrush="{DynamicResource VenueBorder}"
+                    BorderThickness="1" CornerRadius="6" Padding="13,7" Margin="0,0,4,0">
+              <ContentPresenter ContentSource="Header" TextElement.Foreground="{TemplateBinding Foreground}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Header" Property="Background" Value="#1E2A36"/>
+                <Setter TargetName="Header" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                <Setter Property="Foreground" Value="{DynamicResource VenueText}"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Header" Property="Background" Value="#243140"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="VenueButton" TargetType="Button">
+      <Setter Property="MinHeight" Value="27"/>
+      <Setter Property="Padding" Value="9,3"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Margin" Value="0,0,6,0"/>
+      <Setter Property="Background" Value="{DynamicResource VenueSurface}"/>
+      <Setter Property="Foreground" Value="{DynamicResource VenueText}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource VenueBorder}"/>
+    </Style>
+  </Window.Resources>
+
+  <DockPanel Background="#080A0D">
+    <Border DockPanel.Dock="Top" Background="#14161A" BorderBrush="#2A2D33" BorderThickness="0,0,0,1" Padding="14,9">
+      <DockPanel>
+        <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Text="Ready" FontSize="10"
+                   Foreground="{DynamicResource VenueMuted}" VerticalAlignment="Center"/>
+        <StackPanel Orientation="Horizontal">
+          <Border Width="4" Height="20" CornerRadius="2" Background="{DynamicResource Accent}" Margin="0,0,9,0"/>
+          <TextBlock Text="VENUE" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource VenueText}" VerticalAlignment="Center"/>
+          <TextBlock x:Name="VenueSubtitle" Text="displays, rotations, schedules and proof" FontSize="10"
+                     Foreground="{DynamicResource VenueMuted}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <TabControl x:Name="Tabs" Background="Transparent" BorderThickness="0" Padding="10">
+      <TabItem Header="DISPLAYS">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel>
+            <DockPanel Margin="2,0,2,8">
+              <TextBlock Text="Every display on this machine, with what it is sending right now."
+                         FontSize="10" Foreground="{DynamicResource VenueMuted}" VerticalAlignment="Center"/>
+              <Button DockPanel.Dock="Right" Content="+ Add display" Style="{StaticResource VenueButton}" Click="AddDisplay_Click"/>
+            </DockPanel>
+            <WrapPanel x:Name="DisplayPanel"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="PLAYLISTS">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="230"/>
+            <ColumnDefinition Width="8"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Border Style="{StaticResource VenueCard}">
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Top">
+                <TextBlock Text="ROTATIONS" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
+                <Button Content="+ Playlist" Style="{StaticResource VenueButton}" Click="AddPlaylist_Click" Margin="0,6,0,6"/>
+              </StackPanel>
+              <ListBox x:Name="PlaylistList" DisplayMemberPath="DisplayName" SelectionChanged="Playlist_Selected"
+                       Background="{DynamicResource VenueSurface}" Foreground="{DynamicResource VenueText}"
+                       BorderBrush="{DynamicResource VenueBorder}"/>
+            </DockPanel>
+          </Border>
+          <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="PlaylistEditor"/>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="SCHEDULE">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="230"/>
+            <ColumnDefinition Width="8"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Border Style="{StaticResource VenueCard}">
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Top">
+                <TextBlock Text="SCHEDULE" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
+                <Button Content="+ Entry" Style="{StaticResource VenueButton}" Click="AddSchedule_Click" Margin="0,6,0,6"/>
+              </StackPanel>
+              <ListBox x:Name="ScheduleList" DisplayMemberPath="DisplayName" SelectionChanged="Schedule_Selected"
+                       Background="{DynamicResource VenueSurface}" Foreground="{DynamicResource VenueText}"
+                       BorderBrush="{DynamicResource VenueBorder}"/>
+            </DockPanel>
+          </Border>
+          <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="ScheduleEditor"/>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="SPONSORS">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="230"/>
+            <ColumnDefinition Width="8"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Border Style="{StaticResource VenueCard}">
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Top">
+                <TextBlock Text="SOLD PACKAGES" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
+                <Button Content="+ Sponsor" Style="{StaticResource VenueButton}" Click="AddSponsor_Click" Margin="0,6,0,6"/>
+              </StackPanel>
+              <ListBox x:Name="SponsorList" DisplayMemberPath="Name" SelectionChanged="Sponsor_Selected"
+                       Background="{DynamicResource VenueSurface}" Foreground="{DynamicResource VenueText}"
+                       BorderBrush="{DynamicResource VenueBorder}"/>
+            </DockPanel>
+          </Border>
+          <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="SponsorEditor"/>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="PROOF">
+        <DockPanel>
+          <DockPanel DockPanel.Dock="Top" Margin="2,0,2,8">
+            <TextBlock x:Name="ProofSummary" Text="" FontSize="10" Foreground="{DynamicResource VenueMuted}" VerticalAlignment="Center"/>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <Button Content="Export CSV…" Style="{StaticResource VenueButton}" Click="ExportProof_Click"/>
+              <Button Content="Clear" Style="{StaticResource VenueButton}" Click="ClearProof_Click"/>
+            </StackPanel>
+          </DockPanel>
+          <ListBox x:Name="ProofList" Background="{DynamicResource VenueSurface}" Foreground="{DynamicResource VenueText}"
+                   BorderBrush="{DynamicResource VenueBorder}">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Grid Margin="3,4">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="130"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="120"/>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="70"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="{Binding When}" FontSize="10" Foreground="{DynamicResource VenueMuted}"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Item}" FontSize="10" TextTrimming="CharacterEllipsis"/>
+                  <TextBlock Grid.Column="2" Text="{Binding Display}" FontSize="10" Foreground="{DynamicResource VenueMuted}" TextTrimming="CharacterEllipsis"/>
+                  <TextBlock Grid.Column="3" Text="{Binding Sponsor}" FontSize="10" Foreground="#FFD166" TextTrimming="CharacterEllipsis"/>
+                  <TextBlock Grid.Column="4" Text="{Binding Length}" FontSize="10" Foreground="{DynamicResource VenueMuted}" HorizontalAlignment="Right"/>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </TabItem>
+
+      <TabItem Header="CHANNELS">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="230"/>
+            <ColumnDefinition Width="8"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Border Style="{StaticResource VenueCard}">
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Top">
+                <TextBlock Text="CONCOURSE / IPTV" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
+                <Button Content="+ Channel" Style="{StaticResource VenueButton}" Click="AddChannel_Click" Margin="0,6,0,6"/>
+              </StackPanel>
+              <ListBox x:Name="ChannelList" DisplayMemberPath="Name" SelectionChanged="Channel_Selected"
+                       Background="{DynamicResource VenueSurface}" Foreground="{DynamicResource VenueText}"
+                       BorderBrush="{DynamicResource VenueBorder}"/>
+            </DockPanel>
+          </Border>
+          <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="ChannelEditor"/>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

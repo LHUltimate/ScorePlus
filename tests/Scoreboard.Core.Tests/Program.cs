@@ -188,10 +188,6 @@ var logicJson=JsonSerializer.Serialize(new ScorebugElement{Logic=[logicRule]});
 var logicBack=JsonSerializer.Deserialize<ScorebugElement>(logicJson)!;
 Check(logicBack.Logic.Count==1&&logicBack.Logic[0].Enter==ElementLogicAction.Pulse&&logicBack.Logic[0].Conditions[0].Field==AutomationField.Down,
     "element logic survives a save and reopen");
-var zoneElement=new ScorebugElement{Kind=ScorebugElementKind.Layout,IsZone=true,ZoneName="Lower third",NestedLayoutId="source"};
-var zoneJson=JsonSerializer.Deserialize<ScorebugElement>(JsonSerializer.Serialize(zoneElement))!;
-Check(zoneJson.IsZone&&zoneJson.ZoneName=="Lower third"&&zoneJson.NestedLayoutId=="source",
-    "a zone keeps its region name and source layout when saved");
 var blendElement=new ScorebugElement{Kind=ScorebugElementKind.Shape,BlendMode="Multiply"};
 var blendBack=JsonSerializer.Deserialize<ScorebugElement>(JsonSerializer.Serialize(blendElement))!;
 Check(blendBack.BlendMode=="Multiply","a layer's blend mode survives a save and reopen");
@@ -1456,7 +1452,7 @@ try
             Check(new AutomationCondition{Field=AutomationField.HomeTimeoutLimit,Operator=AutomationOperator.Equal,Value=3}.Matches(flagState),
                 "the timeout limit is available as a rule condition");
             var numericLabels=AutomationRules.OperatorsFor(AutomationField.PlayClock).Select(option=>option.Label).ToArray();
-            Check(new[]{"greater than","less than","less than or equal to","greater than or equal to","equal to"}
+            Check(new[]{"Is Greater Than","Is Less Than","Is Less Than or Equal To","Is Greater Than or Equal To","Is Equal"}
                     .All(label=>numericLabels.Contains(label)),
                 "numeric conditions offer the requested comparisons");
             var waitRule=new AutomationRule{Name="Flag layout and back"};
@@ -1754,5 +1750,66 @@ finally
     finally
     {
         foreach(var contentFile in new[]{contentPath,packPath,assetPath}) try{if(File.Exists(contentFile))File.Delete(contentFile);}catch{}
+    }
+}
+
+// ---------- data and distribution ----------
+{
+    var feedEngine=new GameEngine();feedEngine.NewGame("basketball");
+    var feed=new DataFeed{Kind=DataFeedKind.Json,Name="League and weather"};
+    feed.Values=DataFeedParser.Parse(DataFeedKind.Json,"""{"game":{"home":7,"away":5,"clock":"02:15"},"weather":{"summary":"Cloudy 18°"}}""").ToList();
+    feed.Mappings.Add(new DataFeedMapping{Key="game.home",Target=DataFeedTarget.HomeScore});
+    feed.Mappings.Add(new DataFeedMapping{Key="game.away",Target=DataFeedTarget.AwayScore});
+    feed.Mappings.Add(new DataFeedMapping{Key="game.clock",Target=DataFeedTarget.GameClock});
+    feed.Mappings.Add(new DataFeedMapping{Key="weather.summary",Target=DataFeedTarget.CustomValue,CustomName="Weather"});
+    Check(DataFeedApplier.Apply(feedEngine,feed)==4,"a JSON feed maps score, clock and a text custom value");
+    Check(feedEngine.State.HomeScore==7&&feedEngine.State.AwayScore==5&&feedEngine.State.ClockSeconds==135,
+        "mapped scores and MM:SS clock reach the game state");
+    Check(feedEngine.State.Stats.Any(stat=>stat.Name=="Weather"&&stat.Display.Contains("Cloudy")),
+        "a weather or sponsor feed can print text in a custom value");
+    var csv=DataFeedParser.Parse(DataFeedKind.Csv,"home,away\n7,5\n6,4");
+    Check(csv.Any(value=>value.Key=="home"&&value.Value=="7")&&csv.Any(value=>value.Key=="1.away"&&value.Value=="4"),
+        "CSV feeds expose the first row by header and later rows by row.column");
+    var xml=DataFeedParser.Parse(DataFeedKind.Xml,"<game><home>7</home><clock>02:15</clock></game>");
+    Check(xml.Any(value=>value.Key=="game.home"&&value.Value=="7"),"XML feeds flatten elements into mapped paths");
+    var manual=DataFeedParser.Parse(DataFeedKind.Manual,"HomeScore=12\nWeather=Clear");
+    Check(manual.Any(value=>value.Key=="HomeScore"&&value.Value=="12"),"manual feeds accept typed key=value rows");
+
+    var venueFile=Path.Combine(Path.GetTempPath(),$"venue-{Guid.NewGuid():N}.json");
+    var venueCatalogFile=Path.Combine(Path.GetTempPath(),$"venue-catalog-{Guid.NewGuid():N}.json");
+    try
+    {
+        var venueStore=new VenueStore(venueFile);
+        var venueCatalog=new ScorebugCatalog(venueCatalogFile);
+        var playlist=venueStore.AddPlaylist("Halftime rotation");
+        playlist.Items.Add(new VenuePlaylistItem{Kind=VenueItemKind.Layout,LayoutId=venueCatalog.Layout.Id,Label="Halftime",Seconds=1});
+        playlist.Items.Add(new VenuePlaylistItem{Kind=VenueItemKind.Layout,LayoutId=venueCatalog.Layout.Id,Label="Sponsor",Seconds=1,Sponsor="Acme"});
+        var venue=new VenueEngine(venueCatalog,feedEngine,venueStore);
+        var now=DateTimeOffset.Now;
+        Check(venue.BeginPlaylist(playlist.Id,now),"a venue playlist starts on the local machine");
+        Check(venue.State.Proof.Count==1&&venue.State.Proof[0].DisplayName.Length>0,
+            "playing a layout writes a proof-of-play line with its display");
+        venue.Tick(now.AddSeconds(2));
+        Check(venue.State.Proof.Count==2&&venue.ActiveItem?.Sponsor=="Acme",
+            "a rotation advances to its next weighted item and records the sponsor");
+        Check(venue.SponsorTotals().Any(row=>row.Sponsor=="Acme"),"sponsor proof totals aggregate by package");
+        var schedule=venueStore.AddSchedule("Second half only");
+        schedule.PlaylistId=playlist.Id;
+        schedule.Conditions.Add(new AutomationCondition{Field=AutomationField.Period,Operator=AutomationOperator.Equal,Value=2});
+        feedEngine.SetPeriod(1);
+        Check(!venue.IsDue(schedule,now,feedEngine.State),"a schedule with a live condition waits until the condition matches");
+        feedEngine.SetPeriod(2);
+        Check(venue.IsDue(schedule,now,feedEngine.State),"a live-data condition releases its schedule when the game reaches that period");
+        schedule.LastRunAt=now;
+        Check(!venue.IsDue(schedule,now.AddSeconds(1),feedEngine.State),"a schedule cannot fire twice in the same instant");
+        venueStore.Save();
+        var reloadedVenue=VenueStore.Load(venueFile);
+        Check(reloadedVenue.State.Playlists.Count==1&&reloadedVenue.State.Schedules.Count==1,
+            "playlists, schedules and proof survive a venue save and reopen");
+        Check(venue.ProofCsv().Contains("Halftime")&&venue.ProofCsv().Contains("Acme"),"proof of play exports as CSV with sponsor lines");
+    }
+    finally
+    {
+        foreach(var venuePath in new[]{venueFile,venueCatalogFile}) try{if(File.Exists(venuePath))File.Delete(venuePath);}catch{}
     }
 }

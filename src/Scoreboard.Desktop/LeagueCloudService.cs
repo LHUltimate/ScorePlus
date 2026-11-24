@@ -34,7 +34,12 @@ public sealed class LeagueCloudService : IDisposable
     public event Action<string>? Status;
     public event Action<IReadOnlyList<LeagueGame>>? GamesChanged;
 
+    /// <summary>The last successful or failed sync message shown on the DATA tab.</summary>
+    public string LastStatus { get; private set; } = "";
+
     public bool Enabled => _preferences.LeagueCloudEnabled;
+    /// <summary>The live preference object the DATA tab edits directly.</summary>
+    public UserPreferences Preferences => _preferences;
     public IReadOnlyList<LeagueGame> Games => _engine.State.LeagueGames;
 
     /// <summary>Starts polling when the operator has configured and enabled the feed.</summary>
@@ -114,7 +119,11 @@ public sealed class LeagueCloudService : IDisposable
             else parts.Add(error);
         }
 
-        if (parts.Count > 0) Status?.Invoke("LEAGUE CLOUD · " + string.Join(" · ", parts));
+        if (parts.Count > 0)
+        {
+            LastStatus = string.Join(" · ", parts);
+            Status?.Invoke("LEAGUE CLOUD · " + LastStatus);
+        }
     }
 
     public void Dispose()

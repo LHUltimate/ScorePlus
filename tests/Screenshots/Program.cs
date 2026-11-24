@@ -93,6 +93,56 @@ internal static class Program
             Capture(controlRoom, Path.Combine(output, "show-control-map.png"), 1260, 790);
             controlRoom.Close();
 
+            // Stage 4: the local venue and the DATA tab.
+            var venueStore = new VenueStore(Path.Combine(appData, "venue-shots.json"));
+            var venuePlaylist = venueStore.AddPlaylist("Halftime rotation");
+            venuePlaylist.TargetDisplayId = catalog.ActiveDisplay.Id;
+            venuePlaylist.Items.Add(new VenuePlaylistItem
+            {
+                Kind = VenueItemKind.Layout, LayoutId = catalog.ActiveDisplay.Layouts[0].Id,
+                Label = catalog.ActiveDisplay.Layouts[0].Name, Seconds = 15, Sponsor = "North Bank"
+            });
+            venuePlaylist.Items.Add(new VenuePlaylistItem
+            {
+                Kind = VenueItemKind.Layout, LayoutId = catalog.ActiveDisplay.Layouts[0].Id,
+                Label = catalog.ActiveDisplay.Layouts[0].Name, Seconds = 10
+            });
+            var venueSchedule = venueStore.AddSchedule("Second half sponsors");
+            venueSchedule.PlaylistId = venuePlaylist.Id;
+            venueSchedule.AtTime = "19:30";
+            venueSchedule.EndsAt = "19:45";
+            venueSchedule.Days.Add(DateTime.Today.DayOfWeek);
+            venueSchedule.Conditions.Add(new AutomationCondition
+            {
+                Field = AutomationField.Period, Operator = AutomationOperator.GreaterOrEqual, Value = 3
+            });
+            var venueEngine = new VenueEngine(catalog, engine, venueStore);
+            venueEngine.BeginPlaylist(venuePlaylist.Id, DateTimeOffset.Now);
+            var venueWindow = new VenueWindow(venueEngine, catalog, engine) { Width = 1480, Height = 920 };
+            Capture(venueWindow, Path.Combine(output, "venue.png"), 1480, 920);
+            venueWindow.Close();
+
+            var dataShell = new MainWindow(LaunchMode.New) { Width = 1440, Height = 960 };
+            Seed(dataShell.Engine);
+            dataShell.UpdateLayout();
+            if (dataShell.FindName("DataTab") is Button dataTab) dataTab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(160);
+            if (dataShell.FindName("DataHost") is ContentControl { Content: DataDock dataDock })
+            {
+                var feed = dataDock.Store.Add("League and weather");
+                feed.Kind = DataFeedKind.Json;
+                feed.Location = "https://example.org/score.json";
+                feed.Values = DataFeedParser.Parse(DataFeedKind.Json,
+                    """{"game":{"home":24,"away":17,"clock":"04:12","period":4},"weather":{"summary":"Clear 12°"}}""").ToList();
+                feed.Mappings.Add(new DataFeedMapping { Key = "game.home", Target = DataFeedTarget.HomeScore });
+                feed.Mappings.Add(new DataFeedMapping { Key = "game.clock", Target = DataFeedTarget.GameClock });
+                feed.Mappings.Add(new DataFeedMapping { Key = "weather.summary", Target = DataFeedTarget.CustomValue, CustomName = "Weather" });
+                dataDock.RefreshView();
+                Pump(160);
+            }
+            Capture(dataShell, Path.Combine(output, "data.png"), 1440, 960);
+            dataShell.Close();
+
             var ruleCatalog = new ScorebugCatalog(Path.Combine(appData, "rules.sbd"));
             ApplyShowcase(ruleCatalog);
             var active = ruleCatalog.ActiveDisplay;

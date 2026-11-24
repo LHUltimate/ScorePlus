@@ -8,10 +8,10 @@
     <local:IconNameConverter x:Key="IconNameConverter"/>
     <local:MotionNameConverter x:Key="MotionNameConverter"/>
     <Style x:Key="ToolButton" TargetType="Button">
-      <Setter Property="FontSize" Value="10"/>
-      <Setter Property="Padding" Value="5,5"/>
+      <Setter Property="FontSize" Value="9"/>
+      <Setter Property="Padding" Value="3,5"/>
       <Setter Property="MinHeight" Value="30"/>
-      <Setter Property="Margin" Value="2,0,0,0"/>
+      <Setter Property="Margin" Value="1,0,0,0"/>
     </Style>
     <Style x:Key="SectionTitle" TargetType="TextBlock">
       <Setter Property="FontSize" Value="11"/>
@@ -71,18 +71,16 @@
                   ToolTip="A live HTML/CSS widget, drawn by a browser engine on every screen"/>
           <Button Content="LAYOUT +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddLayoutFeed_Click"
                   ToolTip="Put another layout inside this one as a resizeable live feed"/>
-          <Button Content="ZONE +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddZone_Click"
-                  ToolTip="Add a zone: a region of this layout fed by another layout, replaceable on its own"/>
           <Button Content="PARTS +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="ImportParts_Click"
                   ToolTip="Copy elements from another layout instead of rebuilding them"/>
-          <Button x:Name="UndoButton" Content="UNDO" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="Undo_Click"
-                  IsEnabled="False" ToolTip="Undo the last studio edit (Ctrl+Z)"/>
-          <Button x:Name="RedoButton" Content="REDO" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="Redo_Click"
-                  IsEnabled="False" ToolTip="Redo the last undone edit (Ctrl+Y or Ctrl+Shift+Z)"/>
         </StackPanel>
         <StackPanel Orientation="Horizontal">
           <TextBlock Text="DISPLAY STUDIO" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"/>
           <TextBlock x:Name="HeaderHint" Text="   Arrange audience graphics · edits save automatically" Foreground="#93A0B2" VerticalAlignment="Center"/>
+          <Button x:Name="UndoButton" Content="UNDO" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="Undo_Click"
+                  IsEnabled="False" Margin="14,0,0,0" ToolTip="Undo the last studio edit (Ctrl+Z)"/>
+          <Button x:Name="RedoButton" Content="REDO" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="Redo_Click"
+                  IsEnabled="False" ToolTip="Redo the last undone edit (Ctrl+Y or Ctrl+Shift+Z)"/>
         </StackPanel>
       </DockPanel>
 
@@ -113,7 +111,7 @@
           <!-- One thumbnail per display, the way a production switcher shows its outputs: what is
                on air, which display is being edited, and a click to move the studio there. -->
           <ScrollViewer Margin="0,7,0,0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                        MaxHeight="104">
+                        MaxHeight="118">
             <StackPanel x:Name="DisplayStrip" Orientation="Horizontal"/>
           </ScrollViewer>
           <!-- Transitions and score celebrations live in their own window; this hidden host is
@@ -627,7 +625,7 @@
         </StackPanel>
 
         <StackPanel x:Name="LayoutSection">
-          <TextBlock Text="LIVE LAYOUT" Style="{StaticResource SectionTitle}"/>
+          <TextBlock x:Name="NestedSectionTitle" Text="LIVE LAYOUT" Style="{StaticResource SectionTitle}"/>
           <TextBlock Text="Source layout" Style="{StaticResource FieldLabel}"/>
           <ComboBox x:Name="NestedLayoutInput" Margin="10,0,10,4" SelectionChanged="NestedLayout_Changed"
                     ToolTip="The layout this box shows live"/>

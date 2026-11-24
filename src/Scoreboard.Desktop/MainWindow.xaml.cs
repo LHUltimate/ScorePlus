@@ -36,6 +36,8 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     readonly MediaSession _session;
     readonly ReplayBoothController _booth;
     readonly HardwareService _hardware;
+    readonly VenueEngine _venue;
+    readonly DataDock _dataDock;
     LeagueCloudService? _leagueCloud;
     bool _displaySync;
     readonly MediaPlayback _playback;
@@ -183,7 +185,30 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _leagueCloud = new LeagueCloudService(_engine, _preferences);
         _leagueCloud.Status += message => Dispatcher.BeginInvoke(new Action(() => StatusText.Text = message));
         _engine.Changed += () => _leagueCloud?.MarkDirty();
-        _timer.Tick += (_, _) => _engine.Tick();
+        // The venue runs in this same process, so a one-machine show needs no second service. The
+        // same engine drives a larger venue's displays when the operator adds targets from Venue.
+        _venue = new VenueEngine(_scorebug, _engine);
+        _venue.MediaPlayer = item =>
+        {
+            var media = _session.Library.FirstOrDefault(entry =>
+                string.Equals(entry.Path, item.MediaPath, StringComparison.OrdinalIgnoreCase));
+            if (media is null) return false;
+            _session.Play(media);
+            return true;
+        };
+        _venue.Status += message => Dispatcher.BeginInvoke(new Action(() => StatusText.Text = message));
+        _venue.Changed += () => Dispatcher.BeginInvoke(new Action(() => RefreshLayoutIndicators()));
+        _dataDock = new DataDock(_engine, _preferences.Theme, _leagueCloud)
+        {
+            OpenLeagueCloudRequested = () => LeagueCloud_Click(this, new RoutedEventArgs()),
+            OpenTickerRequested = () => Ticker_Click(this, new RoutedEventArgs())
+        };
+        DataHost.Content = _dataDock;
+        _timer.Tick += (_, _) =>
+        {
+            _engine.Tick();
+            _venue.Tick(DateTimeOffset.Now);
+        };
         _timer.Start();
         SyncHistory();
         _autosave.Tick += (_, _) => AutoSave();
@@ -778,7 +803,9 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
 
     void MacrosTab_Click(object sender, RoutedEventArgs e) => ShowTab(GameControlWindow.ConsoleTab.Macros);
 
-    /// <summary>Switches the operator surface between the console, media, roster and macros.</summary>
+    void DataTab_Click(object sender, RoutedEventArgs e) => ShowTab(GameControlWindow.ConsoleTab.Data);
+
+    /// <summary>Switches the operator surface between the console, media, roster, macros and data.</summary>
     void ShowTab(GameControlWindow.ConsoleTab tab)
     {
         // Leaving the macro editor is a natural save point; the operator should not lose the
@@ -790,10 +817,12 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         MediaControl.Visibility = tab == GameControlWindow.ConsoleTab.Media ? Visibility.Visible : Visibility.Collapsed;
         RosterControl.Visibility = tab == GameControlWindow.ConsoleTab.Rosters ? Visibility.Visible : Visibility.Collapsed;
         MacroHost.Visibility = tab == GameControlWindow.ConsoleTab.Macros ? Visibility.Visible : Visibility.Collapsed;
+        DataHost.Visibility = tab == GameControlWindow.ConsoleTab.Data ? Visibility.Visible : Visibility.Collapsed;
         ApplyTabVisuals();
         if (tab == GameControlWindow.ConsoleTab.Media) MediaControl.RefreshView();
         if (tab == GameControlWindow.ConsoleTab.Rosters) RosterControl.RefreshView();
         if (tab == GameControlWindow.ConsoleTab.Macros) _macroDock?.RefreshView();
+        if (tab == GameControlWindow.ConsoleTab.Data) _dataDock.RefreshView();
     }
 
     /// <summary>
@@ -813,7 +842,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         var offBorder = (Brush)new BrushConverter().ConvertFromString(light ? "#C9D2DC" : "#28323F")!;
         var muted = (Brush)new BrushConverter().ConvertFromString(light ? "#586576" : "#93A0B2")!;
         var onText = (Brush)new BrushConverter().ConvertFromString(light ? "#18202B" : "#F4F7FB")!;
-        Button[] tabs = [ControlTab, MediaTab, RosterTab, MacrosTab];
+        Button[] tabs = [ControlTab, MediaTab, RosterTab, MacrosTab, DataTab];
         var active = (int)_tab;
         for (var i = 0; i < tabs.Length; i++)
         {
@@ -950,6 +979,11 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         hub.Show();
     }
 
+    void Venue_Click(object sender, RoutedEventArgs e)
+    {
+        new VenueWindow(_venue, _scorebug, _engine, _playback, _automation, _preferences.Theme) { Owner = this }.Show();
+    }
+
     void ContentStudio_Click(object sender, RoutedEventArgs e)
     {
         var studio = new ContentStudioWindow(_scorebug, _engine, _preferences.Theme) { Owner = this };
@@ -1080,16 +1114,19 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         var media = role is "Full" or "Graphics";
         var rosters = role is "Full" or "Scorekeeper";
         var cues = role is "Full" or "Graphics" or "Cues";
+        var data = role is "Full" or "Graphics";
         ControlTab.Visibility = control ? Visibility.Visible : Visibility.Collapsed;
         MediaTab.Visibility = media ? Visibility.Visible : Visibility.Collapsed;
         RosterTab.Visibility = rosters ? Visibility.Visible : Visibility.Collapsed;
         MacrosTab.Visibility = cues ? Visibility.Visible : Visibility.Collapsed;
+        DataTab.Visibility = data ? Visibility.Visible : Visibility.Collapsed;
         var allowed = _tab switch
         {
             GameControlWindow.ConsoleTab.Control => control,
             GameControlWindow.ConsoleTab.Media => media,
             GameControlWindow.ConsoleTab.Rosters => rosters,
             GameControlWindow.ConsoleTab.Macros => cues,
+            GameControlWindow.ConsoleTab.Data => data,
             _ => false
         };
         if (!allowed) ShowTab(cues ? GameControlWindow.ConsoleTab.Macros : control ? GameControlWindow.ConsoleTab.Control : GameControlWindow.ConsoleTab.Media);
@@ -1958,6 +1995,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _timer.Stop();
         _autosave.Stop();
         _meterTimer.Stop();
+        _dataDock.Stop();
         try { if (_gameStarted) AutoSave(); } catch { }
 
         // Each cleanup is independent: one native media or capture component failing must not skip

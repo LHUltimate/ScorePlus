@@ -31,7 +31,7 @@ public partial class GameControlWindow : Window
     ConsoleTab _tab = ConsoleTab.Control;
 
     /// <summary>The desks a control window can carry; the main window also hosts Macros.</summary>
-    public enum ConsoleTab { Control, Media, Rosters, Macros }
+    public enum ConsoleTab { Control, Media, Rosters, Macros, Data }
 
     public ControlPanelView Panel { get; }
 

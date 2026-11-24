@@ -145,7 +145,7 @@ public partial class LiveSwitchWindow : Window
 
     void BuildMultiview(IReadOnlyList<ScorebugLayout> layouts, int programIndex)
     {
-        const int pageSize = 6;
+        const int pageSize = 8;
         var pages = Math.Max(1, (layouts.Count + pageSize - 1) / pageSize);
         _multiviewPage = Math.Clamp(_multiviewPage, 0, pages - 1);
         MultiviewPageLabel.Text = $"{_multiviewPage + 1} / {pages}";
@@ -155,7 +155,7 @@ public partial class LiveSwitchWindow : Window
             var index = _multiviewPage * pageSize + offset;
             if (index >= layouts.Count)
             {
-                // The wall keeps its six cells even when the show has one layout, so it reads as a
+                // The wall keeps its eight cells even when the show has one layout, so it reads as a
                 // multiview instead of a single oversized picture with empty space beside it.
                 var empty = new Border
                 {
@@ -195,12 +195,13 @@ public partial class LiveSwitchWindow : Window
             var stack = new StackPanel();
             var image = new Image
             {
-                Source = Thumbnail(layout, 420, 128), Height = 128, Stretch = Stretch.UniformToFill,
+                Source = Thumbnail(layout, 720, 270), Height = 150, Stretch = Stretch.UniformToFill,
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
+            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
             stack.Children.Add(new Border
             {
-                Height = 128, HorizontalAlignment = HorizontalAlignment.Stretch,
+                Height = 150, HorizontalAlignment = HorizontalAlignment.Stretch,
                 Background = new SolidColorBrush(Color.FromRgb(5, 8, 12)), Child = image, ClipToBounds = true
             });
             var row = new DockPanel { Margin = new Thickness(2, 3, 2, 0) };
@@ -316,6 +317,21 @@ public partial class LiveSwitchWindow : Window
     void MultiviewNext_Click(object sender, RoutedEventArgs e)
     {
         _multiviewPage++;
+        Refresh();
+    }
+
+    void MoveLayoutUp_Click(object sender, RoutedEventArgs e) => MovePreview(-1);
+    void MoveLayoutDown_Click(object sender, RoutedEventArgs e) => MovePreview(1);
+
+    void MovePreview(int delta)
+    {
+        var display = _catalog.FindDisplay(_displayId) ?? _catalog.ActiveDisplay;
+        var target = _previewIndex + delta;
+        if (target < 0 || target >= display.Layouts.Count) return;
+        var name = display.Layouts[_previewIndex].Name;
+        if (!_catalog.MoveLayout(_previewIndex, target)) return;
+        _previewIndex = target;
+        StatusText.Text = $"SWITCH ORDER · {name} moved to {target + 1} of {display.Layouts.Count}";
         Refresh();
     }
 

@@ -25,13 +25,16 @@
   <Grid Margin="12">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
-      <RowDefinition Height="122"/>
+      <RowDefinition Height="150"/>
       <RowDefinition Height="*"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
     <DockPanel Grid.Row="0" Margin="2,0,2,9">
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+        <Button Content="Start stream" Style="{StaticResource ToolButton}" Click="StartStream_Click"
+                ToolTip="Open the local IPTV/MJPEG headend for every display"/>
+        <Button Content="Stop stream" Style="{StaticResource ToolButton}" Click="StopStream_Click"/>
         <Button Content="Update Output" Style="{StaticResource ToolButton}" Click="UpdateOutput_Click"/>
         <Button Content="Open Display Studio…" Style="{StaticResource ToolButton}" Click="OpenStudio_Click"/>
       </StackPanel>
@@ -42,6 +45,8 @@
         <TextBlock Text="SCOREPLUS · LIVE CHANNEL" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"/>
         <TextBlock Text="   Output health · program monitor · event feed · graphics actions"
                    Foreground="#93A0B2" VerticalAlignment="Center"/>
+        <TextBlock x:Name="StreamStatusText" Text="" Foreground="#7FD1FF" FontSize="10"
+                   VerticalAlignment="Center" Margin="12,0,0,0" TextTrimming="CharacterEllipsis"/>
       </StackPanel>
     </DockPanel>
 
@@ -128,7 +133,11 @@
             </StackPanel>
           </DockPanel>
           <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="ActionPanel"/>
+            <StackPanel>
+              <TextBlock Text="CHANNEL + DISPLAY HEALTH" FontSize="9" FontWeight="Bold" Foreground="#5C6B7E" Margin="1,0,1,5"/>
+              <StackPanel x:Name="HealthPanel" Margin="0,0,0,8"/>
+              <StackPanel x:Name="ActionPanel"/>
+            </StackPanel>
           </ScrollViewer>
         </DockPanel>
       </Border>

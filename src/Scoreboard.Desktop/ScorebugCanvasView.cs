@@ -73,6 +73,8 @@ public sealed class ScorebugCanvasView : Grid
     readonly bool _muteVideo;
     // A silent monitor of the audience picture (not a preview), so it follows the on-air cue.
     readonly bool _onAirVideo;
+    // A channel stream puts a camera behind the artwork; the layout's own backdrop would hide it.
+    readonly bool _transparentBackdrop;
     // A nested feed must follow every game value, not just the clocks a preview copies.
     readonly bool _liveValues;
     /// <summary>Set while a saved game or a new game replaces the show. The first layout rebuild
@@ -119,7 +121,7 @@ public sealed class ScorebugCanvasView : Grid
     /// <param name="layoutProvider">Draws exactly the layout this view belongs to (a specific
     /// display's on-air layout, or a window's staged one). Overrides <paramref name="publishedLayout"/>.</param>
     public ScorebugCanvasView(ScorebugCatalog catalog, GameEngine engine, Func<GameState>? stateProvider=null, MediaPlayback? playback=null, bool muteVideo=true, bool publishedLayout=false, Func<ScorebugLayout>? layoutProvider=null, bool onAirVideo=false, string? displayId=null, AutomationRuntime? automation=null,
-        IReadOnlySet<string>? layoutChain=null, bool liveValues=false, bool fillBox=false, Func<double>? timelineProvider=null)
+        IReadOnlySet<string>? layoutChain=null, bool liveValues=false, bool fillBox=false, Func<double>? timelineProvider=null, bool transparentBackdrop=false)
     {
         _catalog=catalog;_engine=engine;_live=stateProvider is null;_automation=automation;
         _timelineProvider=timelineProvider;
@@ -130,7 +132,7 @@ public sealed class ScorebugCanvasView : Grid
         _displayId=displayId;
         _layoutProvider = layoutProvider ?? (publishedLayout ? () => _catalog.PublishedLayout : () => _catalog.Layout);
         _stateProvider=stateProvider??(()=>_engine.State);
-        _playback=playback;_muteVideo=muteVideo;_onAirVideo=onAirVideo;
+        _playback=playback;_muteVideo=muteVideo;_onAirVideo=onAirVideo;_transparentBackdrop=transparentBackdrop;
         _stage.Children.Add(_canvas);
         _viewbox=new Viewbox { Stretch=fillBox?Stretch.Fill:Stretch.Uniform, Child=_stage };
         Children.Add(_viewbox);
@@ -254,7 +256,7 @@ public sealed class ScorebugCanvasView : Grid
         _stage.Width=layout.Width;_stage.Height=layout.Height;
         _canvas.Width=layout.Width;_canvas.Height=layout.Height;
         // The artwork backdrop belongs to the layout, so a green-screen design and the studio agree.
-        _canvas.Background=ScorebugRender.ParseBrush(layout.Background);
+        _canvas.Background=_transparentBackdrop?Brushes.Transparent:ScorebugRender.ParseBrush(layout.Background);
         var live=new List<UIElement>();
         var zIndex=0;
         foreach(var item in layout.Elements)

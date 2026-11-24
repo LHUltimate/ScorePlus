@@ -93,24 +93,30 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// A wheel over a closed picker should not change its value. Forward the scroll to the
-    /// surrounding panel so the editor still scrolls as the operator expects.
+    /// A wheel over a closed picker should scroll the surrounding panel, not change its value. The
+    /// panel is scrolled directly: forwarding a synthetic event was occasionally dropped when a
+    /// property row sat at the edge of a ScrollViewer, which made the property list stop until the
+    /// pointer was moved off the picker.
     /// </summary>
     void ComboBox_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
         if (sender is not ComboBox { IsDropDownOpen: false } combo || e.Handled) return;
         e.Handled = true;
-        // Raising the bubbling event on the scroller (rather than the closed combo) lets the
-        // ScrollViewer treat it as a normal wheel gesture.
         for (var parent = VisualTreeHelper.GetParent(combo); parent is not null; parent = VisualTreeHelper.GetParent(parent))
         {
             if (parent is not ScrollViewer scroller) continue;
-            scroller.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+            // Skip a horizontal-only strip and keep walking to the vertical property panel. This is
+            // what lets a wheel over a picker in a wide row still move the editor.
+            if (scroller.ScrollableHeight > 0)
             {
-                RoutedEvent = UIElement.MouseWheelEvent,
-                Source = scroller
-            });
-            return;
+                scroller.ScrollToVerticalOffset(scroller.VerticalOffset - e.Delta / 3.0);
+                return;
+            }
+            if (scroller.ScrollableWidth > 0)
+            {
+                scroller.ScrollToHorizontalOffset(scroller.HorizontalOffset - e.Delta / 3.0);
+                return;
+            }
         }
     }
 
