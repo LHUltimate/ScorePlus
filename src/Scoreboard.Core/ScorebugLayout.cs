@@ -167,6 +167,11 @@ public sealed class ScorebugElement
     /// <summary>Corner radius for a rectangle shape, in design pixels. Zero gives square corners.</summary>
     public double CornerRadius { get; set; } = 8;
     public string Content { get; set; } = "TEXT";
+    /// <summary>
+    /// For a team record token: show the division record in parentheses after the overall record.
+    /// Off by default, so a record item prints the regular record unless the operator asks for both.
+    /// </summary>
+    public bool RecordIncludesDivision { get; set; }
     public string? ImagePath { get; set; }
 
     /// <summary>
@@ -189,6 +194,18 @@ public sealed class ScorebugElement
     /// part, so moving or restyling one updates all of them. Null on an independent element.
     /// </summary>
     public string? LinkId { get; set; }
+
+    /// <summary>
+    /// A locked element is part of the finished artwork: the studio never selects, drags, resizes
+    /// or deletes it. It still draws and it still prints live values. Saved with the layout.
+    /// </summary>
+    public bool Locked { get; set; }
+
+    /// <summary>
+    /// Elements that share this id are one group. Selecting any of them selects the group, so a
+    /// plate and its labels move and lock together; null means the element stands alone.
+    /// </summary>
+    public string? GroupId { get; set; }
 
     /// <summary>For video elements: only media assigned to this tag plays inside the element.</summary>
     public string MediaTag { get; set; } = "";
@@ -329,8 +346,22 @@ public sealed class ScorebugElement
     /// <summary>Print {{PLAY_CLOCK}} with a leading colon, e.g. :22, on this element.</summary>
     public bool PlayClockColon { get; set; }
 
+    /// <summary>
+    /// Pad a single-digit play clock to two digits, so the element prints 05 instead of 5. It is
+    /// independent of the colon: with the colon on, :05 comes out anyway, and both can be on.
+    /// </summary>
+    public bool PlayClockLeadingZero { get; set; }
+
     /// <summary>Print {{GAME_CLOCK}} as 09:59. Off prints 9:59 and :59 under a minute on this element.</summary>
     public bool GameClockLeadingZero { get; set; } = true;
+
+    /// <summary>
+    /// The decimal column this element prints after every clock token it carries: 0 is MM:SS,
+    /// 1 adds tenths (0:59.9) and 2 adds hundredths (0:59.99). It belongs to the element, so one
+    /// scorebug can read tenths while another reads whole seconds, and a conditional can switch it
+    /// on for a single element when the clock drops under a minute.
+    /// </summary>
+    public int ClockDecimals { get; set; }
 
     /// <summary>Optional artwork from live data: timeout bars or a possession dot.</summary>
     public ScorebugIcon Icon { get; set; } = ScorebugIcon.None;
@@ -356,8 +387,11 @@ public sealed class ScorebugElement
     /// <summary>For timeout bars: stack the bars downward instead of in one row.</summary>
     public bool IconVertical { get; set; }
 
-    /// <summary>For the possession arrow: point down at the plate instead of sideways into it.</summary>
-    public bool IconArrowDown { get; set; }
+    /// <summary>
+    /// Turns the icon artwork in degrees. 90 lays a possession arrow on its side pointing down,
+    /// 180 points it back the other way, and any angle works; 0 is the direction it was designed in.
+    /// </summary>
+    public double IconRotation { get; set; }
 
     /// <summary>The colour of a timeout bar or pip that has already been used.</summary>
     public string IconUsedColor { get; set; } = "#FF9AA5B2";
@@ -580,14 +614,16 @@ public sealed class ScorebugLayout
     {
         Elements =
         [
-            new() { Name="Home team", Content="{{HOME_TEAM}}", X=74, Y=236, Width=300, Height=54, FontSize=36 },
-            new() { Name="Home score", Content="{{HOME_SCORE}}", X=74, Y=300, Width=300, Height=126, FontSize=102, ForegroundSource=ScorebugColorSource.HomePrimary },
-            new() { Name="Away team", Content="{{AWAY_TEAM}}", X=906, Y=236, Width=300, Height=54, FontSize=36 },
-            new() { Name="Away score", Content="{{AWAY_SCORE}}", X=906, Y=300, Width=300, Height=126, FontSize=102, ForegroundSource=ScorebugColorSource.AwayPrimary },
+            // Home is the right-hand side and the visitors are on the left, matching the way the
+            // default console and most broadcast layouts read from the operator's seat.
+            new() { Name="Home team", Content="{{HOME_TEAM}}", X=906, Y=236, Width=300, Height=54, FontSize=36 },
+            new() { Name="Home score", Content="{{HOME_SCORE}}", X=906, Y=300, Width=300, Height=126, FontSize=102, ForegroundSource=ScorebugColorSource.HomePrimary },
+            new() { Name="Away team", Content="{{AWAY_TEAM}}", X=74, Y=236, Width=300, Height=54, FontSize=36 },
+            new() { Name="Away score", Content="{{AWAY_SCORE}}", X=74, Y=300, Width=300, Height=126, FontSize=102, ForegroundSource=ScorebugColorSource.AwayPrimary },
             new() { Name="Period", Content="{{PERIOD}}", X=470, Y=225, Width=340, Height=52, FontSize=28 },
-            new() { Name="Game clock", Content="{{GAME_CLOCK}}", X=430, Y=300, Width=420, Height=92, FontSize=72, Transition=ScorebugTransition.Cut },
-            new() { Name="Home logo", Kind=ScorebugElementKind.Logo, LogoSide=ScorebugLogoSide.Home, Content="HOME LOGO", X=78, Y=160, Width=120, Height=64, FontSize=20 },
-            new() { Name="Away logo", Kind=ScorebugElementKind.Logo, LogoSide=ScorebugLogoSide.Away, Content="AWAY LOGO", X=1082, Y=160, Width=120, Height=64, FontSize=20 }
+            new() { Name="Game Clock", Content="{{GAME_CLOCK}}", X=430, Y=300, Width=420, Height=92, FontSize=72, Transition=ScorebugTransition.Cut },
+            new() { Name="Home logo", Kind=ScorebugElementKind.Logo, LogoSide=ScorebugLogoSide.Home, Content="HOME LOGO", X=1082, Y=160, Width=120, Height=64, FontSize=20 },
+            new() { Name="Away logo", Kind=ScorebugElementKind.Logo, LogoSide=ScorebugLogoSide.Away, Content="AWAY LOGO", X=78, Y=160, Width=120, Height=64, FontSize=20 }
         ]
     };
 
@@ -734,10 +770,10 @@ public sealed class ScorebugCatalog
     /// <summary>A display and the layout that has to change with it, in another display.</summary>
     public sealed record LayoutLink(string DisplayId, int LayoutIndex);
 
-    static ScorebugDisplay DefaultDisplay() => new()
+    static ScorebugDisplay DefaultDisplay(string? presetId = null) => new()
     {
         Name = "Program",
-        Layouts = [ScorebugLayout.Default()]
+        Layouts = [ScorebugPresets.Build(presetId)]
     };
 
     static ScorebugDisplay BlankDisplay(int number) => new()
@@ -1226,6 +1262,8 @@ public sealed class ScorebugCatalog
                     item.TextShadowSoftness = Math.Clamp(double.IsFinite(item.TextShadowSoftness) ? item.TextShadowSoftness : 0, 0, 60);
                     item.TextShadowAngle = Math.Clamp(double.IsFinite(item.TextShadowAngle) ? item.TextShadowAngle : 45, 0, 360);
                     if (!Enum.IsDefined(item.TextAlign)) item.TextAlign = ScorebugTextAlign.Center;
+                    item.ClockDecimals = Math.Clamp(item.ClockDecimals, 0, 2);
+                    item.IconRotation = Math.Clamp(double.IsFinite(item.IconRotation) ? item.IconRotation : 0, -360, 360);
                     if (string.IsNullOrWhiteSpace(item.TextShadowColor)) item.TextShadowColor = "#CC000000";
                     if (string.IsNullOrWhiteSpace(item.BorderColor)) item.BorderColor = "#FFFFFFFF";
                     // A colour saved as an empty string is not a colour: repairing it here is what
@@ -1554,9 +1592,9 @@ public sealed class ScorebugCatalog
     /// Starts over with a single display and the factory layout. A new game is a blank slate: no
     /// layouts or displays from the previous game, and the same design every fresh install opens with.
     /// </summary>
-    public void ResetToDefault()
+    public void ResetToDefault(string? presetId = null)
     {
-        Displays = [DefaultDisplay()];
+        Displays = [DefaultDisplay(presetId)];
         ActiveDisplayIndex = 0;
         Save(); Changed?.Invoke();
     }

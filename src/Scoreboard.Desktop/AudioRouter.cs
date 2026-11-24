@@ -1,6 +1,7 @@
 using System.IO;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 
 namespace Scoreboard.Desktop;
 
@@ -20,7 +21,52 @@ public sealed class AudioRouter : IDisposable
 
     IWavePlayer? _output;
     AudioFileReader? _reader;
+    LevelReader? _meter;
     float _volume = 1;
+
+    /// <summary>
+    /// This stream's own level, 0–1, measured from the samples it is sending. A speaker bus can
+    /// read its device's loopback, but a clip must show only its own sound — reading the device
+    /// mixed every clip on that speaker into one bar.
+    /// </summary>
+    public double Level => IsPlaying && _meter is { } meter ? Math.Clamp(meter.Level, 0, 1) : 0;
+
+    /// <summary>Measures the peak of the samples it passes through, with a short fall-off so a
+    /// bar reads the music instead of flickering on every frame.</summary>
+    sealed class LevelReader(ISampleProvider source) : ISampleProvider
+    {
+        float _peak;
+
+        public WaveFormat WaveFormat => source.WaveFormat;
+
+        public float Level => Volatile.Read(ref _peak);
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            var read = source.Read(new Span<float>(buffer, offset, count));
+            Measure(new ReadOnlySpan<float>(buffer, offset, read));
+            return read;
+        }
+
+        public int Read(Span<float> buffer)
+        {
+            var read = source.Read(buffer);
+            Measure(buffer[..read]);
+            return read;
+        }
+
+        void Measure(ReadOnlySpan<float> samples)
+        {
+            var peak = 0f;
+            foreach (var sample in samples)
+            {
+                var value = Math.Abs(sample);
+                if (value > peak) peak = value;
+            }
+            // Fall away gradually, so a bar between beats sinks instead of snapping to zero.
+            Volatile.Write(ref _peak, Math.Max(peak, Volatile.Read(ref _peak) * 0.86f));
+        }
+    }
 
     /// <summary>Every active playback device, in Windows' own order.</summary>
     public static IReadOnlyList<OutputDevice> Devices()
@@ -65,13 +111,22 @@ public sealed class AudioRouter : IDisposable
                 if (target < reader.TotalTime) reader.CurrentTime = target;
             }
             enumerator = new MMDeviceEnumerator();
-            var device = Resolve(enumerator, deviceId);
+            MMDevice? device = null;
+            if (!string.IsNullOrWhiteSpace(deviceId))
+            {
+                device = Resolve(enumerator, deviceId);
+                // A speaker the operator picked that is not connected must not quietly fall back to
+                // the default output: that made a switched-off speaker look like it was playing.
+                if (device is null) throw new InvalidOperationException("that speaker is not connected");
+            }
             var output = device is null
                 ? new WasapiOut(AudioClientShareMode.Shared, true, 100)
                 : new WasapiOut(device, AudioClientShareMode.Shared, true, 100);
-            output.Init(reader);
+            var metered = new LevelReader(reader);
+            output.Init(new SampleToWaveProvider(metered));
             output.Play();
             _reader = reader;
+            _meter = metered;
             _output = output;
             IsPlaying = true;
         }
@@ -148,6 +203,7 @@ public sealed class AudioRouter : IDisposable
         try { _reader?.Dispose(); } catch { }
         _output = null;
         _reader = null;
+        _meter = null;
     }
 
     public void Dispose() => Stop();

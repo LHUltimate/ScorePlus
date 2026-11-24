@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -28,6 +30,10 @@ public partial class MacroDock : UserControl
     readonly MediaSession _session;
     readonly ScorebugCatalog? _catalog;
     readonly MacroRunner _runner;
+    readonly Action? _publishOutput;
+    readonly Func<bool>? _liveState;
+    readonly Action<bool>? _setLive;
+    readonly Action? _openConditionals;
     List<SavedMacro> _macros = [];
     SavedMacro? _draft;
     SavedMacro? _dragMacro;
@@ -35,6 +41,11 @@ public partial class MacroDock : UserControl
     Point _dragOrigin;
     bool _syncing;
     bool _dirty;
+    // Every macro and step edit is a whole-board snapshot. Macros live in the game state, so one
+    // JSON copy of the board plus the open draft is enough to step back and forward safely.
+    readonly Stack<string> _historyUndo = new();
+    readonly Stack<string> _historyRedo = new();
+    sealed record MacroEditorState(string Macros, string Draft, bool Dirty);
 
     sealed record MacroDropTarget(int Row, int Column, bool NewRow);
     sealed record MacroPlacement(SavedMacro Macro, int Row, int Column);
@@ -68,12 +79,27 @@ public partial class MacroDock : UserControl
         public override string ToString() => Label;
     }
 
+    sealed record ValueSourceChoice(MacroValueSource Source)
+    {
+        public override string ToString() => Source.Label;
+    }
+
     sealed record MediaChoice(string Path, string Label)
     {
         public override string ToString() => Label;
     }
 
     sealed record LayoutChoice(string DisplayId, string LayoutId, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    sealed record ClockChoice(string Id, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    sealed record MacroPick(string Id, string Label)
     {
         public override string ToString() => Label;
     }
@@ -126,12 +152,19 @@ public partial class MacroDock : UserControl
     }
 
     public MacroDock(GameEngine engine, MediaSession session, string? theme = null, Action<string>? executeControl = null,
-        ScorebugCatalog? catalog = null, Action? publishOutput = null)
+        ScorebugCatalog? catalog = null, Action? publishOutput = null,
+        Func<bool>? liveState = null, Action<bool>? setLive = null, Action? openConditionals = null)
     {
         InitializeComponent();
+        _openConditionals = openConditionals;
+        // A host that cannot open the rule editor leaves the button out instead of showing a dead one.
+        ConditionalsButton.Visibility = openConditionals is null ? Visibility.Collapsed : Visibility.Visible;
         _engine = engine;
         _session = session;
         _catalog = catalog;
+        _publishOutput = publishOutput;
+        _liveState = liveState;
+        _setLive = setLive;
         _runner = new MacroRunner(engine, session, executeControl, catalog, publishOutput);
         // The board paints itself from its own palette so generated cards, the step list and the
         // editor all follow the active theme. Opting out keeps the window-wide theme pass from
@@ -146,12 +179,12 @@ public partial class MacroDock : UserControl
             new KindChoice(MacroActionKind.Score, "Score — add points to a side"),
             new KindChoice(MacroActionKind.SetDown, "Down — set the current down"),
             new KindChoice(MacroActionKind.SetTimeouts, "Timeouts — set a side's remaining count"),
-            new KindChoice(MacroActionKind.SetGameClock, "Game clock — set the clock"),
+            new KindChoice(MacroActionKind.SetGameClock, "Game Clock — set the clock"),
             new KindChoice(MacroActionKind.SetPlayClock, "Play clock — set the clock"),
             new KindChoice(MacroActionKind.SetTimeoutClock, "Timeout clock — set the clock"),
             new KindChoice(MacroActionKind.SetPeriod, "Period — set the current period"),
             new KindChoice(MacroActionKind.PutOnAir, "Media — take a clip, mic, speaker or camera on air"),
-            new KindChoice(MacroActionKind.TakeOffAir, "Media — take a camera, mic, speaker or clip off air"),
+            new KindChoice(MacroActionKind.TakeOffAir, "Media — take a clip, mic, speaker or camera off air"),
             new KindChoice(MacroActionKind.SwitchLayout, "Layout — switch a display to a layout"),
             new KindChoice(MacroActionKind.PenaltyFlag, "Flag — put a flag down or clear it"),
             new KindChoice(MacroActionKind.RosterStat, "Roster stat — change any player's stat"),
@@ -161,11 +194,51 @@ public partial class MacroDock : UserControl
             new KindChoice(MacroActionKind.SetFootballBallSpot, "Football — set ball spot"),
             new KindChoice(MacroActionKind.SetPossession, "Possession — set the team with the ball"),
             new KindChoice(MacroActionKind.CustomValue, "Custom value — set a value on the console"),
-            new KindChoice(MacroActionKind.Wait, "Wait — pause before the next step")
+            new KindChoice(MacroActionKind.CopyValue, "Custom value — copy a live game value into it"),
+            new KindChoice(MacroActionKind.Wait, "Wait — pause before the next step"),
+            new KindChoice(MacroActionKind.ClockControl, "Clock — start, stop, toggle or reset a clock"),
+            new KindChoice(MacroActionKind.CustomClock, "Custom clock — start, stop, toggle or reset a custom value clock"),
+            new KindChoice(MacroActionKind.ClockMessage, "Clock message — the time, Final or End of Reg."),
+            new KindChoice(MacroActionKind.MediaVolume, "Level — set a clip's level, or mute a speaker bus"),
+            new KindChoice(MacroActionKind.TickerNews, "Ticker — replace the news headlines"),
+            new KindChoice(MacroActionKind.RunMacro, "Run macro — chain another macro's steps"),
+            new KindChoice(MacroActionKind.Note, "Note — a heading in the step list"),
+            new KindChoice(MacroActionKind.Replay, "Replay — speed, set up a replay, or start it")
         };
         KindBox.SelectedIndex = 0;
+        ReplayActionBox.ItemsSource = new[]
+        {
+            "Set up a replay at a point",
+            "Start Replay",
+            "Play / pause the replay",
+            "Return to Live",
+            "Change the replay speed"
+        };
+        ReplayActionBox.SelectedIndex = 0;
+        PreviewKeyDown += MacroDock_PreviewKeyDown;
+        UpdateHistoryButtons();
         SideBox.ItemsSource = new[] { "Home", "Visitors" };
         SideBox.SelectedIndex = 0;
+        ClockBox.ItemsSource = new[]
+        {
+            new ClockChoice("game", "Game Clock"),
+            new ClockChoice("play", "Play clock"),
+            new ClockChoice("timeout", "Timeout clock"),
+            new ClockChoice("shot", "Shot clock"),
+            new ClockChoice("stoppage", "Stoppage clock")
+        };
+        ClockBox.SelectedIndex = 0;
+        ClockActionBox.ItemsSource = new[] { "Start", "Stop", "Toggle", "Reset" };
+        ClockActionBox.SelectedIndex = 0;
+        CustomClockActionBox.ItemsSource = new[] { "Start", "Stop", "Toggle", "Reset" };
+        CustomClockActionBox.SelectedIndex = 0;
+        ClockMessageBox.ItemsSource = new[] { "The time", "Final", "End of regulation" };
+        ClockMessageBox.SelectedIndex = 0;
+        VolumeModeBox.ItemsSource = new[] { "Set level", "Mute", "Unmute" };
+        VolumeModeBox.SelectedIndex = 0;
+        UpdateOutputButton.IsEnabled = _publishOutput is not null;
+        LiveButton.IsEnabled = _setLive is not null;
+        RefreshLiveButton();
         RefreshView();
     }
 
@@ -181,7 +254,15 @@ public partial class MacroDock : UserControl
     /// <summary>Reloads the saved buttons and refreshes the editor when it is safe to do so.</summary>
     public void RefreshView(bool force = false)
     {
-        if (force) { _draft = null; _dirty = false; }
+        if (force)
+        {
+            _draft = null;
+            _dirty = false;
+            // A different game's board is a different history.
+            _historyUndo.Clear();
+            _historyRedo.Clear();
+            UpdateHistoryButtons();
+        }
         var selectedId = _draft?.Id;
         _macros = _engine.State.Macros.Select(macro => macro.Copy()).ToList();
         _pageCount = Math.Clamp(_engine.State.MacroPages, 1, 99);
@@ -194,6 +275,39 @@ public partial class MacroDock : UserControl
         }
         RenderMacros();
         LoadEditor();
+    }
+
+    /// <summary>
+    /// Mirrors the console's Live toggle on the macro board. The board can pause the live feed
+    /// while a multi-step sequence is being lined up, then publish it with Update Output.
+    /// </summary>
+    public void SyncLiveState(bool live)
+    {
+        LiveButton.Content = live ? "Live: ON" : "Live: OFF";
+        LiveButton.Foreground = live
+            ? (Brush)Resources["MacroAccentBrush"]
+            : (Brush)Resources["MacroMutedBrush"];
+    }
+
+    void RefreshLiveButton() => SyncLiveState(_liveState?.Invoke() ?? true);
+
+    void Conditionals_Click(object sender, RoutedEventArgs e) => _openConditionals?.Invoke();
+
+    void UpdateOutput_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dirty) SaveDraft(false);
+        _publishOutput?.Invoke();
+        EditStatus.Text = "PUBLISHED";
+        Status?.Invoke("MACRO · staged values published to air");
+    }
+
+    void Live_Click(object sender, RoutedEventArgs e)
+    {
+        if (_setLive is null) return;
+        var next = !(_liveState?.Invoke() ?? true);
+        _setLive(next);
+        SyncLiveState(next);
+        Status?.Invoke(next ? "MACRO · live feed resumed" : "MACRO · live feed paused · Update Output still publishes");
     }
 
     /// <summary>Turns the drag/click caption on and off with Preferences → Show heading tips.</summary>
@@ -474,7 +588,11 @@ public partial class MacroDock : UserControl
         SidePanel.Visibility = kind is MacroActionKind.Score or MacroActionKind.SetTimeouts
             or MacroActionKind.RosterStat or MacroActionKind.SetPossession or MacroActionKind.PenaltyFlag
             ? Visibility.Visible : Visibility.Collapsed;
-        AmountPanel.Visibility = kind == MacroActionKind.Score ? Visibility.Visible : Visibility.Collapsed;
+        AmountPanel.Visibility = kind is MacroActionKind.Score or MacroActionKind.ClockControl
+            ? Visibility.Visible : Visibility.Collapsed;
+        AmountLabel.Text = kind == MacroActionKind.ClockControl
+            ? "RESET TO (SECONDS · 0 USES THE STANDARD)"
+            : "POINTS TO ADD (CAN BE NEGATIVE)";
         ValuePanel.Visibility = kind is MacroActionKind.SetDown or MacroActionKind.SetTimeouts
             or MacroActionKind.SetGameClock or MacroActionKind.SetPlayClock
             or MacroActionKind.SetTimeoutClock or MacroActionKind.SetPeriod
@@ -490,6 +608,20 @@ public partial class MacroDock : UserControl
         CommandPanel.Visibility = kind == MacroActionKind.Control ? Visibility.Visible : Visibility.Collapsed;
         SportValuePanel.Visibility = kind == MacroActionKind.SportValue ? Visibility.Visible : Visibility.Collapsed;
         CustomValuePanel.Visibility = kind == MacroActionKind.CustomValue ? Visibility.Visible : Visibility.Collapsed;
+        CopyValuePanel.Visibility = kind == MacroActionKind.CopyValue ? Visibility.Visible : Visibility.Collapsed;
+        ClockPanel.Visibility = kind == MacroActionKind.ClockControl ? Visibility.Visible : Visibility.Collapsed;
+        CustomClockPanel.Visibility = kind == MacroActionKind.CustomClock ? Visibility.Visible : Visibility.Collapsed;
+        ClockMessagePanel.Visibility = kind == MacroActionKind.ClockMessage ? Visibility.Visible : Visibility.Collapsed;
+        VolumePanel.Visibility = kind == MacroActionKind.MediaVolume ? Visibility.Visible : Visibility.Collapsed;
+        TickerPanel.Visibility = kind == MacroActionKind.TickerNews ? Visibility.Visible : Visibility.Collapsed;
+        RunMacroPanel.Visibility = kind == MacroActionKind.RunMacro ? Visibility.Visible : Visibility.Collapsed;
+        NotePanel.Visibility = kind == MacroActionKind.Note ? Visibility.Visible : Visibility.Collapsed;
+        ReplayPanel.Visibility = kind == MacroActionKind.Replay ? Visibility.Visible : Visibility.Collapsed;
+        ReplaySecondsRow.Visibility = kind == MacroActionKind.Replay && ReplayActionBox.SelectedIndex == 0
+            ? Visibility.Visible : Visibility.Collapsed;
+        ReplaySpeedRow.Visibility = kind == MacroActionKind.Replay && ReplayActionBox.SelectedIndex is 0 or 4
+            ? Visibility.Visible : Visibility.Collapsed;
+        VolumePercentRow.Visibility = VolumeModeBox.SelectedIndex <= 0 ? Visibility.Visible : Visibility.Collapsed;
         ValueLabel.Text = kind switch
         {
             MacroActionKind.SetDown => "DOWN (1–4)",
@@ -509,16 +641,71 @@ public partial class MacroDock : UserControl
         if (kind is MacroActionKind.Control) RefreshCommandChoices();
         if (kind is MacroActionKind.SportValue) RefreshSportValueChoices();
         if (kind is MacroActionKind.CustomValue) RefreshCustomValueChoices();
+        if (kind is MacroActionKind.CustomClock) RefreshCustomClockChoices();
+        if (kind is MacroActionKind.CopyValue) RefreshCopyValueChoices();
         if (kind is MacroActionKind.PenaltyFlag) RefreshFlagChoices();
         if (kind is MacroActionKind.SwitchLayout) RefreshLayoutChoices();
+        if (kind is MacroActionKind.MediaVolume) RefreshVolumeChoices();
+        if (kind is MacroActionKind.RunMacro) RefreshMacroChoices();
         if (mediaStep) RefreshMediaChoices();
-        // Media and layout switching are always direct: there is no staged playback or layout state
-        // to publish. A wait has no output at all. The checkbox reflects that rather than offering
-        // an option that does nothing.
-        var directStep = mediaStep || kind == MacroActionKind.SwitchLayout;
+        // Media, levels and layout switching are always direct: there is no staged playback, sound
+        // or layout state to publish. A wait or a heading has no output at all. The checkbox
+        // reflects that rather than offering an option that does nothing.
+        var directStep = AlwaysDirect(kind);
         if (directStep) BypassOutputBox.IsChecked = true;
-        if (kind == MacroActionKind.Wait) BypassOutputBox.IsChecked = false;
-        BypassOutputBox.IsEnabled = !directStep && kind != MacroActionKind.Wait;
+        if (kind is MacroActionKind.Wait or MacroActionKind.Note) BypassOutputBox.IsChecked = false;
+        BypassOutputBox.IsEnabled = !directStep && kind is not (MacroActionKind.Wait or MacroActionKind.Note);
+    }
+
+    /// <summary>Steps that act immediately, with no staged value waiting for Update Output.</summary>
+    static bool AlwaysDirect(MacroActionKind kind) => kind is MacroActionKind.PlayVideo
+        or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir or MacroActionKind.SwitchLayout
+        or MacroActionKind.MediaVolume or MacroActionKind.Replay;
+
+    /// <summary>The step path for each entry in the replay action picker.</summary>
+    static string ReplayPath(int index) => Math.Clamp(index, 0, 4) switch
+    {
+        1 => "start",
+        2 => "playpause",
+        3 => "live",
+        4 => "speed",
+        _ => "prepare"
+    };
+
+    void ReplayAction_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncing) return;
+        UpdateFields();
+    }
+
+    void VolumeMode_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (VolumePercentRow is null) return;
+        VolumePercentRow.Visibility = VolumeModeBox.SelectedIndex <= 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Lists every library item, so a level step can name a clip or a bus by its label.</summary>
+    void RefreshVolumeChoices()
+    {
+        var selected = (VolumeMediaBox.SelectedItem as MediaChoice)?.Path;
+        var choices = _session.Library
+            .Select(entry => new MediaChoice(entry.Path, $"{entry.KindLabel} · {entry.Label} · {entry.Tag}"))
+            .ToList();
+        VolumeMediaBox.ItemsSource = choices;
+        VolumeMediaBox.SelectedItem = choices.FirstOrDefault(choice =>
+            string.Equals(choice.Path, selected, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
+    }
+
+    /// <summary>The board's other macros, so one press can chain another.</summary>
+    void RefreshMacroChoices()
+    {
+        var selected = (MacroChoiceBox.SelectedItem as MacroPick)?.Id;
+        var choices = _engine.State.Macros
+            .Select(macro => new MacroPick(macro.Id, $"{macro.Label} · {macro.ActionCount} step{(macro.ActionCount == 1 ? "" : "s")}"))
+            .ToList();
+        MacroChoiceBox.ItemsSource = choices;
+        MacroChoiceBox.SelectedItem = choices.FirstOrDefault(choice =>
+            string.Equals(choice.Id, selected, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
     }
 
     /// <summary>Lists every routeable library item, including live cameras and audio buses.</summary>
@@ -567,7 +754,10 @@ public partial class MacroDock : UserControl
         var rosterId = home ? _engine.State.HomeRosterId : _engine.State.AwayRosterId;
         var roster = RosterStore.Book.Find(rosterId);
         var previous = (PlayerBox.SelectedItem as PlayerChoice)?.Id;
-        var choices = (roster?.Players ?? []).Select(player => new PlayerChoice(player.Id, player.Record)).ToList();
+        // An empty id is the on-air player: the step follows whoever the desk has live for that
+        // side instead of naming one player that a substitution would leave behind.
+        var choices = new List<PlayerChoice> { new("", "On-air player") };
+        choices.AddRange((roster?.Players ?? []).Select(player => new PlayerChoice(player.Id, player.Record)));
         PlayerBox.ItemsSource = choices;
         if (previous is not null) PlayerBox.SelectedItem = choices.FirstOrDefault(choice => choice.Id == previous);
         if (PlayerBox.SelectedItem is null && choices.Count > 0) PlayerBox.SelectedIndex = 0;
@@ -609,6 +799,41 @@ public partial class MacroDock : UserControl
         CustomValueBox.ItemsSource = choices;
         var match = choices.FirstOrDefault(choice => string.Equals(choice.Id, selected, StringComparison.OrdinalIgnoreCase));
         CustomValueBox.SelectedItem = match ?? choices.FirstOrDefault();
+    }
+
+    /// <summary>Every custom value that runs as a clock, so a step can start or stop it.</summary>
+    void RefreshCustomClockChoices()
+    {
+        var selected = (CustomClockBox.SelectedItem as CustomValueChoice)?.Id;
+        var choices = _engine.State.Stats
+            .Where(stat => stat.IsClock)
+            .Select(stat => new CustomValueChoice(stat.Id, $"{stat.Name} · {stat.Display}"))
+            .ToList();
+        CustomClockBox.ItemsSource = choices;
+        CustomClockBox.SelectedItem = choices.FirstOrDefault(choice =>
+            string.Equals(choice.Id, selected, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
+    }
+
+    /// <summary>Target custom values and every live value the copy step can read.</summary>
+    void RefreshCopyValueChoices()
+    {
+        var selectedTarget = (CopyTargetBox.SelectedItem as CustomValueChoice)?.Id;
+        var targets = _engine.State.Stats
+            .Select(stat => new CustomValueChoice(stat.Id, stat.Name))
+            .ToList();
+        CopyTargetBox.ItemsSource = targets;
+        CopyTargetBox.SelectedItem = targets.FirstOrDefault(choice =>
+            string.Equals(choice.Id, selectedTarget, StringComparison.OrdinalIgnoreCase)) ?? targets.FirstOrDefault();
+
+        var selectedToken = (CopySourceBox.SelectedItem as ValueSourceChoice)?.Source.Token;
+        var sources = MacroValueSources.Build(_engine.State)
+            .Select(source => new ValueSourceChoice(source))
+            .ToList();
+        CopySourceBox.ItemsSource = sources;
+        CopySourceBox.SelectedItem = sources.FirstOrDefault(choice =>
+            string.Equals(choice.Source.Token, selectedToken, StringComparison.OrdinalIgnoreCase))
+            ?? sources.FirstOrDefault(choice => choice.Source.Token == "{{GAME_CLOCK}}")
+            ?? sources.FirstOrDefault();
     }
 
     void RefreshSportValueChoices()
@@ -843,6 +1068,7 @@ public partial class MacroDock : UserControl
 
     void NewMacro_Click(object sender, RoutedEventArgs e)
     {
+        PushHistory();
         SaveDraft(false);
         var macro = new SavedMacro { Label = $"Macro {MacrosOnPage.Count() + 1}", Page = _page };
         _macros.Add(macro);
@@ -856,6 +1082,7 @@ public partial class MacroDock : UserControl
     void Delete_Click(object sender, RoutedEventArgs e)
     {
         if (_draft is null) return;
+        PushHistory();
         _macros.RemoveAll(item => item.Id == _draft.Id);
         StoreBoard();
         _draft = MacrosOnPage.FirstOrDefault()?.Copy();
@@ -864,10 +1091,11 @@ public partial class MacroDock : UserControl
         LoadEditor();
     }
 
-    void Save_Click(object sender, RoutedEventArgs e) => SaveDraft(true);
+    void Save_Click(object sender, RoutedEventArgs e) => SaveDraft(true, history: true);
 
-    void SaveDraft(bool announce)
+    void SaveDraft(bool announce, bool history = false)
     {
+        if (history) PushHistory();
         if (_draft is null) return;
         _draft.Label = string.IsNullOrWhiteSpace(NameBox.Text) ? "Macro" : NameBox.Text.Trim();
         var existing = _macros.FirstOrDefault(item => item.Id == _draft.Id);
@@ -1097,18 +1325,45 @@ public partial class MacroDock : UserControl
         var command = CommandBox.SelectedItem as CommandChoice;
         var sportValue = SportValueBox.SelectedItem as SportValueChoice;
         var customValue = CustomValueBox.SelectedItem as CustomValueChoice;
+        var copyTarget = CopyTargetBox.SelectedItem as CustomValueChoice;
+        var copySource = CopySourceBox.SelectedItem as ValueSourceChoice;
         var media = MediaBox.SelectedItem as MediaChoice;
+        var volumeMedia = VolumeMediaBox.SelectedItem as MediaChoice;
+        var chained = MacroChoiceBox.SelectedItem as MacroPick;
+        var clock = ClockBox.SelectedItem as ClockChoice;
+        var customClock = CustomClockBox.SelectedItem as CustomValueChoice;
         var flagType = FlagTypeBox.SelectedItem as string ?? "";
         var layout = LayoutBox.SelectedItem as LayoutChoice;
         var value = int.TryParse(ValueBox.Text, out var parsedValue) ? parsedValue : 0;
         if (kind == MacroActionKind.SetGameClock && TryParseClock(ValueBox.Text, out var clockSeconds)) value = clockSeconds;
         if (kind == MacroActionKind.PenaltyFlag) value = ClearFlagBox.IsChecked == true ? 0 : 1;
+        if (kind == MacroActionKind.ClockControl) value = Math.Clamp(ClockActionBox.SelectedIndex, 0, 3);
+        if (kind == MacroActionKind.CustomClock) value = Math.Clamp(CustomClockActionBox.SelectedIndex, 0, 3);
+        if (kind == MacroActionKind.ClockMessage) value = Math.Clamp(ClockMessageBox.SelectedIndex, 0, 2);
+        if (kind == MacroActionKind.MediaVolume)
+            value = Math.Clamp(int.TryParse(VolumePercentBox.Text, out var percent) ? percent : 100, 0, 100);
+        var replaySeconds = double.TryParse(ReplaySecondsBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var replayBack)
+            ? Math.Clamp(replayBack, 0, 600) : 8;
+        var replaySpeed = double.TryParse(ReplaySpeedBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var replayRate)
+            ? Math.Clamp(replayRate, 0.1, 2) : 1;
+        var volumeMode = kind == MacroActionKind.MediaVolume ? Math.Clamp(VolumeModeBox.SelectedIndex, 0, 2) : 0;
+        var mediaStep = kind is MacroActionKind.PlayVideo or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir;
+        var text = kind switch
+        {
+            MacroActionKind.TickerNews => TickerTextBox.Text.Trim(),
+            MacroActionKind.Note => NoteTextBox.Text.Trim(),
+            MacroActionKind.CopyValue => copySource?.Source.Token ?? "",
+            _ => ""
+        };
         return new MacroAction
         {
             Kind = kind,
             Home = SideBox.SelectedIndex != 1,
             Amount = int.TryParse(AmountBox.Text, out var amount) ? amount : 1,
             Value = value,
+            Text = text,
+            Mute = kind == MacroActionKind.MediaVolume && volumeMode != 0,
+            Muted = volumeMode == 1,
             Path = kind switch
             {
                 MacroActionKind.PlayVideo or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir => VideoPathBox.Text.Trim(),
@@ -1117,14 +1372,24 @@ public partial class MacroDock : UserControl
                 MacroActionKind.Control => command?.Id ?? "",
                 MacroActionKind.SportValue => sportValue?.Id ?? "",
                 MacroActionKind.CustomValue => customValue?.Id ?? "",
+                MacroActionKind.CopyValue => copyTarget?.Id ?? "",
+                MacroActionKind.ClockControl => clock?.Id ?? "game",
+                MacroActionKind.CustomClock => customClock?.Id ?? "",
+                MacroActionKind.MediaVolume => volumeMedia?.Path ?? "",
+                MacroActionKind.RunMacro => chained?.Id ?? "",
+                MacroActionKind.Replay => ReplayPath(ReplayActionBox.SelectedIndex),
                 _ => ""
             },
             Label = kind == MacroActionKind.Control ? command?.Label ?? ""
+                : kind == MacroActionKind.CustomClock ? customClock?.Label ?? ""
                 : kind == MacroActionKind.SportValue ? sportValue?.Label ?? ""
                 : kind == MacroActionKind.CustomValue ? customValue?.Label ?? ""
+                : kind == MacroActionKind.CopyValue ? copyTarget?.Label ?? ""
                 : kind == MacroActionKind.SwitchLayout ? layout?.Label ?? ""
                 : kind == MacroActionKind.PenaltyFlag ? flagType
-                : (kind is MacroActionKind.PlayVideo or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir) && media is not null
+                : kind == MacroActionKind.MediaVolume ? volumeMedia?.Label ?? ""
+                : kind == MacroActionKind.RunMacro ? chained?.Label ?? ""
+                : mediaStep && media is not null
                     && string.Equals(media.Path, VideoPathBox.Text.Trim(), StringComparison.OrdinalIgnoreCase)
                     ? media.Label
                     : "",
@@ -1132,8 +1397,10 @@ public partial class MacroDock : UserControl
             PlayerId = (PlayerBox.SelectedItem as PlayerChoice)?.Id ?? "",
             PlayerName = (PlayerBox.SelectedItem as PlayerChoice)?.Label ?? "",
             StatName = StatBox.Text.Trim(),
-            BypassOutput = (kind is MacroActionKind.PlayVideo or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir or MacroActionKind.SwitchLayout) || BypassOutputBox.IsChecked == true,
-            WaitSeconds = double.TryParse(WaitSecondsBox.Text, out var waitSeconds) ? waitSeconds : 1,
+            BypassOutput = AlwaysDirect(kind) || BypassOutputBox.IsChecked == true,
+            WaitSeconds = kind == MacroActionKind.Replay ? replaySeconds
+                : double.TryParse(WaitSecondsBox.Text, out var waitSeconds) ? waitSeconds : 1,
+            ReplaySpeed = kind == MacroActionKind.Replay ? replaySpeed : 0,
             Delta = kind == MacroActionKind.SportValue
                 ? SportDeltaBox.IsChecked == true
                 : kind == MacroActionKind.CustomValue
@@ -1145,6 +1412,7 @@ public partial class MacroDock : UserControl
     void AddStep_Click(object sender, RoutedEventArgs e)
     {
         if (_draft is null) return;
+        PushHistory();
         _draft.Actions.Add(ReadActionFromFields());
         _dirty = true;
         StepList.Items.Refresh();
@@ -1155,6 +1423,7 @@ public partial class MacroDock : UserControl
     void UpdateStep_Click(object sender, RoutedEventArgs e)
     {
         if (_draft is null || StepList.SelectedItem is not MacroAction action) return;
+        PushHistory();
         var replacement = ReadActionFromFields();
         action.Kind = replacement.Kind;
         action.Home = replacement.Home;
@@ -1166,9 +1435,13 @@ public partial class MacroDock : UserControl
         action.PlayerId = replacement.PlayerId;
         action.PlayerName = replacement.PlayerName;
         action.StatName = replacement.StatName;
+        action.Text = replacement.Text;
+        action.Mute = replacement.Mute;
+        action.Muted = replacement.Muted;
         action.Delta = replacement.Delta;
         action.BypassOutput = replacement.BypassOutput;
         action.WaitSeconds = replacement.WaitSeconds;
+        action.ReplaySpeed = replacement.ReplaySpeed;
         _dirty = true;
         StepList.Items.Refresh();
         EditStatus.Text = "UNSAVED";
@@ -1212,6 +1485,14 @@ public partial class MacroDock : UserControl
                     .FirstOrDefault(choice => string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase));
                 CustomDeltaBox.IsChecked = action.Delta;
             }
+            if (action.Kind == MacroActionKind.CopyValue)
+            {
+                RefreshCopyValueChoices();
+                CopyTargetBox.SelectedItem = CopyTargetBox.Items.OfType<CustomValueChoice>()
+                    .FirstOrDefault(choice => string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase));
+                CopySourceBox.SelectedItem = CopySourceBox.Items.OfType<ValueSourceChoice>()
+                    .FirstOrDefault(choice => string.Equals(choice.Source.Token, action.Text, StringComparison.OrdinalIgnoreCase));
+            }
             if (action.Kind == MacroActionKind.RosterStat)
             {
                 SyncRoster();
@@ -1231,9 +1512,55 @@ public partial class MacroDock : UserControl
                     string.Equals(choice.DisplayId, action.DisplayId, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(choice.LayoutId, action.Path, StringComparison.OrdinalIgnoreCase));
             }
+            if (action.Kind == MacroActionKind.ClockControl)
+            {
+                var clocks = ClockBox.Items.OfType<ClockChoice>().ToList();
+                ClockBox.SelectedItem = clocks.FirstOrDefault(choice =>
+                    string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase)) ?? clocks.FirstOrDefault();
+                ClockActionBox.SelectedIndex = Math.Clamp(action.Value, 0, 3);
+            }
+            if (action.Kind == MacroActionKind.CustomClock)
+            {
+                RefreshCustomClockChoices();
+                var customClocks = CustomClockBox.Items.OfType<CustomValueChoice>().ToList();
+                CustomClockBox.SelectedItem = customClocks.FirstOrDefault(choice =>
+                    string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase)) ?? customClocks.FirstOrDefault();
+                CustomClockActionBox.SelectedIndex = Math.Clamp(action.Value, 0, 3);
+            }
+            if (action.Kind == MacroActionKind.ClockMessage)
+                ClockMessageBox.SelectedIndex = Math.Clamp(action.Value, 0, 2);
+            if (action.Kind == MacroActionKind.MediaVolume)
+            {
+                RefreshVolumeChoices();
+                VolumeMediaBox.SelectedItem = VolumeMediaBox.Items.OfType<MediaChoice>()
+                    .FirstOrDefault(choice => string.Equals(choice.Path, action.Path, StringComparison.OrdinalIgnoreCase));
+                VolumeModeBox.SelectedIndex = action.Mute ? (action.Muted ? 1 : 2) : 0;
+                VolumePercentBox.Text = Math.Clamp(action.Value, 0, 100).ToString();
+            }
+            if (action.Kind == MacroActionKind.RunMacro)
+            {
+                RefreshMacroChoices();
+                MacroChoiceBox.SelectedItem = MacroChoiceBox.Items.OfType<MacroPick>()
+                    .FirstOrDefault(choice => string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase));
+            }
+            if (action.Kind == MacroActionKind.TickerNews) TickerTextBox.Text = action.Text;
+            if (action.Kind == MacroActionKind.Note) NoteTextBox.Text = action.Text;
+            if (action.Kind == MacroActionKind.Replay)
+            {
+                var index = (action.Path ?? "").Trim().ToLowerInvariant() switch
+                {
+                    "start" => 1,
+                    "playpause" => 2,
+                    "live" => 3,
+                    "speed" => 4,
+                    _ => 0
+                };
+                ReplayActionBox.SelectedIndex = index;
+                ReplaySecondsBox.Text = Math.Clamp(action.WaitSeconds, 0, 600).ToString("0.##");
+                ReplaySpeedBox.Text = (action.ReplaySpeed > 0 ? action.ReplaySpeed : 1).ToString("0.0");
+            }
             UpdateFields();
-            BypassOutputBox.IsChecked = action.BypassOutput || action.Kind is MacroActionKind.PlayVideo
-                or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir or MacroActionKind.SwitchLayout;
+            BypassOutputBox.IsChecked = action.BypassOutput || AlwaysDirect(action.Kind);
         }
         finally { _syncing = false; }
     }
@@ -1248,6 +1575,7 @@ public partial class MacroDock : UserControl
         var index = _draft.Actions.IndexOf(action);
         var target = index + delta;
         if (index < 0 || target < 0 || target >= _draft.Actions.Count) return;
+        PushHistory();
         _draft.Actions.RemoveAt(index);
         _draft.Actions.Insert(target, action);
         _dirty = true;
@@ -1261,11 +1589,99 @@ public partial class MacroDock : UserControl
         if (_draft is null || StepList.SelectedItem is not MacroAction action) return;
         var index = _draft.Actions.IndexOf(action);
         if (index < 0) return;
+        PushHistory();
         _draft.Actions.RemoveAt(index);
         _dirty = true;
         StepList.Items.Refresh();
         if (_draft.Actions.Count > 0) StepList.SelectedIndex = Math.Min(index, _draft.Actions.Count - 1);
         EditStatus.Text = "UNSAVED";
+    }
+
+    // ----- undo and redo: whole-board snapshots, including the open draft -----
+
+    void MacroDock_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) return;
+        if (e.Key == Key.Z)
+        {
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) RedoEdit(); else UndoEdit();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Y)
+        {
+            RedoEdit();
+            e.Handled = true;
+        }
+    }
+
+    void Undo_Click(object sender, RoutedEventArgs e) => UndoEdit();
+
+    void Redo_Click(object sender, RoutedEventArgs e) => RedoEdit();
+
+    void UndoEdit()
+    {
+        if (_historyUndo.Count == 0)
+        {
+            EditStatus.Text = "NOTHING TO UNDO";
+            return;
+        }
+        _historyRedo.Push(SnapshotEditor());
+        RestoreEditor(_historyUndo.Pop());
+        EditStatus.Text = "UNDONE";
+        Status?.Invoke("MACRO · undone");
+        UpdateHistoryButtons();
+    }
+
+    void RedoEdit()
+    {
+        if (_historyRedo.Count == 0)
+        {
+            EditStatus.Text = "NOTHING TO REDO";
+            return;
+        }
+        _historyUndo.Push(SnapshotEditor());
+        RestoreEditor(_historyRedo.Pop());
+        EditStatus.Text = "REDONE";
+        Status?.Invoke("MACRO · redone");
+        UpdateHistoryButtons();
+    }
+
+    string SnapshotEditor() => JsonSerializer.Serialize(new MacroEditorState(
+        JsonSerializer.Serialize(_macros),
+        _draft is null ? "" : JsonSerializer.Serialize(_draft),
+        _dirty));
+
+    void PushHistory()
+    {
+        _historyUndo.Push(SnapshotEditor());
+        while (_historyUndo.Count > 80)
+        {
+            var keep = _historyUndo.Reverse().TakeLast(80).ToArray();
+            _historyUndo.Clear();
+            foreach (var item in keep) _historyUndo.Push(item);
+        }
+        _historyRedo.Clear();
+        UpdateHistoryButtons();
+    }
+
+    void RestoreEditor(string json)
+    {
+        var state = JsonSerializer.Deserialize<MacroEditorState>(json);
+        if (state is null) return;
+        _macros = JsonSerializer.Deserialize<List<SavedMacro>>(state.Macros) ?? [];
+        _draft = string.IsNullOrWhiteSpace(state.Draft)
+            ? null
+            : JsonSerializer.Deserialize<SavedMacro>(state.Draft);
+        _dirty = state.Dirty;
+        StoreBoard();
+        RenderMacros();
+        LoadEditor();
+    }
+
+    void UpdateHistoryButtons()
+    {
+        if (UndoButton is not null) UndoButton.IsEnabled = _historyUndo.Count > 0;
+        if (RedoButton is not null) RedoButton.IsEnabled = _historyRedo.Count > 0;
     }
 
     // ----- macro board ordering: drag a card onto another card to move it there -----
@@ -1295,6 +1711,7 @@ public partial class MacroDock : UserControl
         if (from < 0) return;
         var target = beforeId is null ? page.Count : page.FindIndex(macro => macro.Id == beforeId);
         if (target < 0 || target == from) return;
+        PushHistory();
         var moved = page[from];
         page.RemoveAt(from);
         // A drop uses the target's original slot: dragging the first card onto the second puts it
@@ -1326,6 +1743,7 @@ public partial class MacroDock : UserControl
         var targetColumn = Math.Clamp(target.Column, 0, columns - 1);
         if (targetRow == source.Row && targetColumn == source.Column) return;
 
+        PushHistory();
         // Materialise the current layout first. Without this, moving one card would make the
         // automatic buttons flow around it and the other cards would not stay in their cells.
         foreach (var placement in placements)

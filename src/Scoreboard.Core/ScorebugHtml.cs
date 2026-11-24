@@ -221,7 +221,7 @@ public static class ScorebugHtml
     static string TextHtml(ScorebugElement item, GameState? state, string colour)
     {
         var text = state is not null
-            ? ScoreboardTemplates.Bind(item.Content ?? string.Empty, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero)
+            ? ScoreboardTemplates.Bind(item.Content ?? string.Empty, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero)
             : item.Content ?? string.Empty;
         var font = FontFamily(item.FontFamily);
         var weight = item.Bold ? "font-weight:700;" : "font-weight:400;";
@@ -265,7 +265,7 @@ public static class ScorebugHtml
     {
         if (item.Icon != ScorebugIcon.None && state is not null && !string.IsNullOrWhiteSpace(item.IconToken))
         {
-            var bound = ScoreboardTemplates.Bind(item.IconToken, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero).Trim();
+            var bound = ScoreboardTemplates.Bind(item.IconToken, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero).Trim();
             if (bound.Length == 0
                 || bound == "0"
                 || bound.Equals("false", StringComparison.OrdinalIgnoreCase)
@@ -275,8 +275,11 @@ public static class ScorebugHtml
         if (!string.IsNullOrWhiteSpace(item.IconColor)) colour = Css(item.IconColor);
         var html = IconInner(item, state, colour);
         if (html.Length == 0) return string.Empty;
-        if (Math.Abs(item.IconOffsetX) >= 0.01 || Math.Abs(item.IconOffsetY) >= 0.01)
-            html = $"<span style=\"display:block;transform:translate({Num(item.IconOffsetX)}px,{Num(item.IconOffsetY)}px);\">{html}</span>";
+        // The icon turns on its own centre, so a possession arrow can point down (90) or back
+        // (180) without a separate shape for each direction.
+        var turn = Math.Clamp(item.IconRotation, -360, 360);
+        if (Math.Abs(item.IconOffsetX) >= 0.01 || Math.Abs(item.IconOffsetY) >= 0.01 || Math.Abs(turn) >= 0.01)
+            html = $"<span style=\"display:block;transform:translate({Num(item.IconOffsetX)}px,{Num(item.IconOffsetY)}px) rotate({Num(turn)}deg);\">{html}</span>";
         // The icon's own chrome is separate from the element's plate and outline. It sits behind the
         // artwork and carries its own background, outline and opacity.
         var opacity = Math.Clamp(item.IconOpacity, 0, 1);
@@ -323,14 +326,9 @@ public static class ScorebugHtml
                 var dotStyle = onLeft ? "left:2%;" : "right:2%;";
                 return $"<span class=\"sp-dot\" style=\"{dotStyle}color:{colour};{IconOutline(item)}\"></span>";
             case ScorebugIcon.PossessionArrow:
-                // The arrow belongs to one team's plate and only shows while that team has the ball;
-                // on the away plate it points inward from the right, mirrored by Flipped.
-                var homePlate = !item.IconVisitors;
-                if (state.HomePossession != homePlate) return string.Empty;
-                if (item.IconArrowDown)
-                    return $"<span class=\"sp-arrow down\" style=\"color:{colour};{IconOutline(item)}\"></span>";
-                var flip = (!homePlate) ^ item.IconFlipped;
-                return $"<span class=\"sp-arrow {(homePlate ? "in" : "out")}{(flip ? " flip" : string.Empty)}\" style=\"color:{colour};{IconOutline(item)}\"></span>";            case ScorebugIcon.TimeoutDots:
+                // One arrow follows the ball: it sits on the plate of the team that has it, and it
+                // keeps the direction it was drawn in. Possession moves the mark, it never flips it.
+                return $"<span class=\"sp-arrow {(state.HomePossession ? "in" : "out")}{(item.IconFlipped ? " flip" : string.Empty)}\" style=\"color:{colour};{IconOutline(item)}\"></span>";            case ScorebugIcon.TimeoutDots:
                 var remainingPips = Math.Clamp(item.IconVisitors ? state.AwayTimeouts : state.HomeTimeouts, 0, 12);
                 var totalPips = Math.Clamp(Math.Max(remainingPips, item.IconVisitors ? state.AwayTimeoutLimit : state.HomeTimeoutLimit), 0, 12);
                 if (totalPips == 0) return string.Empty;
@@ -364,13 +362,23 @@ public static class ScorebugHtml
                 var iconColour = string.IsNullOrWhiteSpace(item.IconColor) ? look.Color : item.IconColor;
                 var transform = $"translate({Num(look.OffsetX)}px,{Num(look.OffsetY)}px) scale({Num(look.Scale)}) rotate({Num(look.Rotation)}deg)";
                 var iconSize = Math.Clamp(Math.Min(item.Width, item.Height) * 0.62, 8, 260);
+                var horizontal = look.Anchor is CustomIconAnchor.Left or CustomIconAnchor.TopLeft or CustomIconAnchor.BottomLeft
+                    ? "flex-start"
+                    : look.Anchor is CustomIconAnchor.Right or CustomIconAnchor.TopRight or CustomIconAnchor.BottomRight
+                        ? "flex-end"
+                        : "center";
+                var verticalAlign = look.Anchor is CustomIconAnchor.Top or CustomIconAnchor.TopLeft or CustomIconAnchor.TopRight
+                    ? "flex-start"
+                    : look.Anchor is CustomIconAnchor.Bottom or CustomIconAnchor.BottomLeft or CustomIconAnchor.BottomRight
+                        ? "flex-end"
+                        : "center";
                 // A state can carry a photo instead of a glyph. Embed it like a logo, so the
                 // exported HTML is still one self-contained file.
                 var picture = DataUri(look.ImagePath);
                 var inner = picture is null
                     ? System.Net.WebUtility.HtmlEncode(look.Glyph)
-                    : $"<img src=\"{picture}\" alt=\"\" style=\"width:100%;height:100%;object-fit:contain;display:block;\">";
-                return "<span style=\"display:flex;align-items:center;justify-content:center;width:100%;height:100%;"
+                    : $"<img src=\"{picture}\" alt=\"\" style=\"width:{Num(iconSize)}px;height:{Num(iconSize)}px;object-fit:contain;display:block;\">";
+                return $"<span style=\"display:flex;align-items:{verticalAlign};justify-content:{horizontal};width:100%;height:100%;"
                        + $"font-size:{Num(iconSize)}px;font-weight:700;line-height:1;color:{Css(iconColour)};background:{plate};border-radius:{radius};"
                        + $"opacity:{Num(Math.Clamp(look.Opacity, 0, 1))};transform:{transform};transform-origin:center;{IconOutline(item)}\">"
                        + inner + "</span>";

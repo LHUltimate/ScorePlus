@@ -85,7 +85,19 @@ public enum AutomationActionKind
     Show,
     Hide,
     SetText,
-    SwitchLayout
+    SwitchLayout,
+    /// <summary>Runs a saved macro from the game's macro board, by its id.</summary>
+    RunMacro,
+    /// <summary>Puts one media library item on air: a clip, a camera, a microphone or a screen.</summary>
+    MediaOnAir,
+    /// <summary>Takes one media library item off air again.</summary>
+    MediaOffAir,
+    /// <summary>
+    /// Sets the decimal column an element prints after its clocks: 0 is MM:SS, 1 adds tenths,
+    /// 2 hundredths. The change is live only while the rule matches, so a decimal can appear for
+    /// the last minute of a period and leave again on its own.
+    /// </summary>
+    SetClockDecimals
 }
 
 /// <summary>When an action runs in a rule whose conditions include a wait-until step.</summary>
@@ -185,12 +197,29 @@ public sealed class AutomationAction
 }
 
 /// <summary>
+/// Which page a rule belongs to. Each page lists only its own rules, so media rules, macro rules
+/// and a layout's rules never share one list and never edit each other by accident.
+/// </summary>
+public enum AutomationScope
+{
+    /// <summary>One layout's own rules, in the studio's conditionals page beside that layout.</summary>
+    Layout,
+    /// <summary>Rules about the media library: put a clip, camera or screen on air, or take one off.</summary>
+    Media,
+    /// <summary>Rules that run a macro from the game's macro board.</summary>
+    Macro
+}
+
+/// <summary>
 /// A node graph rule: all (or any) conditions in the middle, then the actions on the right.
 /// Rules travel with their display, so an automation survives a saved game and an .spd export.
 /// </summary>
 public sealed class AutomationRule
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+    /// <summary>Which conditionals page owns this rule. Layout rules also carry a layout id.</summary>
+    public AutomationScope Scope { get; set; } = AutomationScope.Layout;
     public string Name { get; set; } = "New rule";
     public bool Enabled { get; set; } = true;
 
@@ -206,6 +235,15 @@ public sealed class AutomationRule
     /// waiting for Update Output to publish the state and layout first.
     /// </summary>
     public bool BypassOutputUpdate { get; set; }
+
+    /// <summary>
+    /// A local time of day as HH:mm or HH:mm:ss. When it arrives the rule fires once, even if the
+    /// game is not changing, which is what makes "at 19:30 switch to the opening layout" possible.
+    /// </summary>
+    public string AtTime { get; set; } = "";
+
+    /// <summary>Run the at-time rule again on later days instead of only once per session.</summary>
+    public bool AtTimeDaily { get; set; }
 
     public bool MatchAny { get; set; }
     public List<AutomationCondition> Conditions { get; set; } = [];
@@ -235,7 +273,7 @@ public static class AutomationRules
     public static readonly (AutomationField Field, string Label)[] Fields =
     [
         (AutomationField.PlayClock, "Play clock"),
-        (AutomationField.GameClock, "Game clock"),
+        (AutomationField.GameClock, "Game Clock"),
         (AutomationField.ShotClock, "Shot clock"),
         (AutomationField.TimeoutClock, "Timeout clock"),
         (AutomationField.Period, "Period"),
@@ -252,7 +290,7 @@ public static class AutomationRules
         (AutomationField.Outs, "Outs"),
         (AutomationField.HomePossession, "Home has possession"),
         (AutomationField.PossessionSide, "Possession"),
-        (AutomationField.ClockRunning, "Game clock running"),
+        (AutomationField.ClockRunning, "Game Clock Running"),
         (AutomationField.PlayClockRunning, "Play clock running"),
         (AutomationField.Sport, "Sport"),
         (AutomationField.CustomStat, "Custom value"),
@@ -328,8 +366,91 @@ public static class AutomationRules
         (AutomationActionKind.Show, "Show"),
         (AutomationActionKind.Hide, "Hide"),
         (AutomationActionKind.SetText, "Set text"),
-        (AutomationActionKind.SwitchLayout, "Switch layout")
+        (AutomationActionKind.SwitchLayout, "Switch layout"),
+        (AutomationActionKind.RunMacro, "Run macro"),
+        (AutomationActionKind.MediaOnAir, "Media on air"),
+        (AutomationActionKind.MediaOffAir, "Media off air"),
+        (AutomationActionKind.SetClockDecimals, "Clock decimals")
     ];
+
+    /// <summary>The values a data condition offers as a list instead of free text.</summary>
+    public static IReadOnlyList<string> ValueChoices(AutomationField field) => field switch
+    {
+        AutomationField.PossessionSide => ["Home", "Away"],
+        AutomationField.PenaltyType => ["False start", "Holding", "Pass interference", "Offside", "Delay of game", "Personal foul"],
+        _ => []
+    };
+
+    /// <summary>Actions that change the show itself rather than one element's artwork.</summary>
+    public static bool IsCommandAction(AutomationActionKind kind) => kind is
+        AutomationActionKind.RunMacro or AutomationActionKind.MediaOnAir
+        or AutomationActionKind.MediaOffAir
+        or AutomationActionKind.SwitchLayout;
+
+    /// <summary>True for fields whose value is a game clock, so the editor can show MM:SS.</summary>
+    public static bool IsClockField(AutomationField field) => field is
+        AutomationField.PlayClock or AutomationField.GameClock or AutomationField.ShotClock
+        or AutomationField.TimeoutClock or AutomationField.StoppageClock;
+
+    /// <summary>Prints a clock condition's seconds the same way the scorebug reads them.</summary>
+    public static string FormatClockValue(double seconds)
+    {
+        var total = Math.Max(0, (int)Math.Round(double.IsFinite(seconds) ? seconds : 0));
+        return $"{total / 60:00}:{total % 60:00}";
+    }
+
+    /// <summary>
+    /// Reads a clock condition typed as MM:SS (or a raw number of seconds from an older rule).
+    /// Values are stored as seconds, so every existing comparison and saved rule still works.
+    /// </summary>
+    public static bool TryParseClockValue(string? text, out double seconds)
+    {
+        seconds = 0;
+        var value = (text ?? "").Trim();
+        if (value.Length == 0) return false;
+        if (!value.Contains(':'))
+            return double.TryParse(value, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.CurrentCulture, out seconds) && seconds >= 0;
+        var parts = value.Split(':');
+        if (parts.Length != 2) return false;
+        if (!int.TryParse(parts[0], out var minutes) || minutes < 0) return false;
+        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.CurrentCulture, out var part) || part < 0 || part >= 60) return false;
+        seconds = minutes * 60 + part;
+        return true;
+    }
+
+    /// <summary>
+    /// Reads a typed time as HH:mm, or HH:mm:ss when seconds are supplied. Anything unreadable
+    /// clears the schedule, so a rule never fires on a typo.
+    /// </summary>
+    public static string NormalizeTime(string? value)
+    {
+        var text = (value ?? "").Trim();
+        if (text.Length == 0) return "";
+        var parts = text.Split(':');
+        if (parts.Length is < 2 or > 3) return "";
+        if (!int.TryParse(parts[0], out var hours) || hours is < 0 or > 23) return "";
+        if (!int.TryParse(parts[1], out var minutes) || minutes is < 0 or > 59) return "";
+        if (parts.Length == 2) return $"{hours:00}:{minutes:00}";
+        if (!int.TryParse(parts[2], out var seconds) || seconds is < 0 or > 59) return "";
+        return $"{hours:00}:{minutes:00}:{seconds:00}";
+    }
+
+    /// <summary>
+    /// True when this real-world time has arrived. HH:mm fires once during that minute; HH:mm:ss
+    /// fires on that exact second, which is what a timed open or a precise media hit needs.
+    /// </summary>
+    public static bool TimeMatches(string? value, DateTime now)
+    {
+        var at = NormalizeTime(value);
+        if (at.Length == 0) return false;
+        var parts = at.Split(':');
+        var hours = int.Parse(parts[0]);
+        var minutes = int.Parse(parts[1]);
+        if (now.Hour != hours || now.Minute != minutes) return false;
+        return parts.Length == 2 || now.Second == int.Parse(parts[2]);
+    }
 
     public static string FieldLabel(AutomationField field) =>
         Fields.FirstOrDefault(option => option.Field == field).Label ?? field.ToString();
@@ -351,6 +472,16 @@ public static class AutomationRules
         field is AutomationField.Sport or AutomationField.PenaltyType or AutomationField.PossessionSide;
 
     public static bool IsNumericField(AutomationField field) => !IsBooleanField(field) && !IsTextField(field);
+
+    /// <summary>
+    /// The timing tokens a decimal column can actually decorate. A number such as a score or a
+    /// down has no fractional part, so a decimal rule must only target one of these elements.
+    /// </summary>
+    public static readonly string[] ClockTokens =
+        ["{{GAME_CLOCK}}", "{{PLAY_CLOCK}}", "{{STOPPAGE}}"];
+
+    public static bool HasClockToken(string? content) => !string.IsNullOrWhiteSpace(content)
+        && ClockTokens.Any(token => content.Contains(token, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>A short explanation beside a yes/no condition, so the card is never just a blank.</summary>
     public static string BooleanHint(AutomationField field) => field switch
@@ -459,6 +590,8 @@ public static class AutomationRules
             rule.Id = string.IsNullOrWhiteSpace(rule.Id) ? Guid.NewGuid().ToString("N") : rule.Id.Trim();
             rule.Name = string.IsNullOrWhiteSpace(rule.Name) ? "Untitled rule" : rule.Name.Trim();
             rule.LayoutId = (rule.LayoutId ?? "").Trim();
+            if (!Enum.IsDefined(rule.Scope)) rule.Scope = AutomationScope.Layout;
+            rule.AtTime = NormalizeTime(rule.AtTime);
             rule.Conditions ??= [];
             rule.Actions ??= [];
             rule.Conditions = rule.Conditions.Where(c => c is not null).Take(24).Select(c => c.Copy()).ToList();
@@ -520,6 +653,11 @@ public static class AutomationRules
             AutomationActionKind.Hide => $"{target} hide",
             AutomationActionKind.SetText => $"{target} text → “{action.Value}”",
             AutomationActionKind.SwitchLayout => "switch layout",
+            AutomationActionKind.RunMacro => $"run macro · {(string.IsNullOrWhiteSpace(action.Value) ? "macro" : action.Value)}",
+            AutomationActionKind.MediaOnAir => $"put {(string.IsNullOrWhiteSpace(action.Value) ? "media" : System.IO.Path.GetFileName(action.Value))} on air",
+            AutomationActionKind.MediaOffAir => $"take {(string.IsNullOrWhiteSpace(action.Value) ? "media" : System.IO.Path.GetFileName(action.Value))} off air",
+            AutomationActionKind.SetClockDecimals =>
+                $"{target} clock decimals → {Math.Clamp((int)Math.Round(action.Number), 0, 2)}",
             _ => action.Kind.ToString()
         };
     }

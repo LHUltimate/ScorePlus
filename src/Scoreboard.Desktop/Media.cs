@@ -21,7 +21,8 @@ public sealed record MediaEntry(
     string? Name = null,
     int? CameraDevice = null,
     int? MicrophoneDevice = null,
-    bool SpeakerMuted = false)
+    bool SpeakerMuted = false,
+    string Source = "")
 {
     /// <summary>A camera or microphone with no name of its own is labelled with the device it uses,
     /// so the dock says "icspring camera" rather than "Live camera 1".</summary>
@@ -30,18 +31,27 @@ public sealed record MediaEntry(
         : IsCamera ? CameraFeed.CameraName(CameraIndex)
         : IsMicrophone ? MicrophoneFeed.MicrophoneName(MicrophoneIndex)
         : IsSpeaker ? $"Speaker {(MediaLibrary.SpeakerIndex(Path) ?? 0) + 1}"
+        : IsScreen ? ScreenFeed.ScreenName(ScreenIndex)
         : System.IO.Path.GetFileName(Path);
     public bool IsCamera => MediaLibrary.CameraIndex(Path) is not null;
     /// <summary>A live microphone item: captured from a device, with no file and no picture.</summary>
     public bool IsMicrophone => MediaLibrary.MicrophoneIndex(Path) is not null;
+    /// <summary>A desktop as a media piece: a monitor captured and embedded like a camera.</summary>
+    public bool IsScreen => MediaLibrary.ScreenIndex(Path) is not null;
+    /// <summary>Which monitor a screen item captures.</summary>
+    public int ScreenIndex => MediaLibrary.ScreenIndex(Path) ?? 0;
     /// <summary>An output-bus item: it names a speaker and carries that bus's level.</summary>
     public bool IsSpeaker => MediaLibrary.SpeakerIndex(Path) is not null;
     /// <summary>Which capture device this camera item routes to; an override beats the path's index.</summary>
     public int CameraIndex => CameraDevice ?? MediaLibrary.CameraIndex(Path) ?? 0;
     /// <summary>Which microphone this item listens to.</summary>
     public int MicrophoneIndex => MicrophoneDevice ?? MediaLibrary.MicrophoneIndex(Path) ?? 0;
-    public bool IsVideo => IsCamera || (!IsMicrophone && MediaLibrary.IsVideoFile(Path));
-    public string KindLabel => IsCamera ? "LIVE" : IsMicrophone ? "MIC" : IsSpeaker ? "SPEAKER" : IsVideo ? "VIDEO" : "AUDIO";
+    public bool IsVideo => IsCamera || IsScreen || (!IsMicrophone && MediaLibrary.IsVideoFile(Path));
+    /// <summary>A still picture from a player's media list. It is shown as a tile, not played on the transport.</summary>
+    public bool IsImage => !IsCamera && !IsScreen && !IsMicrophone && !IsSpeaker && MediaLibrary.IsImageFile(Path);
+    /// <summary>Where this entry came from. "Roster" items are rebuilt from player assignments and are not saved in the media library.</summary>
+    public bool IsPlayerMedia => string.Equals(Source, "Roster", StringComparison.OrdinalIgnoreCase);
+    public string KindLabel => IsCamera ? "LIVE" : IsScreen ? "SCREEN" : IsMicrophone ? "MIC" : IsSpeaker ? "SPEAKER" : IsImage ? "IMAGE" : IsVideo ? "VIDEO" : "AUDIO";
     public string FolderLabel => string.IsNullOrWhiteSpace(Folder) ? MediaLibrary.RootFolderLabel : Folder;
     public string TagAndFolder => string.IsNullOrWhiteSpace(Folder) ? Tag : $"{Tag} · {Folder}";
 
@@ -55,6 +65,22 @@ public sealed record MediaEntry(
     /// value each time it is opened so switching between two replays of the same recording still
     /// runs the incoming switch animation.</summary>
     public int ReplayCue { get; init; }
+
+    /// <summary>
+    /// A video that plays as this cue's hand-over. The replay is already underneath it, so the clip
+    /// is a video switch rather than a second picture: it covers the box until it ends or until
+    /// <see cref="SwitchVideoCutSeconds"/> reveals the replay.
+    /// </summary>
+    public string? SwitchVideoPath { get; init; }
+
+    /// <summary>Seconds the switch video covers the incoming picture. Zero plays the clip to its end.</summary>
+    public double SwitchVideoCutSeconds { get; init; }
+
+    /// <summary>
+    /// For a camera: the microphone item that captures its sound. A camera carries no audio of its
+    /// own, so naming its microphone is what lets a multiview tile draw a sound bar beside it.
+    /// </summary>
+    public string? MicrophoneLink { get; init; }
 
     /// <summary>0–100, as shown on the dock's knob.</summary>
     public int VolumePercent => (int)Math.Round(Math.Clamp(Volume, 0, 1) * 100);
@@ -81,8 +107,14 @@ public static class MediaLibrary
 {
     public const string DefaultTag = "General";
 
-    /// <summary>A video element tagged ANY plays whatever is cued, whatever tag it carries.</summary>
-    public const string AnyTag = "ANY";
+    /// <summary>A video element tagged GLOBAL plays whatever is cued, whatever tag it carries.</summary>
+    public const string AnyTag = "GLOBAL";
+
+    /// <summary>The old catch-all tag. Layouts saved before the rename still carry it.</summary>
+    public const string LegacyAnyTag = "ANY";
+
+    /// <summary>The tag an instant replay carries unless the operator names another one.</summary>
+    public const string ReplayTagName = "REPLAY";
 
     /// <summary>Clips with no folder still need a name in the filter list.</summary>
     public const string RootFolderLabel = "Unfiled";
@@ -96,7 +128,27 @@ public static class MediaLibrary
     /// <summary>Where an output-bus item's path lives. <c>speaker:0</c> is the first render device.</summary>
     public const string SpeakerPrefix = "speaker:";
 
-    public static readonly string[] SuggestedTags = [AnyTag, "General", "Ads", "Highlights", "Music", "Anthem", "Sponsors", "Camera", "Microphone"];
+    /// <summary>Where a screen source's path lives. <c>screen:0</c> is the first monitor.</summary>
+    public const string ScreenPrefix = "screen:";
+
+    public static string ScreenPath(int index) => $"{ScreenPrefix}{Math.Max(0, index)}";
+
+    /// <summary>The monitor number behind a screen path, or null for another media item.</summary>
+    public static int? ScreenIndex(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !path.StartsWith(ScreenPrefix, StringComparison.OrdinalIgnoreCase)) return null;
+        return int.TryParse(path[ScreenPrefix.Length..], out var index) ? index : 0;
+    }
+
+    public static readonly string[] SuggestedTags = [AnyTag, ReplayTagName, "General", "Ads", "Highlights", "Music", "Anthem", "Sponsors", "Camera", "Microphone"];
+
+    /// <summary>True for either spelling of the catch-all tag.</summary>
+    public static bool IsAnyTag(string? tag)
+    {
+        var trimmed = (tag ?? "").Trim();
+        return string.Equals(trimmed, AnyTag, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, LegacyAnyTag, StringComparison.OrdinalIgnoreCase);
+    }
 
     public static readonly string[] TransitionOptions = ["Cut", "Fade", "Slide", "Zoom"];
 
@@ -116,6 +168,8 @@ public static class MediaLibrary
         double.IsFinite(seconds) ? Math.Clamp(seconds, 0, 5) : DefaultTransitionSeconds;
 
     public static bool IsVideoFile(string path) => Path.GetExtension(path).ToLowerInvariant() is ".mp4" or ".mov" or ".mkv" or ".webm" or ".avi" or ".m4v";
+
+    public static bool IsImageFile(string path) => Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".bmp";
 
     public static string CameraPath(int index) => $"{CameraPrefix}{Math.Max(0, index)}";
 
@@ -194,6 +248,10 @@ public static class MediaLibrary
         return updated;
     }
 
+    /// <summary>Renames any library item, so a show can call a camera "Tight" or a clip "Open".</summary>
+    public static MediaEntry? Rename(IList<MediaEntry> library, MediaEntry selected, string? name) =>
+        SetName(library, selected, name);
+
     /// <summary>Renames a camera item, so a show can call it "Tight" or "Wide" rather than Camera 2.</summary>
     public static MediaEntry? SetName(IList<MediaEntry> library, MediaEntry selected, string? name)
     {
@@ -201,6 +259,17 @@ public static class MediaLibrary
         if (index < 0) return null;
         var trimmed = (name ?? "").Trim();
         var updated = selected with { Name = trimmed.Length == 0 ? null : trimmed };
+        library[index] = updated;
+        return updated;
+    }
+
+    /// <summary>Names the microphone that belongs to a camera, or clears it.</summary>
+    public static MediaEntry? SetMicrophoneLink(IList<MediaEntry> library, MediaEntry selected, string? microphonePath)
+    {
+        var index = library.IndexOf(selected);
+        if (index < 0) return null;
+        var trimmed = (microphonePath ?? "").Trim();
+        var updated = selected with { MicrophoneLink = trimmed.Length == 0 ? null : trimmed };
         library[index] = updated;
         return updated;
     }
@@ -220,6 +289,16 @@ public static class MediaLibrary
         var index = library.IndexOf(selected);
         if (index < 0) return null;
         var updated = selected with { CameraDevice = Math.Max(0, device) };
+        library[index] = updated;
+        return updated;
+    }
+
+    /// <summary>Points a screen item at another monitor, in place. The path carries the monitor.</summary>
+    public static MediaEntry? SetScreenMonitor(IList<MediaEntry> library, MediaEntry selected, int monitor)
+    {
+        var index = library.IndexOf(selected);
+        if (index < 0) return null;
+        var updated = selected with { Path = ScreenPath(Math.Max(0, monitor)) };
         library[index] = updated;
         return updated;
     }
@@ -264,11 +343,11 @@ public static class MediaLibrary
         return updated;
     }
 
-    /// <summary>True when a scorebug element with this tag should show this clip. ANY and blank match everything.</summary>
+    /// <summary>True when a scorebug element with this tag should show this clip. GLOBAL and blank match everything.</summary>
     public static bool TagMatches(string? elementTag, string clipTag)
     {
         if (string.IsNullOrWhiteSpace(elementTag)) return true;
-        if (string.Equals(elementTag.Trim(), AnyTag, StringComparison.OrdinalIgnoreCase)) return true;
+        if (IsAnyTag(elementTag)) return true;
         return string.Equals(NormalizeTag(clipTag), NormalizeTag(elementTag), StringComparison.OrdinalIgnoreCase);
     }
 }
@@ -397,6 +476,57 @@ public sealed class MediaPlayback
 
     /// <summary>True when the chosen speaker could not be opened and the clip fell back to the default.</summary>
     public bool RoutingFailed { get; private set; }
+
+    /// <summary>
+    /// What each on-air cue's own sound is doing: the speaker it goes to, the level it plays at and
+    /// whether that speaker could be opened. Held per cue, so two videos on two tags are routed
+    /// separately and a speaker that is off silences only the clip that chose it.
+    /// </summary>
+    readonly Dictionary<string, (string? Device, double Volume, double Gain, bool Failed)> _cueAudio = new(StringComparer.OrdinalIgnoreCase);
+
+    static string CueKey(MediaEntry entry) =>
+        $"{MediaLibrary.NormalizeTag(entry.Tag)}|{entry.Path}".ToLowerInvariant();
+
+    /// <summary>Records where and how loud one on-air cue plays.</summary>
+    public void ReportCueAudio(MediaEntry entry, string? device, double volume, double gain, bool failed = false)
+    {
+        var sound = (string.IsNullOrWhiteSpace(device) ? null : device,
+            Math.Clamp(volume, 0, 1), Math.Clamp(gain, 0, 1), failed);
+        if (_cueAudio.TryGetValue(CueKey(entry), out var current) && current == sound) return;
+        _cueAudio[CueKey(entry)] = sound;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Forgets a cue that has left the air, so a later cue starts clean.</summary>
+    public void ForgetCueAudio(MediaEntry entry)
+    {
+        if (_cueAudio.Remove(CueKey(entry))) Changed?.Invoke();
+    }
+
+    /// <summary>Keeps the mixer state of exactly the cues that are still on air.</summary>
+    public void KeepCueAudio(IEnumerable<MediaEntry> onAir)
+    {
+        var keep = onAir.Select(CueKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var stale = _cueAudio.Keys.Where(key => !keep.Contains(key)).ToArray();
+        if (stale.Length == 0) return;
+        foreach (var key in stale) _cueAudio.Remove(key);
+        Changed?.Invoke();
+    }
+
+    (string? Device, double Volume, double Gain, bool Failed)? CueSound(MediaEntry? entry) =>
+        entry is not null && _cueAudio.TryGetValue(CueKey(entry), out var sound) ? sound : null;
+
+    /// <summary>True when this cue's sound comes from the session's speaker stream, not a video box.</summary>
+    public bool RoutedToDeviceFor(MediaEntry? entry) => CueSound(entry) is { Device: not null };
+
+    /// <summary>True when this cue's chosen speaker could not be opened: silent, not moved elsewhere.</summary>
+    public bool AudioFailedFor(MediaEntry? entry) => CueSound(entry) is { Failed: true };
+
+    /// <summary>This cue's own level, so two clips playing at once each keep their own slider.</summary>
+    public double VolumeFor(MediaEntry? entry) => CueSound(entry)?.Volume ?? entry?.Volume ?? 1;
+
+    /// <summary>This cue's bus level, so one bus moving does not change another tag's clip.</summary>
+    public double GainFor(MediaEntry? entry) => CueSound(entry)?.Gain ?? SpeakerGain;
 
     /// <summary>The transport reports whether routing worked, so no clip ever goes silent.</summary>
     public void ReportRouting(bool failed)

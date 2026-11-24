@@ -8,7 +8,7 @@ using Scoreboard.Core;
 namespace Scoreboard.Desktop;
 
 /// <summary>One camera as the Replay Booth presents it to the operator and the browser.</summary>
-public sealed record ReplayBoothCamera(int Index, string Label);
+public sealed record ReplayBoothCamera(int Index, string Label, string Path = "");
 
 /// <summary>What the game clocks read at a point in the camera recording.</summary>
 public sealed record ReplayBoothClock(
@@ -88,10 +88,12 @@ public static class ReplayBoothHistory
 }
 
 /// <summary>
-/// The camera wall and configurable-length replay engine shared by the desktop Replay Booth and the browser
-/// pages. It owns one decoder, keeps every library camera recording while active, and maps a
-/// playhead back to the recorded game clocks. The main window owns one instance for the life of a
-/// show, so the browser can still replay when the desktop booth is closed.
+/// The camera wall and configurable-length replay engine shared by the desktop Replay Booth and the
+/// browser pages. It keeps every library camera recording while active and decodes every one of
+/// them, so the whole wall can be scrubbed as one: a seek or a play moves all the cameras to the
+/// same instant, and selecting a different camera only changes which one fills the big view. That
+/// is what a referee needs — the same moment from several angles — and it means the scrubber is
+/// honest: the frame on the wall really is the same instant as the frame in the big picture.
 /// </summary>
 public sealed class ReplayBoothController : IDisposable
 {
@@ -99,20 +101,23 @@ public sealed class ReplayBoothController : IDisposable
     readonly GameEngine _engine;
     readonly UserPreferences _preferences;
     readonly Dispatcher _ui;
-    readonly ReplayFeed _feed;
-    readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     readonly List<ReplayBoothCamera> _cameras = [];
-    readonly List<CameraSegment> _segments = [];
+    readonly List<ReplayBoothCamera> _allCameras = [];
+    // One decoder per camera. They are opened together and seeked together, which is the whole
+    // point of a shared playhead.
+    readonly Dictionary<int, ReplayFeed> _feeds = [];
+    readonly Dictionary<int, List<CameraSegment>> _segments = [];
     readonly Dictionary<int, (BitmapSource Frame, byte[] Data)> _liveJpegCache = [];
     int _selected;
-    int _segmentIndex = -1;
-    CameraSegment? _currentSegment;
     bool _active;
     bool _prepared;
     bool _playing;
     double _back;
     double _depth;
     DateTime _lastSnapshot = DateTime.MinValue;
+    DateTime? _playStartedAt;
+    double _playStartedBack;
 
     public ReplayBoothController(MediaSession session, GameEngine engine, UserPreferences preferences)
     {
@@ -120,24 +125,59 @@ public sealed class ReplayBoothController : IDisposable
         _engine = engine;
         _preferences = preferences;
         _ui = Dispatcher.CurrentDispatcher;
-        _feed = new ReplayFeed(_ui);
-        _feed.PositionChanged += TrackPosition;
-        _feed.Ended += AdvanceReplay;
         _timer.Tick += (_, _) => Refresh();
     }
 
     public IReadOnlyList<ReplayBoothCamera> Cameras => _cameras;
+    /// <summary>Every camera, including the ones the booth's layout hides, so the editor can list them.</summary>
+    public IReadOnlyList<ReplayBoothCamera> AllCameras => _allCameras;
     public int SelectedIndex => _selected;
     public ReplayBoothCamera? SelectedCamera => _selected >= 0 && _selected < _cameras.Count ? _cameras[_selected] : null;
     public bool IsPlaying => _playing;
     public bool IsPrepared => _prepared;
     public double Depth => _depth;
     public double Back => _back;
-    public bool HasReplay => _prepared && _segments.Count > 0;
+    public bool HasReplay => _prepared && _segments.Values.Any(list => list.Count > 0);
+    public bool HasSelection => _selected >= 0 && SelectedCamera is not null;
     public bool ShowStoppage => _engine.State.SportId == "soccer" || (ClockAtPlayhead?.StoppageSeconds ?? 0) > 0;
     public bool StoppageRunning => _engine.State.StoppageRunning;
     public string StoppageText => GameEngine.FormatClock(_engine.State.StoppageSeconds);
     public string SelectedLabel => SelectedCamera?.Label ?? "No camera";
+
+    /// <summary>The booth wall's own column count, or zero for an automatic grid.</summary>
+    public int Columns => Math.Clamp(_preferences.ReplayBoothColumns, 0, 6);
+
+    /// <summary>Replay playback rate, 0.1x to 2.0x, shared with the media rail.</summary>
+    public double Speed
+    {
+        get => Math.Clamp(_preferences.ReplaySpeed, 0.1, 2.0);
+        set
+        {
+            var clamped = Math.Clamp(double.IsFinite(value) ? value : 1, 0.1, 2.0);
+            if (Math.Abs(_preferences.ReplaySpeed - clamped) < 0.0001) return;
+            _preferences.ReplaySpeed = clamped;
+            PreferencesStore.Save(_preferences);
+            foreach (var feed in _feeds.Values) feed.Speed = clamped;
+        }
+    }
+
+    /// <summary>
+    /// The booth's own wall layout: which cameras are on it, in what order, and how many columns.
+    /// It is stored separately from the multiview wall, so editing one never rearranges the other.
+    /// </summary>
+    public void SetWallLayout(IEnumerable<string> order, IEnumerable<string> hidden, int columns)
+    {
+        _preferences.ReplayBoothOrder = order.Where(path => !string.IsNullOrWhiteSpace(path)).ToList();
+        _preferences.ReplayBoothHidden = hidden.Where(path => !string.IsNullOrWhiteSpace(path)).ToList();
+        _preferences.ReplayBoothColumns = Math.Clamp(columns, 0, 6);
+        PreferencesStore.Save(_preferences);
+        // The cached camera list has to be rebuilt even if the library did not change.
+        _cameras.Clear();
+        RefreshCameras();
+    }
+
+    public IReadOnlyList<string> WallOrder => _preferences.ReplayBoothOrder;
+    public IReadOnlyList<string> WallHidden => _preferences.ReplayBoothHidden;
 
     /// <summary>The live stoppage clock. It is a game clock, not a replay clock: starting it accrues
     /// added time in the same engine the console and the scorebug read.</summary>
@@ -145,16 +185,28 @@ public sealed class ReplayBoothController : IDisposable
     public void ResetStoppage() => _engine.ResetStoppageClock();
     public void AdjustStoppage(int seconds) => _engine.AdjustStoppageClock(seconds);
 
-    /// <summary>The frame shown in the big view: a decoded replay frame, or the live camera.</summary>
-    public BitmapSource? DisplayFrame => _prepared && _feed.Frame is { } picture ? picture : LiveFrame(SelectedCamera?.Index ?? -1);
+    /// <summary>The frame shown in the big view: the selected camera, at the shared playhead.</summary>
+    public BitmapSource? DisplayFrame => SelectedCamera is { } camera ? FrameFor(camera.Index) : null;
+
+    /// <summary>
+    /// The frame one camera shows at the shared playhead. Every tile draws through this, so the
+    /// wall and the big picture can never disagree about the moment being reviewed.
+    /// </summary>
+    public BitmapSource? FrameFor(int cameraIndex)
+    {
+        if (_prepared && _feeds.TryGetValue(cameraIndex, out var feed) && feed.Frame is { } picture)
+            return picture;
+        return LiveFrame(cameraIndex);
+    }
 
     /// <summary>The clock reading at the playhead (or the live clock when nothing is open).</summary>
     public ReplayBoothClock? ClockAtPlayhead
     {
         get
         {
-            if (_segments.Count == 0) return ReplayBoothHistory.At(DateTimeOffset.UtcNow);
-            var at = _segments[^1].EndsAt.AddSeconds(-Math.Clamp(_back, 0, _depth));
+            var newest = NewestEdge();
+            if (newest is not { } edge) return ReplayBoothHistory.At(DateTimeOffset.UtcNow);
+            var at = edge.AddSeconds(-Math.Clamp(_back, 0, _depth));
             return ReplayBoothHistory.At(at) ?? ReplayBoothHistory.At(DateTimeOffset.UtcNow);
         }
     }
@@ -171,7 +223,7 @@ public sealed class ReplayBoothController : IDisposable
         }
     }
 
-    /// <summary>Starts recording every library camera and opens the first one. Safe to call twice.</summary>
+    /// <summary>Starts recording and decoding every library camera. Safe to call twice.</summary>
     public void Activate()
     {
         RefreshCameras();
@@ -181,7 +233,7 @@ public sealed class ReplayBoothController : IDisposable
         {
             try { CameraFeed.Get(camera.Index).Start(); } catch { }
         }
-        Select(_selected);
+        if (_selected < 0 && _cameras.Count > 0) _selected = 0;
         _timer.Start();
     }
 
@@ -193,8 +245,21 @@ public sealed class ReplayBoothController : IDisposable
         foreach (var entry in _session.Library.Where(entry => entry.IsCamera).OrderBy(entry => entry.CameraIndex))
         {
             if (!seen.Add(entry.CameraIndex)) continue;
-            next.Add(new ReplayBoothCamera(entry.CameraIndex, entry.Label));
+            next.Add(new ReplayBoothCamera(entry.CameraIndex, entry.Label, entry.Path));
         }
+        _allCameras.Clear();
+        _allCameras.AddRange(next);
+        // The booth's own order comes first; any camera added since the layout was saved follows
+        // in library order rather than disappearing from the wall.
+        var order = _preferences.ReplayBoothOrder;
+        if (order.Count > 0)
+        {
+            var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < order.Count; index++) rank[order[index]] = index;
+            next = next.OrderBy(camera => rank.TryGetValue(camera.Path, out var position) ? position : int.MaxValue).ToList();
+        }
+        var hidden = new HashSet<string>(_preferences.ReplayBoothHidden, StringComparer.OrdinalIgnoreCase);
+        if (hidden.Count > 0) next.RemoveAll(camera => hidden.Contains(camera.Path));
         var changed = next.Count != _cameras.Count
             || next.Where((camera, index) => camera.Index != _cameras[index].Index || camera.Label != _cameras[index].Label).Any();
         if (!changed) return;
@@ -202,6 +267,13 @@ public sealed class ReplayBoothController : IDisposable
         _cameras.AddRange(next);
         _selected = previousIndex >= 0 ? _cameras.FindIndex(camera => camera.Index == previousIndex) : -1;
         if (_selected < 0) _selected = _cameras.Count > 0 ? 0 : -1;
+        // A camera that left the library takes its decoder with it.
+        foreach (var stale in _feeds.Keys.Where(index => _cameras.All(camera => camera.Index != index)).ToArray())
+        {
+            _feeds[stale].Dispose();
+            _feeds.Remove(stale);
+            _segments.Remove(stale);
+        }
         if (_active)
         {
             foreach (var camera in _cameras)
@@ -209,11 +281,13 @@ public sealed class ReplayBoothController : IDisposable
         }
     }
 
+    /// <summary>Selecting a camera never moves the playhead: the wall is one moment, several angles.</summary>
     public void Select(int index)
     {
         if (_cameras.Count == 0) { _selected = -1; return; }
         _selected = Math.Clamp(index, 0, _cameras.Count - 1);
-        SelectCurrent();
+        if (SelectedCamera is { } camera)
+            try { CameraFeed.Get(camera.Index).Start(); } catch { }
     }
 
     public void SelectDelta(int delta) => Select(_selected + delta);
@@ -224,171 +298,193 @@ public sealed class ReplayBoothController : IDisposable
         if (index >= 0) Select(index);
     }
 
-    void SelectCurrent()
-    {
-        _feed.Close();
-        _segments.Clear();
-        _segmentIndex = -1;
-        _currentSegment = null;
-        _prepared = false;
-        _playing = false;
-        _back = 0;
-        _depth = 0;
-        _lastSnapshot = DateTime.MinValue;
-        if (SelectedCamera is { } camera)
-        {
-            try { CameraFeed.Get(camera.Index).Start(); } catch { }
-        }
-        // Preparing a replay closes the selected camera's writer, which can block the UI while a
-        // clip is finalised. Selecting a camera on the wall should be instant, so leave the snapshot
-        // to Refresh a couple of seconds later or to the first explicit replay action.
-        _lastSnapshot = DateTime.UtcNow;
-    }
+    /// <summary>Escape on the wall: no camera is outlined, and nothing is paused by it.</summary>
+    public void ClearSelection() => _selected = -1;
 
-    /// <summary>Refreshes the wall and keeps the selected camera recording.</summary>
+    /// <summary>Refreshes the wall and keeps every camera recording.</summary>
     public void Refresh()
     {
         if (!_active) return;
         RefreshCameras();
-        if (SelectedCamera is not { } camera) return;
-        try { CameraFeed.Get(camera.Index).Start(); } catch { }
-        // The selected camera may have just started. Once it has a finished clip, open it so the
-        // scrubber is useful without the operator pressing anything.
+        foreach (var camera in _cameras)
+            try { CameraFeed.Get(camera.Index).Start(); } catch { }
+        // The first finished clip on any camera is enough to make the scrubber useful, so the booth
+        // does not wait for every camera to roll a full segment.
         if (!_prepared && (DateTime.UtcNow - _lastSnapshot).TotalSeconds >= 2)
             SnapshotAndOpen(reset: true);
-        if (_segments.Count > 0)
-        {
-            var newest = _segments[^1].EndsAt;
-            _depth = Math.Min(CameraFeed.ReplayWindowSeconds, (newest - _segments[0].StartedAt).TotalSeconds);
-            _back = Math.Clamp(_back, 0, Math.Max(0, _depth));
-        }
+        TrackPlaying();
+        UpdateDepth();
     }
 
-    /// <summary>Moves the playhead back from the live edge. Zero is the newest recorded frame.</summary>
+    void UpdateDepth()
+    {
+        if (NewestEdge() is not { } newest) return;
+        var oldest = OldestEdge() ?? newest;
+        _depth = Math.Min(CameraFeed.ReplayWindowSeconds, Math.Max(0, (newest - oldest).TotalSeconds));
+        _back = Math.Clamp(_back, 0, Math.Max(0, _depth));
+    }
+
+    /// <summary>Moves the shared playhead back from the live edge. Zero is the newest recorded frame.</summary>
     public bool Seek(double secondsBack)
     {
         if (!EnsureBuffer()) return false;
+        _playing = false;
+        _playStartedAt = null;
         _back = Math.Clamp(double.IsFinite(secondsBack) ? secondsBack : 0, 0, Math.Max(0, _depth));
-        OpenAt(_back);
+        OpenAll(_back, playing: false);
         return true;
     }
 
-    /// <summary>Moves forward (negative delta) or backward (positive delta) in the recording.</summary>
+    /// <summary>Moves forward (negative delta) or backward (positive delta) on every camera.</summary>
     public bool Step(double delta) => Seek(_back + delta);
 
     public bool Play()
     {
         if (!EnsureBuffer()) return false;
-        // Pressing Play at the live edge is the moment to pick up the segment recorded since the
-        // booth opened; otherwise the replay would start several seconds behind the actual edge.
+        // Pressing Play at the live edge is the moment to pick up what has been recorded since the
+        // booth opened; otherwise the replay would start behind the actual edge.
         if (_back <= 0.15) RefreshBuffer();
         if (_back <= 0.15 && _depth > 1) _back = Math.Min(5, _depth);
-        OpenAt(_back, forcePlaying: true);
         _playing = true;
-        _feed.Play();
+        _playStartedAt = DateTime.UtcNow;
+        _playStartedBack = _back;
+        OpenAll(_back, playing: true);
         return true;
     }
 
     public void Pause()
     {
         _playing = false;
-        _feed.Pause();
+        _playStartedAt = null;
+        foreach (var feed in _feeds.Values) feed.Pause();
     }
 
-    public bool TogglePlay()
+    public bool TogglePlay() => _playing ? Play_Stop() : Play();
+
+    bool Play_Stop()
     {
-        if (_playing) { Pause(); return false; }
-        return Play();
+        Pause();
+        return false;
     }
 
-    /// <summary>Forces a fresh snapshot so a replay opened long after the wall started reaches the live edge.</summary>
+    /// <summary>Moves the shared playhead while the cameras are playing.</summary>
+    void TrackPlaying()
+    {
+        if (!_playing || _playStartedAt is not { } started) return;
+        var elapsed = (DateTime.UtcNow - started).TotalSeconds;
+        var back = _playStartedBack - Math.Max(0, elapsed);
+        if (back <= 0)
+        {
+            // The playhead reached the live edge. Hold the last frame rather than wrapping.
+            _back = 0;
+            Pause();
+            return;
+        }
+        _back = back;
+    }
+
+    /// <summary>Forces a fresh snapshot of every camera so a replay opened late reaches the live edge.</summary>
     public bool RefreshBuffer()
     {
-        if (SelectedCamera is not { } camera) return false;
-        try { CameraFeed.Get(camera.Index).Start(); } catch { }
-        var segments = CameraFeed.Get(camera.Index).Snapshot();
-        if (segments.Count == 0) return false;
-        _segments.Clear();
-        _segments.AddRange(segments);
-        _depth = Math.Min(CameraFeed.ReplayWindowSeconds, (_segments[^1].EndsAt - _segments[0].StartedAt).TotalSeconds);
+        if (!EnsureBuffers()) return false;
         _prepared = true;
-        _lastSnapshot = DateTime.UtcNow;
+        UpdateDepth();
+        OpenAll(_back, playing: _playing);
         return true;
     }
 
-    bool EnsureBuffer()
+    bool EnsureBuffer() => _prepared && _segments.Values.Any(list => list.Count > 0) || SnapshotAndOpen(reset: true);
+
+    /// <summary>Takes one clip snapshot per camera. It is the only expensive step, and it happens on
+    /// opening a replay or an explicit refresh, never on a seek.</summary>
+    bool EnsureBuffers()
     {
-        if (SelectedCamera is null) return false;
-        if (_prepared && _segments.Count > 0) return true;
-        return SnapshotAndOpen(reset: true);
+        var any = false;
+        foreach (var camera in _cameras)
+        {
+            try { CameraFeed.Get(camera.Index).Start(); } catch { }
+            var segments = CameraFeed.Get(camera.Index).Snapshot();
+            _segments[camera.Index] = segments.ToList();
+            if (segments.Count > 0) any = true;
+        }
+        _lastSnapshot = DateTime.UtcNow;
+        return any;
     }
 
     bool SnapshotAndOpen(bool reset)
     {
-        if (SelectedCamera is not { } camera) return false;
-        try { CameraFeed.Get(camera.Index).Start(); } catch { }
-        var segments = CameraFeed.Get(camera.Index).Snapshot();
-        _lastSnapshot = DateTime.UtcNow;
-        if (segments.Count == 0)
+        if (_cameras.Count == 0) return false;
+        if (!EnsureBuffers())
         {
-            _segments.Clear();
             _prepared = false;
             _depth = 0;
             _back = 0;
             return false;
         }
-        _segments.Clear();
-        _segments.AddRange(segments);
-        _depth = Math.Min(CameraFeed.ReplayWindowSeconds, (_segments[^1].EndsAt - _segments[0].StartedAt).TotalSeconds);
         if (reset)
         {
             _back = 0;
             _playing = false;
+            _playStartedAt = null;
         }
         _prepared = true;
-        OpenAt(_back, forcePlaying: false);
+        UpdateDepth();
+        OpenAll(_back, playing: _playing);
         return true;
     }
 
-    void OpenAt(double secondsBack, bool? forcePlaying = null)
+    /// <summary>
+    /// Points every camera at the same instant and opens its decoder there. Each camera has its own
+    /// recordings, so the instant is resolved against that camera's own segments; a camera with a
+    /// shorter window simply holds its oldest frame instead of jumping out of step.
+    /// </summary>
+    void OpenAll(double secondsBack, bool playing)
     {
-        if (_segments.Count == 0) return;
-        var back = Math.Clamp(secondsBack, 0, Math.Max(0, _depth));
-        var target = _segments[^1].EndsAt.AddSeconds(-back);
-        var index = _segments.FindIndex(segment => target < segment.EndsAt);
-        if (index < 0) index = _segments.Count - 1;
-        var segment = _segments[index];
-        var offset = Math.Clamp((target - segment.StartedAt).TotalSeconds, 0, Math.Max(0, segment.Seconds - 0.05));
-        _segmentIndex = index;
-        _currentSegment = segment;
-        _back = back;
-        _feed.Open(segment.Path, offset, forcePlaying ?? _playing);
-    }
-
-    void TrackPosition(double seconds)
-    {
-        if (_segments.Count == 0 || _currentSegment is null) return;
-        // An old decoder can still report a position while the new camera is opening.
-        if (!string.Equals(_feed.Path, _currentSegment.Path, StringComparison.OrdinalIgnoreCase)) return;
-        var at = _currentSegment.StartedAt.AddSeconds(Math.Clamp(seconds, 0, _currentSegment.Seconds));
-        _back = Math.Clamp((_segments[^1].EndsAt - at).TotalSeconds, 0, Math.Max(0, _depth));
-    }
-
-    void AdvanceReplay()
-    {
-        if (_segmentIndex >= 0 && _segmentIndex + 1 < _segments.Count)
+        foreach (var camera in _cameras)
         {
-            var next = _segmentIndex + 1;
-            _segmentIndex = next;
-            _currentSegment = _segments[next];
-            _back = Math.Clamp((_segments[^1].EndsAt - _currentSegment.StartedAt).TotalSeconds, 0, _depth);
-            _feed.Open(_currentSegment.Path, 0, _playing);
-            return;
+            var feed = FeedFor(camera.Index);
+            var segments = SegmentsFor(camera.Index);
+            if (segments.Count == 0)
+            {
+                feed.Close();
+                continue;
+            }
+            var target = segments[^1].EndsAt.AddSeconds(-Math.Clamp(secondsBack, 0, Math.Max(0, _depth)));
+            var index = -1;
+            for (var candidate = 0; candidate < segments.Count; candidate++)
+                if (target < segments[candidate].EndsAt) { index = candidate; break; }
+            if (index < 0) index = segments.Count - 1;
+            var segment = segments[index];
+            var offset = Math.Clamp((target - segment.StartedAt).TotalSeconds, 0, Math.Max(0, segment.Seconds - 0.05));
+            feed.Open(segment.Path, offset, playing);
         }
-        // Hold the last recorded frame at the live edge. The operator can scrub back again.
-        _playing = false;
-        _back = 0;
-        _feed.Pause();
+    }
+
+    ReplayFeed FeedFor(int cameraIndex)
+    {
+        if (_feeds.TryGetValue(cameraIndex, out var feed)) return feed;
+        feed = new ReplayFeed(_ui) { Speed = Speed };
+        _feeds[cameraIndex] = feed;
+        return feed;
+    }
+
+    IReadOnlyList<CameraSegment> SegmentsFor(int cameraIndex) =>
+        _segments.TryGetValue(cameraIndex, out var list) ? list : [];
+
+    DateTimeOffset? NewestEdge()
+    {
+        // The playhead is measured from the camera the operator is watching, so the scrubber's
+        // length matches the picture in the big view.
+        var preferred = SelectedCamera is { } camera ? SegmentsFor(camera.Index) : [];
+        if (preferred.Count > 0) return preferred[^1].EndsAt;
+        var newest = _segments.Values.Where(list => list.Count > 0).Select(list => list[^1].EndsAt).ToArray();
+        return newest.Length == 0 ? null : newest.Max();
+    }
+
+    DateTimeOffset? OldestEdge()
+    {
+        var oldest = _segments.Values.Where(list => list.Count > 0).Select(list => list[0].StartedAt).ToArray();
+        return oldest.Length == 0 ? null : oldest.Min();
     }
 
     public BitmapSource? LiveFrame(int cameraIndex)
@@ -397,22 +493,17 @@ public sealed class ReplayBoothController : IDisposable
         try { return CameraFeed.Get(cameraIndex).LastFrame; } catch { return null; }
     }
 
-    /// <summary>A JPEG snapshot for the browser wall, encoded from the same frozen frame the desk sees.</summary>
+    /// <summary>A JPEG snapshot for the browser wall, encoded from the same frame the desk sees.</summary>
     public byte[]? FrameJpeg(int cameraIndex, bool replay)
     {
-        BitmapSource? frame;
-        if (replay && cameraIndex == SelectedCamera?.Index && _prepared)
-            frame = _feed.Frame ?? LiveFrame(cameraIndex);
-        else
-            frame = LiveFrame(cameraIndex);
+        var frame = replay && _prepared ? FrameFor(cameraIndex) : LiveFrame(cameraIndex);
         if (frame is null) return null;
         // Several wall tiles can ask for the same camera between two captured frames. Reuse the
         // encoded bytes instead of recompressing the same picture for every tile and every client.
-        if (!replay && _liveJpegCache.TryGetValue(cameraIndex, out var cached)
-            && ReferenceEquals(cached.Frame, frame))
+        if (_liveJpegCache.TryGetValue(cameraIndex, out var cached) && ReferenceEquals(cached.Frame, frame))
             return cached.Data;
         var data = EncodeJpeg(frame);
-        if (data is not null && !replay) _liveJpegCache[cameraIndex] = (frame, data);
+        if (data is not null) _liveJpegCache[cameraIndex] = (frame, data);
         return data;
     }
 
@@ -509,6 +600,9 @@ public sealed class ReplayBoothController : IDisposable
             case "toggle":
                 TogglePlay();
                 return true;
+            case "clear":
+                ClearSelection();
+                return true;
             case "stoppage":
                 var stoppage = form.TryGetValue("value", out var stoppageValue) ? stoppageValue : "toggle";
                 if (string.Equals(stoppage, "reset", StringComparison.OrdinalIgnoreCase)) ResetStoppage();
@@ -533,8 +627,8 @@ public sealed class ReplayBoothController : IDisposable
     public void Dispose()
     {
         _timer.Stop();
-        _feed.PositionChanged -= TrackPosition;
-        _feed.Ended -= AdvanceReplay;
-        _feed.Dispose();
+        foreach (var feed in _feeds.Values) feed.Dispose();
+        _feeds.Clear();
+        _segments.Clear();
     }
 }

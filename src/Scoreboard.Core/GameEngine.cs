@@ -53,15 +53,26 @@ public sealed record SportDefinition(string Id, string Name, string Unit, int Pe
 
 /// <summary>
 /// A single custom value such as Turnovers or Penalties. A value is either a number (the
-/// steppers work on it) or any free text — "N/A", "3rd", "TBD" — which is what the graphic prints.
+/// steppers work on it), any free text — "N/A", "3rd", "TBD" — or a clock that runs up or down.
+/// A pinned value always sits on the first page of the console's custom-value card.
 /// </summary>
-public sealed record GameStat(string Id, string Name, int Value = 0, string? Text = null)
+public sealed record GameStat(
+    string Id,
+    string Name,
+    int Value = 0,
+    string? Text = null,
+    bool Pinned = false,
+    bool IsClock = false,
+    int ClockSeconds = 0,
+    int ClockStartSeconds = 0,
+    bool ClockCountsUp = false,
+    bool ClockRunning = false)
 {
-    /// <summary>What the graphic and the report show: the typed text when there is one.</summary>
-    public string Display => !string.IsNullOrWhiteSpace(Text) ? Text : Value.ToString();
+    /// <summary>What the graphic and the report show: a clock, the typed text, or the number.</summary>
+    public string Display => IsClock ? ClockFormat.Format(ClockSeconds) : !string.IsNullOrWhiteSpace(Text) ? Text : Value.ToString();
 
-    /// <summary>True when the stat holds a number, so +/− may step it.</summary>
-    public bool IsNumber => string.IsNullOrWhiteSpace(Text);
+    /// <summary>True when the stat holds a plain number, so +/− may step it.</summary>
+    public bool IsNumber => !IsClock && string.IsNullOrWhiteSpace(Text);
 }
 
 public static class CommonStats
@@ -221,6 +232,15 @@ public sealed class GameState
     public bool HomePossession { get; set; } = true;
     public int ClockSeconds { get; set; } = 720;
 
+    /// <summary>How far through the current second each running clock is, 0–1. It is what fills the
+    /// decimal column; ignored and dropped from a save because it is live timing, not a game value.</summary>
+    [JsonIgnore]
+    public double ClockFraction { get; set; }
+    [JsonIgnore]
+    public double PlayClockFraction { get; set; }
+    [JsonIgnore]
+    public double StoppageFraction { get; set; }
+
     /// <summary>Soccer's added time, accrued by its own start/stop clock: how long the match runs past 90:00.</summary>
     public int StoppageSeconds { get; set; }
     public bool StoppageRunning { get; set; }
@@ -275,8 +295,23 @@ public sealed class GameState
     {
         GameClockMessage.Final => GameEngine.FinalClockText(this),
         GameClockMessage.EndOfRegulation => "END OF REG.",
-        _ => GameEngine.FormatClock(ClockSeconds)
+        _ => GameEngine.FormatClock(ClockSeconds, ClockStyle.Padded)
     };
+
+    /// <summary>The play clock as the console prints it: :40, counting down to :00.</summary>
+    [JsonIgnore]
+    // The console's own reading stays two-digit (:05): only a graphic's element option may drop
+    // the pad, so the operator screen does not flicker between :5 and :05.
+    public string PlayClockText => GameEngine.FormatPlayClock(PlayClockSeconds, 0, PlayClockFraction,
+        colon: true, leadingZero: true);
+
+    /// <summary>The play clock without the colon, as {{PLAY_CLOCK}} prints it without one.</summary>
+    [JsonIgnore]
+    public string PlayClockPlain => Math.Clamp(PlayClockSeconds, 0, 99).ToString();
+
+    /// <summary>Soccer's added time as the graphic prints it.</summary>
+    [JsonIgnore]
+    public string StoppageText => GameEngine.FormatClock(StoppageSeconds, ClockStyle.Padded);
 
     static string Ordinal(int value) => value switch { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" };
 
@@ -329,6 +364,12 @@ public sealed class GameState
     public SelectedPlayer? HomePlayer { get; set; }
     public SelectedPlayer? AwayPlayer { get; set; }
     /// <summary>
+    /// A player edit waiting for Update Output: the roster already holds the new numbers, but the
+    /// audience keeps the reading that is on air until the operator publishes it.
+    /// </summary>
+    public SelectedPlayer? HomePlayerPending { get; set; }
+    public SelectedPlayer? AwayPlayerPending { get; set; }
+    /// <summary>
     /// True when the operator deliberately put no player on the graphic for that side. Without
     /// this, reloading a roster would quietly put its first player back up.
     /// </summary>
@@ -371,7 +412,7 @@ public sealed class GameState
 }
 
 public sealed record GameEvent(DateTimeOffset At, string Type, string Description, int? HomeScore = null, int? AwayScore = null);
-public sealed record GameSnapshot(GameState State, string Label);
+public sealed record GameSnapshot(GameState State, string Label, string RosterId = "", string RosterJson = "");
 
 /// <summary>The two shapes a clock can print in: 09:59 (padded) or 9:59 / :59 (compact).</summary>
 public enum ClockStyle { Padded, Compact }
@@ -458,10 +499,18 @@ public sealed class GameEngine
     static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
     readonly Stopwatch _watch = Stopwatch.StartNew();
     long _lastTick;
+    // Custom clocks all move on the same whole-second boundary. Their carry is separate from
+    // the game's own clocks so starting one never steals a fraction from another.
+    long _statClockCarry;
     // Time already elapsed toward each clock's next whole-second change. Keeping this across a
     // pause is what lets a clock stopped 0.1s before the next second resume and change 0.1s later.
     long _gameClockCarry, _playClockCarry, _shotClockCarry, _timeoutClockCarry, _stoppageClockCarry;
     readonly Stack<GameSnapshot> _undo = new();
+    // What Undo took back, in order, so Redo can put it on air again. Any new action clears it:
+    // there is no redo branch once the show takes a different turn.
+    readonly Stack<GameSnapshot> _redo = new();
+    public bool CanUndo => _undo.Count > 0;
+    public bool CanRedo => _redo.Count > 0;
     public SportCatalog Sports { get; }
     public GameState State { get; private set; } = new();
     public event Action? Changed;
@@ -470,6 +519,26 @@ public sealed class GameEngine
     /// so the local timer must not also tick the same clock down between snapshots.
     /// </summary>
     public bool HardwareControlled { get; set; }
+
+    /// <summary>
+    /// True when roster stat edits go straight to the graphic. Off by default: the stats desk
+    /// stages its numbers and Update Output publishes them, so a stray keystroke never changes the
+    /// audience graphic on its own.
+    /// </summary>
+    public bool PlayerStatsLive
+    {
+        get => _playerStatsLive;
+        set
+        {
+            if (_playerStatsLive == value) return;
+            _playerStatsLive = value;
+            // Every open stats desk follows the same switch, so a control panel window and the
+            // main window can never disagree about whether edits are printing.
+            Changed?.Invoke();
+        }
+    }
+
+    bool _playerStatsLive;
 
     /// <summary>
     /// When on, the end of the final period (or full time in soccer) adds the result to each team's
@@ -533,7 +602,7 @@ public sealed class GameEngine
             State.HomePlayer = CopyPlayer(previous.HomePlayer); State.AwayPlayer = CopyPlayer(previous.AwayPlayer);
             State.HomePlayerCleared = previous.HomePlayerCleared; State.AwayPlayerCleared = previous.AwayPlayerCleared;
         }
-        _undo.Clear(); ResetClockCarries(); _lastTick = _watch.ElapsedTicks;
+        _undo.Clear(); _redo.Clear(); ResetClockCarries(); _lastTick = _watch.ElapsedTicks;
         Log("Game", string.IsNullOrWhiteSpace(State.GameName) ? $"New {sport.Name} game" : $"New {sport.Name} game · {State.GameName}");
         Changed?.Invoke();
     }
@@ -713,7 +782,9 @@ public sealed class GameEngine
         // fraction before the operator pressed Stop, so the number could change under the pointer.
         // The fraction already elapsed stays in _gameClockCarry, so starting again reaches the next
         // whole second when it is actually due rather than waiting a fresh second.
-        SaveUndo("Clock"); State.ClockRunning = !State.ClockRunning; _lastTick = _watch.ElapsedTicks;
+        // Take the stopwatch up to the moment of the press first. Without it the fraction since the
+        // last tick was thrown away, so every pause quietly gave the clock back a little time.
+        Tick(); SaveUndo("Clock"); State.ClockRunning = !State.ClockRunning; _lastTick = _watch.ElapsedTicks;
         if (State.ClockRunning && State.ClockMessage == GameClockMessage.EndOfRegulation && State.ClockSeconds > 0)
             State.ClockMessage = GameClockMessage.Clock;
         Log("Clock", State.ClockRunning ? "Clock started" : $"Clock stopped at {FormatClock(State.ClockSeconds)}"); Changed?.Invoke();
@@ -721,7 +792,7 @@ public sealed class GameEngine
 
     public void SetClock(int seconds)
     {
-        Tick(); SaveUndo("Clock correction"); State.ClockSeconds = Math.Max(0, seconds); _gameClockCarry = 0; _lastTick = _watch.ElapsedTicks;
+        Tick(); SaveUndo("Clock correction"); State.ClockSeconds = Math.Max(0, seconds); _gameClockCarry = 0; State.ClockFraction = 0; _lastTick = _watch.ElapsedTicks;
         if (State.ClockSeconds > 0 && State.ClockMessage == GameClockMessage.EndOfRegulation)
             State.ClockMessage = GameClockMessage.Clock;
         Log("Clock", $"Clock set to {FormatClock(State.ClockSeconds)}"); Changed?.Invoke();
@@ -732,7 +803,8 @@ public sealed class GameEngine
     /// <summary>Starts or stops soccer's stoppage clock. Its total is how long the clock runs past 90:00.</summary>
     public void ToggleStoppageClock()
     {
-        if (State.SportId != "soccer") return;
+        // The booth always shows the added-time controls, so they have to act on every sport.
+        // Only soccer folds the time into full time, but the clock itself is just a stopwatch.
         Tick(); SaveUndo("Stoppage clock");
         State.StoppageRunning = !State.StoppageRunning;
         _lastTick = _watch.ElapsedTicks;
@@ -742,7 +814,6 @@ public sealed class GameEngine
 
     public void AdjustStoppageClock(int seconds)
     {
-        if (State.SportId != "soccer") return;
         Tick(); SaveUndo("Stoppage time");
         State.StoppageSeconds = Math.Clamp(State.StoppageSeconds + seconds, 0, 59 * 60);
         Log("Stoppage", $"Stoppage time {FormatClock(State.StoppageSeconds)}");
@@ -751,13 +822,22 @@ public sealed class GameEngine
 
     public void ResetStoppageClock()
     {
-        if (State.SportId != "soccer") return;
         Tick(); SaveUndo("Stoppage time");
         State.StoppageSeconds = 0;
         State.StoppageRunning = false;
         _stoppageClockCarry = 0;
         Log("Stoppage", "Stoppage time cleared"); Changed?.Invoke();
     }
+
+    /// <summary>Raised when a running clock's decimal column moves, ten times a second.</summary>
+    public event Action? FractionsChanged;
+
+    /// <summary>
+    /// True while some graphic prints a decimal column. Only then does a running clock wake the
+    /// show ten times a second, so a scoreboard without decimals costs exactly what it did before.
+    /// The studio sets this from the elements it draws.
+    /// </summary>
+    public bool ClockDecimalsInUse { get; set; }
 
     /// <summary>
     /// Advances every running clock by the stopwatch time since the last tick. The fraction left
@@ -843,10 +923,60 @@ public sealed class GameEngine
                 if (State.TimeoutClockSeconds == 0) { State.TimeoutClockRunning = false; _timeoutClockCarry = 0; Log("Timeout clock", "Timeout clock expired"); }
             }
         }
+        // Custom clocks share one whole-second boundary. They are ordinary custom values, so
+        // their time prints through {{STAT:Name}} and they survive a save exactly like a number.
+        if (State.Stats.Any(stat => stat.IsClock && stat.ClockRunning))
+        {
+            var seconds = WholeSeconds(ref _statClockCarry, elapsed);
+            if (seconds > 0)
+            {
+                for (var index = 0; index < State.Stats.Count; index++)
+                {
+                    var stat = State.Stats[index];
+                    if (!stat.IsClock || !stat.ClockRunning) continue;
+                    var next = stat.ClockCountsUp
+                        ? (int)Math.Min(359999L, (long)stat.ClockSeconds + seconds)
+                        : (int)Math.Max(0L, (long)stat.ClockSeconds - seconds);
+                    var running = stat.ClockCountsUp ? next < 359999 : next > 0;
+                    State.Stats[index] = stat with { ClockSeconds = next, ClockRunning = running };
+                    changed = true;
+                }
+            }
+        }
+        else _statClockCarry = 0;
         if (periodEnded) SettleRecord();
+        // A decimal column moves ten times a second. Only a clock that prints decimals is followed,
+        // so a show without them costs exactly what it did before, and a stopped clock sits at .0.
+        var gameFraction = FractionFor(_gameClockCarry, State.ClockRunning, State.ClockCountsUp);
+        var playFraction = FractionFor(_playClockCarry, State.PlayClockRunning, countsUp: false);
+        var stoppageFraction = FractionFor(_stoppageClockCarry, State.StoppageRunning, countsUp: true);
+        // Two decimals move a hundred times a second, so every tick is reported while a clock runs:
+        // ten updates a second reads as a stutter on the hundredths. Only the clock text listens.
+        var decimalsMoved = ClockDecimalsInUse
+            && (State.ClockRunning || State.PlayClockRunning || State.StoppageRunning || State.ShotClockRunning);
+        State.ClockFraction = gameFraction;
+        State.PlayClockFraction = playFraction;
+        State.StoppageFraction = stoppageFraction;
+        // A decimal column moves ten times a second, far more often than anything else on the show
+        // needs to redraw. It gets its own event, so only the clock text follows it instead of the
+        // whole console being rebuilt ten times a second.
+        if (decimalsMoved) FractionsChanged?.Invoke();
         // Only notify when a clock's displayed value changes, so sub-second ticks cost nothing.
         if (changed) Changed?.Invoke();
     }
+
+    static double Fraction(long carry) => Math.Clamp(carry / (double)Stopwatch.Frequency, 0, 1);
+
+    /// <summary>The fraction of a second a clock's decimal column should show. A stopped clock is 0.</summary>
+    static double FractionFor(long carry, bool running, bool countsUp)
+    {
+        if (!running) return 0;
+        return countsUp ? Fraction(carry) : 1 - Fraction(carry);
+    }
+
+    /// <summary>True when the decimal column printed a new digit since the last tick.</summary>
+    static bool DecimalMoved(double before, double next, bool running) =>
+        running && (int)Math.Floor(before * 10) != (int)Math.Floor(next * 10);
 
     /// <summary>Moves whole seconds out of a clock's fractional carry, leaving the remainder for next time.</summary>
     static int WholeSeconds(ref long carry, long elapsedTicks)
@@ -858,7 +988,7 @@ public sealed class GameEngine
     }
 
     void ResetClockCarries() =>
-        _gameClockCarry = _playClockCarry = _shotClockCarry = _timeoutClockCarry = _stoppageClockCarry = 0;
+        _gameClockCarry = _playClockCarry = _shotClockCarry = _timeoutClockCarry = _stoppageClockCarry = _statClockCarry = 0;
 
     /// <summary>The clock value that means full time, or 0 when the sport has no automatic finish.</summary>
     int FullTimeLimit => State.SportId == "soccer"
@@ -1090,7 +1220,9 @@ public sealed class GameEngine
     public void TogglePlayClock()
     {
         if (State.SportId != "football") return;
-        // Pause on the number already on screen instead of first consuming an unseen fraction.
+        // Bank the fraction since the last tick before pausing, or the pause hands the clock back
+        // a little time every time the operator stops and starts it.
+        Tick();
         SaveUndo("Play clock");
         State.PlayClockRunning = !State.PlayClockRunning;
         // Starting an expired clock reloads it: otherwise it would sit at 0 and stop again a
@@ -1240,20 +1372,26 @@ public sealed class GameEngine
     public void AdjustTimeouts(bool home, int delta) => SetTimeoutCount(home, (home ? State.HomeTimeouts : State.AwayTimeouts) + delta);
     public void AddFoul(bool home) { if(State.SportId!="basketball")return; SaveUndo("Foul"); if (home) State.HomeFouls++; else State.AwayFouls++; Log("Foul", $"{(home ? State.HomeTeam : State.AwayTeam)} foul"); Changed?.Invoke(); }
     public void SetShotClock(int seconds) { if(State.SportId!="basketball")return; SaveUndo("Shot clock");State.ShotClockSeconds=Math.Clamp(seconds,0,99);State.ShotClockRunning=false;_shotClockCarry=0;Log("Shot clock",$"Shot clock set to {State.ShotClockSeconds}");Changed?.Invoke(); }
-    public void ToggleShotClock() { if(State.SportId!="basketball")return;SaveUndo("Shot clock");State.ShotClockRunning=!State.ShotClockRunning;_lastTick=_watch.ElapsedTicks;Log("Shot clock",State.ShotClockRunning?"Shot clock started":"Shot clock stopped");Changed?.Invoke(); }
+    public void ToggleShotClock() { if(State.SportId!="basketball")return;Tick();SaveUndo("Shot clock");State.ShotClockRunning=!State.ShotClockRunning;_lastTick=_watch.ElapsedTicks;Log("Shot clock",State.ShotClockRunning?"Shot clock started":"Shot clock stopped");Changed?.Invoke(); }
     public void ResetShotClock(int seconds=24) { if(State.SportId!="basketball")return;SaveUndo("Shot clock reset");State.ShotClockSeconds=Math.Clamp(seconds,1,99);State.ShotClockRunning=false;_shotClockCarry=0;Log("Shot clock",$"Shot clock reset to {State.ShotClockSeconds}");Changed?.Invoke(); }
     public void AddFootballYards(bool home,int yards) { if(State.SportId!="football")return;SaveUndo("Rushing/receiving yards");if(home)State.HomeYards=Math.Max(0,State.HomeYards+yards);else State.AwayYards=Math.Max(0,State.AwayYards+yards);Log("Yards",$"{(home?State.HomeTeam:State.AwayTeam)} {yards:+#;-#;0} yards");Changed?.Invoke(); }
     public void AddTurnover(bool home) { if(State.SportId!="football")return;SaveUndo("Turnover");if(home)State.HomeTurnovers++;else State.AwayTurnovers++;Log("Turnover",$"{(home?State.HomeTeam:State.AwayTeam)} turnover");Changed?.Invoke(); }
     public void AddSoccerShot(bool home) { if(State.SportId!="soccer")return;SaveUndo("Shot");if(home)State.HomeShots++;else State.AwayShots++;Log("Shot",$"{(home?State.HomeTeam:State.AwayTeam)} shot");Changed?.Invoke(); }
     public void AddSoccerCorner(bool home) { if(State.SportId!="soccer")return;SaveUndo("Corner");if(home)State.HomeCorners++;else State.AwayCorners++;Log("Corner",$"{(home?State.HomeTeam:State.AwayTeam)} corner");Changed?.Invoke(); }
 
-    public GameStat AddStat(string name)
+    public GameStat AddStat(string name, bool clock = false, bool countsUp = false, int startSeconds = 0, bool pinned = false)
     {
         var trimmed = name.Trim();
         var existing = State.Stats.FirstOrDefault(s => string.Equals(s.Name, trimmed, StringComparison.OrdinalIgnoreCase));
         if (existing is not null) return existing;
-        SaveUndo("Stat"); var stat = new GameStat(Guid.NewGuid().ToString("N"), trimmed.Length == 0 ? "Stat" : trimmed);
-        State.Stats.Add(stat); Log("Stat", $"Added stat {stat.Name}"); Changed?.Invoke(); return stat;
+        SaveUndo("Stat");
+        var seconds = Math.Clamp(startSeconds, 0, 359999);
+        var stat = new GameStat(Guid.NewGuid().ToString("N"), trimmed.Length == 0 ? "Stat" : trimmed,
+            Pinned: pinned, IsClock: clock, ClockSeconds: seconds, ClockStartSeconds: seconds,
+            ClockCountsUp: countsUp);
+        State.Stats.Add(stat);
+        Log("Stat", clock ? $"Added clock {stat.Name}" : $"Added stat {stat.Name}");
+        Changed?.Invoke(); return stat;
     }
 
     public void RemoveStat(string id)
@@ -1266,6 +1404,12 @@ public sealed class GameEngine
     {
         var stat = State.Stats.FirstOrDefault(s => s.Id == id); if (stat is null) return;
         SaveUndo(stat.Name); var index = State.Stats.IndexOf(stat);
+        if (stat.IsClock)
+        {
+            var updatedClock = stat with { ClockSeconds = Math.Clamp(stat.ClockSeconds + delta, 0, 359999) };
+            State.Stats[index] = updatedClock;
+            Log(stat.Name, $"{updatedClock.Name}: {updatedClock.Display}"); Changed?.Invoke(); return;
+        }
         // Stepping a stat makes it a number again, even if it was holding text.
         var updated = stat with { Value = Math.Max(0, stat.Value + delta), Text = null };
         State.Stats[index] = updated;
@@ -1277,6 +1421,14 @@ public sealed class GameEngine
     {
         var stat = State.Stats.FirstOrDefault(s => s.Id == id); if (stat is null) return;
         var clamped = Math.Max(0, value);
+        if (stat.IsClock)
+        {
+            if (stat.ClockSeconds == clamped) return;
+            SaveUndo(stat.Name); var clockIndex = State.Stats.IndexOf(stat);
+            var updatedClock = stat with { ClockSeconds = Math.Clamp(clamped, 0, 359999), Text = null };
+            State.Stats[clockIndex] = updatedClock;
+            Log(stat.Name, $"{updatedClock.Name}: {updatedClock.Display}"); Changed?.Invoke(); return;
+        }
         if (stat.Value == clamped && stat.IsNumber) return;
         SaveUndo(stat.Name); var index = State.Stats.IndexOf(stat);
         var updated = stat with { Value = clamped, Text = null };
@@ -1292,6 +1444,15 @@ public sealed class GameEngine
     {
         var stat = State.Stats.FirstOrDefault(s => s.Id == id); if (stat is null) return;
         var trimmed = (text ?? "").Trim();
+        if (stat.IsClock)
+        {
+            if (!ClockFormat.TryParse(trimmed, out var clockSeconds)) return;
+            if (stat.ClockSeconds == clockSeconds) return;
+            SaveUndo(stat.Name); var clockIndex = State.Stats.IndexOf(stat);
+            var updatedClock = stat with { ClockSeconds = Math.Clamp(clockSeconds, 0, 359999), Text = null };
+            State.Stats[clockIndex] = updatedClock;
+            Log(stat.Name, $"{stat.Name}: {updatedClock.Display}"); Changed?.Invoke(); return;
+        }
         if (int.TryParse(trimmed, out var number))
         {
             number = Math.Max(0, number);
@@ -1308,10 +1469,169 @@ public sealed class GameEngine
         Log(stat.Name, $"{stat.Name}: {trimmed}"); Changed?.Invoke();
     }
 
+    /// <summary>Pins a custom value to the first page of the console card, or lets it flow again.</summary>
+    public void SetStatPinned(string id, bool pinned)
+    {
+        var stat = State.Stats.FirstOrDefault(s => s.Id == id); if (stat is null || stat.Pinned == pinned) return;
+        var index = State.Stats.IndexOf(stat);
+        State.Stats[index] = stat with { Pinned = pinned };
+        Changed?.Invoke();
+    }
+
+    /// <summary>Starts or stops one custom clock. The clock keeps its own displayed value.</summary>
+    public void ToggleStatClock(string id)
+    {
+        var stat = State.Stats.FirstOrDefault(s => s.Id == id); if (stat is null || !stat.IsClock) return;
+        // Apply any elapsed whole seconds before reading the value, so stopping a running clock
+        // does not put back the second that just ticked away.
+        Tick();
+        stat = State.Stats.FirstOrDefault(s => s.Id == id);
+        if (stat is null) return;
+        SaveUndo($"{stat.Name} clock"); var index = State.Stats.IndexOf(stat);
+        // Starting an expired count-down clock reloads it, just like the game and play clocks.
+        var seconds = Math.Max(0, stat.ClockSeconds);
+        if (!stat.ClockRunning && !stat.ClockCountsUp && seconds == 0) seconds = Math.Max(1, stat.ClockStartSeconds);
+        var updated = stat with { ClockRunning = !stat.ClockRunning, ClockSeconds = seconds };
+        State.Stats[index] = updated;
+        _lastTick = _watch.ElapsedTicks;
+        Log(stat.Name, updated.ClockRunning ? $"{updated.Name} clock started at {updated.Display}" : $"{updated.Name} clock stopped at {updated.Display}");
+        Changed?.Invoke();
+    }
+
+    /// <summary>Sets a custom clock to an exact time, in seconds.</summary>
+    public void SetStatClock(string id, int seconds)
+    {
+        var stat = State.Stats.FirstOrDefault(s => s.Id == id); if (stat is null || !stat.IsClock) return;
+        seconds = Math.Clamp(seconds, 0, 359999);
+        if (stat.ClockSeconds == seconds) return;
+        SaveUndo($"{stat.Name} clock"); var index = State.Stats.IndexOf(stat);
+        State.Stats[index] = stat with { ClockSeconds = seconds, Text = null };
+        Changed?.Invoke();
+    }
+
+    /// <summary>Returns a custom clock to the time it was created with and stops it.</summary>
+    public void ResetStatClock(string id)
+    {
+        var stat = State.Stats.FirstOrDefault(s => s.Id == id); if (stat is null || !stat.IsClock) return;
+        SaveUndo($"{stat.Name} clock reset"); var index = State.Stats.IndexOf(stat);
+        State.Stats[index] = stat with
+        {
+            ClockSeconds = stat.ClockStartSeconds,
+            ClockRunning = false,
+            Text = null
+        };
+        _statClockCarry = 0;
+        Log(stat.Name, $"{stat.Name} clock reset to {ClockFormat.Format(stat.ClockStartSeconds)}");
+        Changed?.Invoke();
+    }
+
     public bool Undo()
     {
         if (_undo.Count == 0) return false;
-        var snapshot = _undo.Pop(); State = snapshot.State; ResetClockCarries(); _lastTick = _watch.ElapsedTicks; Log("Undo", $"Undid {snapshot.Label}"); Changed?.Invoke(); return true;
+        var snapshot = _undo.Pop();
+        // The state being left behind is what Redo returns to, under the same action name.
+        _redo.Push(new GameSnapshot(CloneState(), snapshot.Label, snapshot.RosterId,
+            snapshot.RosterId.Length == 0 ? "" : RosterJson(snapshot.RosterId)));
+        RestoreRoster(snapshot);
+        State = snapshot.State; ResetClockCarries(); _lastTick = _watch.ElapsedTicks; Log("Undo", $"Undid {snapshot.Label}"); Changed?.Invoke(); return true;
+    }
+
+    /// <summary>
+    /// Takes the game back to the last time it was still live. Ending a game is recorded more than
+    /// once — the clock expiring marks it final on its own, and the operator's End Game settles the
+    /// record after that — so a single step back can land on a snapshot that is already final, with
+    /// the clocks stopped and the result applied. This walks past those and restores the last state
+    /// before the end, so an accidental End Game really gives the game back.
+    /// </summary>
+    public bool UndoEndGame()
+    {
+        var ended = new List<GameSnapshot>();
+        GameSnapshot? target = null;
+        while (_undo.Count > 0)
+        {
+            var candidate = _undo.Pop();
+            if (!candidate.State.GameEnded)
+            {
+                target = candidate;
+                break;
+            }
+            ended.Add(candidate);
+        }
+        if (target is null)
+        {
+            for (var index = ended.Count - 1; index >= 0; index--) _undo.Push(ended[index]);
+            // No live step to go back to — a game loaded at its final has no history at all — so the
+            // final comes off where it stands. The score, clocks, period, down and distance are the
+            // operator's own last state and are left exactly as they are.
+            if (!State.GameEnded) return false;
+            SaveUndo("End game");
+            State.GameEnded = false;
+            State.RecordSettled = false;
+            if (State.ClockMessage == GameClockMessage.Final) State.ClockMessage = GameClockMessage.Clock;
+            Log("Game", "End game undone · the game is live again");
+            Changed?.Invoke();
+            return true;
+        }
+        // Redo re-ends the game from where the operator is now; the final states walked past are
+        // not worth putting back a step at a time.
+        _redo.Push(new GameSnapshot(CloneState(), "End game"));
+        State = target.State;
+        // A step saved while the game was being ended still counts as live, but the clock must not
+        // stay on Final with a live game under it.
+        State.GameEnded = false;
+        if (State.ClockMessage == GameClockMessage.Final) State.ClockMessage = GameClockMessage.Clock;
+        ResetClockCarries();
+        _lastTick = _watch.ElapsedTicks;
+        Log("Undo", $"Undid {target.Label} · the game is live again");
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>Puts back the action the last Undo took away, without touching anything else.</summary>
+    public bool Redo()
+    {
+        if (_redo.Count == 0) return false;
+        var snapshot = _redo.Pop();
+        _undo.Push(new GameSnapshot(CloneState(), snapshot.Label, snapshot.RosterId,
+            snapshot.RosterId.Length == 0 ? "" : RosterJson(snapshot.RosterId)));
+        RestoreRoster(snapshot);
+        State = snapshot.State; ResetClockCarries(); _lastTick = _watch.ElapsedTicks; Log("Redo", $"Redid {snapshot.Label}"); Changed?.Invoke(); return true;
+    }
+
+    /// <summary>
+    /// Records an undo point that also carries the roster it is about to edit, so Undo puts a
+    /// player's stat back instead of only rewinding the game around it. Roster data lives outside
+    /// the game state, which is why an ordinary snapshot cannot restore it.
+    /// </summary>
+    public void SaveRosterUndo(string label, Roster roster)
+    {
+        _redo.Clear();
+        _undo.Push(new GameSnapshot(CloneState(), label, roster.Id,
+            JsonSerializer.Serialize(roster, JsonOptions)));
+        if (_undo.Count > 100)
+        {
+            var keep = _undo.Reverse().TakeLast(100).ToArray();
+            _undo.Clear();
+            foreach (var item in keep) _undo.Push(item);
+        }
+    }
+
+    static string RosterJson(string rosterId) =>
+        RosterStore.Book.Find(rosterId) is { } roster ? JsonSerializer.Serialize(roster, JsonOptions) : "";
+
+    static void RestoreRoster(GameSnapshot snapshot)
+    {
+        if (snapshot.RosterId.Length == 0 || snapshot.RosterJson.Length == 0) return;
+        try
+        {
+            var restored = JsonSerializer.Deserialize<Roster>(snapshot.RosterJson, JsonOptions);
+            if (restored is null) return;
+            var book = RosterStore.Book;
+            var index = book.Rosters.FindIndex(roster => roster.Id == restored.Id);
+            if (index < 0) book.Rosters.Add(restored); else book.Rosters[index] = restored;
+            RosterStore.Save();
+        }
+        catch { }
     }
 
     // ---------- rosters ----------
@@ -1345,6 +1665,9 @@ public sealed class GameEngine
         if ((home ? State.HomePlayer : State.AwayPlayer)?.PlayerId == player.Id && !(home ? State.HomePlayerCleared : State.AwayPlayerCleared)) return;
         SaveUndo("Selected player");
         if (home) State.HomePlayerCleared = false; else State.AwayPlayerCleared = false;
+        // Choosing who is on the graphic is an explicit cue, so it releases anything that was
+        // waiting for Update Output for that side.
+        if (home) State.HomePlayerPending = null; else State.AwayPlayerPending = null;
         ApplySelected(home, roster, player);
         Log("Player", $"{(home ? State.HomeTeam : State.AwayTeam)}: {player.Record}");
         Changed?.Invoke();
@@ -1359,6 +1682,7 @@ public sealed class GameEngine
         if ((home ? State.HomePlayerCleared : State.AwayPlayerCleared) && (home ? State.HomePlayer : State.AwayPlayer) is null) return;
         SaveUndo("Selected player");
         if (home) State.HomePlayerCleared = true; else State.AwayPlayerCleared = true;
+        if (home) State.HomePlayerPending = null; else State.AwayPlayerPending = null;
         ApplySelected(home, null, null);
         Log("Player", $"{(home ? State.HomeTeam : State.AwayTeam)}: no player on the graphic");
         Changed?.Invoke();
@@ -1399,17 +1723,54 @@ public sealed class GameEngine
     }
 
     /// <summary>Re-resolves the selected player after the roster was edited, keeping the game on air.</summary>
-    public void ReloadSelectedPlayer(bool home)
+    /// <param name="publish">False stages the new numbers for Update Output instead of putting them
+    /// on the graphic at once.</param>
+    public void ReloadSelectedPlayer(bool home, bool publish = true)
     {
-        ResolveSelected(home);
+        if (publish)
+        {
+            // ResolveSelected also honours "No player", so a roster edit cannot put a cleared
+            // player back on the graphic.
+            ResolveSelected(home);
+            if (home) State.HomePlayerPending = null; else State.AwayPlayerPending = null;
+        }
+        else
+        {
+            var roster = RosterStore.Book.Find(home ? State.HomeRosterId : State.AwayRosterId);
+            var current = home ? State.HomePlayer : State.AwayPlayer;
+            var player = roster?.Find(current?.PlayerId);
+            var snapshot = roster is not null && player is not null ? SelectedPlayer.From(roster, player) : null;
+            // The program preview paints the working state, so the edit shows there at once. The
+            // pending marker keeps the live tick from sending it to the audience until Update Output.
+            if (home) { State.HomePlayer = snapshot; State.HomePlayerPending = snapshot; }
+            else { State.AwayPlayer = snapshot; State.AwayPlayerPending = snapshot; }
+        }
         Changed?.Invoke();
+    }
+
+    /// <summary>Puts a staged player reading on the graphic. Update Output calls this.</summary>
+    public bool PublishStagedPlayers()
+    {
+        var changed = false;
+        if (State.HomePlayerPending is { } home) { State.HomePlayer = home; State.HomePlayerPending = null; changed = true; }
+        if (State.AwayPlayerPending is { } away) { State.AwayPlayer = away; State.AwayPlayerPending = null; changed = true; }
+        if (changed) Changed?.Invoke();
+        return changed;
     }
 
     /// <summary>Replaces the saved macro buttons without adding an undo point for every keystroke.</summary>
     public void StoreMacros(IEnumerable<SavedMacro> macros, int? pageCount = null)
     {
-        State.Macros = macros.Select(macro => macro.Copy()).ToList();
-        if (pageCount is int pages) State.MacroPages = Math.Clamp(pages, 1, 99);
+        // Normalise the copies on the way in: a step's text, colour or page is cleaned once here,
+        // so the file the operator saves is already the one that will be read back.
+        var next = macros.Where(macro => macro is not null).Select(macro => macro.Copy()).ToList();
+        foreach (var macro in next) macro.Normalize();
+        var pages = pageCount is int count ? Math.Clamp(count, 1, 99) : State.MacroPages;
+        // A save that changes nothing must not fill the undo history with empty steps.
+        if (JsonSerializer.Serialize(next) != JsonSerializer.Serialize(State.Macros) || pages != State.MacroPages)
+            SaveUndo("Macro board");
+        State.Macros = next;
+        State.MacroPages = pages;
         Changed?.Invoke();
     }
 
@@ -1462,7 +1823,7 @@ public sealed class GameEngine
             State.Controls = (Sports.Find(State.SportId)?.Controls ?? []).Select(c => c with { }).ToList();
         // Roster edits made since the file was written still reach the graphic on load.
         RefreshSelectedPlayers();
-        _undo.Clear(); ResetClockCarries(); _lastTick = _watch.ElapsedTicks; Changed?.Invoke();
+        _undo.Clear(); _redo.Clear(); ResetClockCarries(); _lastTick = _watch.ElapsedTicks; Changed?.Invoke();
         return design;
     }
 
@@ -1501,7 +1862,9 @@ public sealed class GameEngine
         s.HomeYards, s.AwayYards, s.HomeTurnovers, s.AwayTurnovers,
         s.HomeShots, s.AwayShots, s.HomeCorners, s.AwayCorners,
         string.Join(",", s.Controls.Select(c => $"{c.Id}={SportValues.Read(s, c.Id)}")),
-        string.Join(",", s.Stats.Select(x => $"{x.Name}={x.Display}")));
+        string.Join(",", s.Stats.Select(x => $"{x.Name}={x.Display}")),
+        // A roster stat edit waits for Update Output, so it belongs to the staged reading.
+        PlayerSignature(s.HomePlayerPending), PlayerSignature(s.AwayPlayerPending));
 
     /// <summary>What the graphic reads from a selected player, compared by the live publish.</summary>
     public static string PlayerSignature(SelectedPlayer? player) => player is null
@@ -1677,9 +2040,16 @@ public sealed class GameEngine
 
     public string ExportJson() => JsonSerializer.Serialize(State, JsonOptions);
     public GameState CloneState() => JsonSerializer.Deserialize<GameState>(JsonSerializer.Serialize(State, JsonOptions), JsonOptions)!;
-    public void LoadFromState(GameState state){State=JsonSerializer.Deserialize<GameState>(JsonSerializer.Serialize(state,JsonOptions),JsonOptions)!;NormalizeFootballTimeouts();RefreshSelectedPlayers();_undo.Clear();ResetClockCarries();_lastTick=_watch.ElapsedTicks;Changed?.Invoke();}
+    public void LoadFromState(GameState state){State=JsonSerializer.Deserialize<GameState>(JsonSerializer.Serialize(state,JsonOptions),JsonOptions)!;NormalizeFootballTimeouts();RefreshSelectedPlayers();_undo.Clear();_redo.Clear();ResetClockCarries();_lastTick=_watch.ElapsedTicks;Changed?.Invoke();}
     public bool UpdateLiveScoreClock(GameState source)
     {
+        // A roster edit waiting for Update Output is already painted in the program preview, but
+        // the audience keeps the reading that was last published. The pending marker decides.
+        var homePlayer = source.HomePlayerPending is not null ? State.HomePlayer : source.HomePlayer;
+        var awayPlayer = source.AwayPlayerPending is not null ? State.AwayPlayer : source.AwayPlayer;
+        var homeCleared = source.HomePlayerPending is not null ? State.HomePlayerCleared : source.HomePlayerCleared;
+        var awayCleared = source.AwayPlayerPending is not null ? State.AwayPlayerCleared : source.AwayPlayerCleared;
+        var clocksDiffer = CustomClockSignature(State) != CustomClockSignature(source);
         if (State.HomeScore == source.HomeScore && State.AwayScore == source.AwayScore &&
             State.HomeTeam == source.HomeTeam && State.AwayTeam == source.AwayTeam &&
             State.HomeAbbreviation == source.HomeAbbreviation && State.AwayAbbreviation == source.AwayAbbreviation &&
@@ -1698,11 +2068,12 @@ public sealed class GameEngine
             State.PlayClockSeconds == source.PlayClockSeconds && State.PlayClockRunning == source.PlayClockRunning &&
             State.TimeoutClockSeconds == source.TimeoutClockSeconds && State.TimeoutClockRunning == source.TimeoutClockRunning &&
             // Player data is live too: a substitution on the roster desk reprints the graphic at once.
-            State.HomePlayerCleared == source.HomePlayerCleared && State.AwayPlayerCleared == source.AwayPlayerCleared &&
-            PlayerSignature(State.HomePlayer) == PlayerSignature(source.HomePlayer) &&
-            PlayerSignature(State.AwayPlayer) == PlayerSignature(source.AwayPlayer) &&
+            // A staged edit is the exception; it keeps the published reading until Update Output.
+            State.HomePlayerCleared == homeCleared && State.AwayPlayerCleared == awayCleared &&
+            PlayerSignature(State.HomePlayer) == PlayerSignature(homePlayer) &&
+            PlayerSignature(State.AwayPlayer) == PlayerSignature(awayPlayer) &&
             // The new down goes on air at once when the preview is on; the distance waits for publish.
-            (!source.DownPending || (State.Down == source.Down && State.DownPending))) return false;
+            (!source.DownPending || (State.Down == source.Down && State.DownPending)) && !clocksDiffer) return false;
         State.HomeScore=source.HomeScore;State.AwayScore=source.AwayScore;
         State.LastScoreAmount=source.LastScoreAmount;State.LastScoreHome=source.LastScoreHome;State.LastScoreSequence=source.LastScoreSequence;
         State.HomeTeam=source.HomeTeam;State.AwayTeam=source.AwayTeam;
@@ -1722,10 +2093,27 @@ public sealed class GameEngine
         State.TimeoutClockSeconds=source.TimeoutClockSeconds;State.TimeoutClockRunning=source.TimeoutClockRunning;
         // Live: the down changes, the distance does not; the pending flag stays until publication.
         if (source.DownPending) { State.Down=source.Down; State.DownPending=true; }
-        State.HomePlayerCleared=source.HomePlayerCleared;State.AwayPlayerCleared=source.AwayPlayerCleared;
-        State.HomePlayer=CopyPlayer(source.HomePlayer);State.AwayPlayer=CopyPlayer(source.AwayPlayer);
+        State.HomePlayerCleared=homeCleared;State.AwayPlayerCleared=awayCleared;
+        State.HomePlayer=CopyPlayer(homePlayer);State.AwayPlayer=CopyPlayer(awayPlayer);
+        CopyCustomClocks(source);
         Changed?.Invoke();
         return true;
+    }
+
+    static string CustomClockSignature(GameState state) => string.Join("|",
+        state.Stats.Where(stat => stat.IsClock).Select(stat => $"{stat.Id}:{stat.ClockSeconds}:{stat.ClockRunning}"));
+
+    /// <summary>Custom clocks publish live with the game clock; ordinary custom values stay staged.</summary>
+    void CopyCustomClocks(GameState source)
+    {
+        for (var index = 0; index < State.Stats.Count; index++)
+        {
+            var target = State.Stats[index];
+            if (!target.IsClock) continue;
+            var live = source.Stats.FirstOrDefault(stat => stat.IsClock && string.Equals(stat.Id, target.Id, StringComparison.OrdinalIgnoreCase));
+            if (live is null) continue;
+            State.Stats[index] = target with { ClockSeconds = live.ClockSeconds, ClockRunning = live.ClockRunning };
+        }
     }
 
     /// <summary>A detached copy of a selected player, so the two engines never share a live object.</summary>
@@ -1733,8 +2121,19 @@ public sealed class GameEngine
         ? null
         : JsonSerializer.Deserialize<SelectedPlayer>(JsonSerializer.Serialize(player, JsonOptions), JsonOptions)!;
 
-    void SaveUndo(string label) { _undo.Push(new GameSnapshot(JsonSerializer.Deserialize<GameState>(JsonSerializer.Serialize(State, JsonOptions), JsonOptions)!, label)); if (_undo.Count > 100) { var keep = _undo.Reverse().TakeLast(100).ToArray(); _undo.Clear(); foreach (var x in keep) _undo.Push(x); } }
+    void SaveUndo(string label) { _redo.Clear(); _undo.Push(new GameSnapshot(JsonSerializer.Deserialize<GameState>(JsonSerializer.Serialize(State, JsonOptions), JsonOptions)!, label)); if (_undo.Count > 100) { var keep = _undo.Reverse().TakeLast(100).ToArray(); _undo.Clear(); foreach (var x in keep) _undo.Push(x); } }
     void Log(string type, string description) => State.Events.Add(new GameEvent(DateTimeOffset.Now, type, description, State.HomeScore, State.AwayScore));
+
+    /// <summary>
+    /// Writes one operator-visible event to the log. Media, macro and roster actions use this so
+    /// the log records the whole show, not only the values the console itself changes.
+    /// </summary>
+    public void RecordEvent(string type, string description)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return;
+        Log(type, description.Trim());
+        Changed?.Invoke();
+    }
     static string Abbreviate(string value) => string.Concat(value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(3).Select(s => char.ToUpperInvariant(s[0])));
     /// <summary>
     /// The console and remote clocks use the familiar padded shape. A graphic's game clock chooses
@@ -1758,4 +2157,52 @@ public sealed class GameEngine
             // "0:59", not "00:59" — that is the shape the operator asked for.
             : minutes == 0 ? $"0:{remainder:00}" : $"{minutes:00}:{remainder:00}";
     }
+
+    /// <summary>
+    /// A clock with a decimal column: MM:SS.d for one decimal, MM:SS.dd for two. <paramref name="part"/>
+    /// is the fraction of the current second still to play on a countdown, or already played on a
+    /// count-up clock. A stopped clock sits at .0.
+    /// </summary>
+    public static string FormatClock(int seconds, ClockStyle style, int decimals, double part) =>
+        FormatClock(seconds, style, decimals, part, countDown: false);
+
+    /// <summary>
+    /// A running clock's decimal column keeps the same whole second the no-decimal clock shows.
+    /// A 59-second clock therefore reads 59.9, 59.8 … 59.0, 58.9 — turning decimals on no longer
+    /// makes it jump straight to 58 while the console still says 59.
+    /// </summary>
+    public static string FormatClock(int seconds, ClockStyle style, int decimals, double part, bool countDown)
+    {
+        seconds = Math.Max(0, seconds);
+        if (decimals <= 0) return FormatClock(seconds, style);
+        var fraction = Math.Clamp(double.IsFinite(part) ? part : 0, 0, 1);
+        return decimals == 1
+            ? $"{FormatClock(seconds, style)}.{TenthDigit(fraction, countDown)}"
+            : $"{FormatClock(seconds, style)}.{HundredthDigit(fraction, countDown):00}";
+    }
+
+    static int TenthDigit(double part, bool countDown = false) => countDown && part >= 1 - 1e-9
+        ? 9
+        : (int)Math.Floor(part * 10 + 1e-9) % 10;
+    static int HundredthDigit(double part, bool countDown = false) => countDown && part >= 1 - 1e-9
+        ? 99
+        : (int)Math.Floor(part * 100 + 1e-9) % 100;
+
+    /// <summary>The play clock prints as :SS, with the same whole-second decimal readout.</summary>
+    public static string FormatPlayClock(int seconds, int decimals, double part, bool colon = true, bool leadingZero = false)
+    {
+        seconds = Math.Clamp(seconds, 0, 99);
+        var fraction = Math.Clamp(double.IsFinite(part) ? part : 0, 0, 1);
+        // The colon and the padding are separate choices: the colon alone prints :5, the padding
+        // alone prints 05, and both print :05. Neither setting changes the other.
+        var digits = leadingZero || seconds >= 10 ? seconds.ToString("00") : seconds.ToString();
+        var text = colon ? $":{digits}" : digits;
+        if (decimals <= 0) return text;
+        return decimals == 1
+            ? $"{text}.{TenthDigit(fraction, countDown: true)}"
+            : $"{text}.{HundredthDigit(fraction, countDown: true):00}";
+    }
+
+    /// <summary>Which clock a decimal setting or a conditional action is aimed at.</summary>
+    public static int ClampDecimals(int decimals) => Math.Clamp(decimals, 0, 2);
 }

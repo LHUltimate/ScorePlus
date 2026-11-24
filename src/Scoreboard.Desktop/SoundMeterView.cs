@@ -37,7 +37,7 @@ public sealed class SoundMeterView : Border
         var caption = new DockPanel();
         DockPanel.SetDock(_level, Dock.Right);
         caption.Children.Add(_level);
-        caption.Children.Add(new TextBlock { Text = "SOUND LEVEL", Foreground = new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E)), FontSize = 10, FontWeight = FontWeights.Bold });
+        caption.Children.Add(new TextBlock { Text = "MASTER SOUND", Foreground = new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E)), FontSize = 10, FontWeight = FontWeights.Bold });
         meter.Children.Add(caption);
 
         var segments = new UniformGrid { Columns = Segments, Height = 12, Margin = new Thickness(0, 5, 0, 0) };
@@ -86,7 +86,8 @@ public sealed class SoundMeterView : Border
     void UpdateMeter()
     {
         if (!IsVisible) return;
-        var level = SoundLevelMeter.Read();
+        // This is the master meter: the loudest of every speaker bus, read as one bar.
+        var level = SoundLevelMeter.ReadMaster();
         // The same square-root scale as the main rail, so quiet speech still moves the meter.
         var lit = (int)Math.Round(Math.Sqrt(level) * _bars.Length);
         if (lit != _lit)

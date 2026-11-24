@@ -64,7 +64,7 @@ public partial class GameControlWindow : Window
         if (host is DelegateHost detached) detached.NewPanel = () => NewPanelRequested?.Invoke();
         Panel = new ControlPanelView(engine, host);
         PanelHost.Content = Panel;
-        RosterControl.Attach(engine);
+        RosterControl.Attach(engine, null, () => host.LiveScoreClock, live => host.LiveScoreClock = live);
         BuildSoundMeter();
         _meterTimer.Tick += (_, _) => UpdateSoundMeter();
         _meterTimer.Start();
@@ -125,7 +125,7 @@ public partial class GameControlWindow : Window
         _macroDock = new MacroDock(engine, session, theme, Panel.Execute, catalog, publishGameState);
         _macroDock.Status += message => MediaStatus.Text = message;
         MacroHost.Content = _macroDock;
-        RosterControl.Attach(engine);
+        RosterControl.Attach(engine, null, () => host.LiveScoreClock, live => host.LiveScoreClock = live);
         AttachMedia(media);
         ApplyTheme(theme);
         SyncDisplayPicker();
@@ -172,7 +172,11 @@ public partial class GameControlWindow : Window
     /// <summary>Allows the host to keep the panel chain going without a production header button.</summary>
     public void RequestNewPanel() => NewPanelRequested?.Invoke();
 
-    public void SyncLiveState(bool live) => Panel.SyncLiveState(live);
+    public void SyncLiveState(bool live)
+    {
+        Panel.SyncLiveState(live);
+        _macroDock?.SyncLiveState(live);
+    }
 
     /// <summary>Repaints the program preview with the newest values, skipping any switch delay.</summary>
     public void RefreshPreview() => _preview?.ApplyNow();
@@ -453,13 +457,21 @@ internal sealed class AddStatDialog : Window
 {
     readonly ComboBox _presets = new();
     readonly TextBox _custom = new();
+    readonly CheckBox _clock = new();
+    readonly ComboBox _direction = new();
+    readonly TextBox _start = new();
+    readonly CheckBox _pin = new();
 
     public string StatName { get; private set; } = "";
+    public bool IsClock { get; private set; }
+    public bool ClockCountsUp { get; private set; }
+    public int ClockSeconds { get; private set; }
+    public bool Pinned { get; private set; }
 
     public AddStatDialog(IReadOnlyCollection<string> existing)
     {
         Title = "Add custom value";
-        Width = 380; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize;
+        Width = 430; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.FromRgb(23, 28, 37));
         Foreground = Brushes.White;
@@ -471,6 +483,26 @@ internal sealed class AddStatDialog : Window
         panel.Children.Add(_presets);
         panel.Children.Add(new TextBlock { Text = "Custom value name (overrides the choice above)", Foreground = new SolidColorBrush(Color.FromRgb(147, 160, 178)), Margin = new Thickness(4, 8, 0, 6) });
         panel.Children.Add(_custom);
+        _clock.Content = "Run this value as a clock";
+        _clock.Foreground = Brushes.White;
+        _clock.Margin = new Thickness(4, 10, 0, 2);
+        panel.Children.Add(_clock);
+        _direction.ItemsSource = new[] { "Counts down", "Counts up" };
+        _direction.SelectedIndex = 0;
+        _direction.Margin = new Thickness(4, 4, 0, 0);
+        _direction.IsEnabled = false;
+        panel.Children.Add(_direction);
+        panel.Children.Add(new TextBlock { Text = "Starting time (MM:SS)", Foreground = new SolidColorBrush(Color.FromRgb(147, 160, 178)), Margin = new Thickness(4, 8, 0, 4) });
+        _start.Text = "0:00";
+        _start.Margin = new Thickness(4, 0, 0, 0);
+        _start.IsEnabled = false;
+        panel.Children.Add(_start);
+        _pin.Content = "Pin to the first page";
+        _pin.Foreground = Brushes.White;
+        _pin.Margin = new Thickness(4, 10, 0, 0);
+        panel.Children.Add(_pin);
+        _clock.Checked += (_, _) => { _direction.IsEnabled = _start.IsEnabled = true; };
+        _clock.Unchecked += (_, _) => { _direction.IsEnabled = _start.IsEnabled = false; };
         var error = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(255, 114, 114)), Margin = new Thickness(4, 4, 0, 0), TextWrapping = TextWrapping.Wrap };
         panel.Children.Add(error);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -482,7 +514,18 @@ internal sealed class AddStatDialog : Window
             if (name.Length == 0) name = (_presets.SelectedItem as string ?? "").Trim();
             if (name.Length == 0) { error.Text = "Choose a value or type a name."; return; }
             if (existing.Contains(name, StringComparer.OrdinalIgnoreCase)) { error.Text = "That value already exists."; return; }
+            var clock = _clock.IsChecked == true;
+            var seconds = 0;
+            if (clock && !ClockFormat.TryParse(_start.Text, out seconds))
+            {
+                error.Text = "Use MM:SS or a whole number of seconds for the starting time.";
+                return;
+            }
             StatName = name;
+            IsClock = clock;
+            ClockCountsUp = _direction.SelectedIndex == 1;
+            ClockSeconds = Math.Clamp(seconds, 0, 359999);
+            Pinned = _pin.IsChecked == true;
             DialogResult = true;
             Close();
         };

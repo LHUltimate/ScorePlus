@@ -74,6 +74,10 @@ internal static class ScreenFit
 
         window.MaxWidth = width;
         window.MaxHeight = height;
+        // Lower a minimum that no longer fits this monitor. Without this, a 760px minimum kept
+        // the window taller than a 720p work area even though ScreenFit had clamped its maximum.
+        window.MinWidth = Math.Min(window.MinWidth, Math.Max(640, width - 16));
+        window.MinHeight = Math.Min(window.MinHeight, Math.Max(480, height - 32));
         // Only a floating window is pulled back in; resizing a maximized one would knock it out of
         // the maximized state Windows just applied.
         if (maximized) return;

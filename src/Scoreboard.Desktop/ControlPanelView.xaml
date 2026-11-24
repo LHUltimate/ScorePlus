@@ -73,11 +73,17 @@
     </Style>
   </UserControl.Resources>
 
-  <Grid>
+  <!-- The console fills the space it is given. A fixed design size inside a Viewbox looked
+       shrunken on normal 1280- and 1440-wide windows, because the whole panel was scaled down
+       instead of using the room; the rows and cards below reflow instead. -->
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+  <Grid MinHeight="690">
     <Grid.RowDefinitions>
-      <RowDefinition Height="*" MinHeight="226"/>
-      <RowDefinition Height="*" MinHeight="210"/>
-      <RowDefinition Height="196" MinHeight="196"/>
+      <RowDefinition Height="*" MinHeight="219"/>
+      <RowDefinition Height="*" MinHeight="229"/>
+      <!-- Three rows of two values: a whole page must fit, not be cut off by the card. -->
+      <RowDefinition Height="204" MinHeight="204"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
@@ -243,7 +249,7 @@
           <!-- The penalty strip shares this card rather than taking a row of its own: it is the
                same drive as the down, it only needs a line, and the row it used to claim came out
                of the timing column below, which is what clipped the play clock. -->
-          <DockPanel x:Name="PenaltyStrip" Grid.Row="3" Margin="0,6,0,0">
+          <DockPanel x:Name="PenaltyStrip" Grid.Row="3" Margin="0,4,0,0">
             <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
               <ToggleButton x:Name="PenaltyActiveToggle" Content="No flag" MinHeight="32" Width="104"
                             HorizontalContentAlignment="Center" Padding="10,2"
@@ -278,7 +284,7 @@
                       Margin="8,0,24,0" FontSize="11"
                       SelectionChanged="ClockMessage_Changed"
                       ToolTip="What the game clock prints on the graphic">
-              <ComboBoxItem Content="Game clock" Tag="Clock"/>
+              <ComboBoxItem Content="Game Clock" Tag="Clock"/>
               <ComboBoxItem Content="Final" Tag="Final"/>
               <ComboBoxItem Content="End of Reg." Tag="EndOfRegulation"/>
             </ComboBox>
@@ -466,6 +472,7 @@
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
           <DockPanel>
@@ -475,8 +482,22 @@
               <TextBlock Text="CUSTOM VALUES" Style="{StaticResource CardTitle}"/>
             </StackPanel>
           </DockPanel>
-          <!-- The stat list is the one thing that can outgrow its card, so it scrolls in place and never pushes the page. -->
-          <ScrollViewer x:Name="StatsScroller" Grid.Row="1" Margin="0,3,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <!-- Pinned values lead the first page; the arrows page through the rest. No scrolling,
+               so a long list never turns the card into a hidden-value hunt. -->
+          <Grid x:Name="StatsPager" Grid.Row="1" Margin="0,3,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Button x:Name="StatsPrevButton" Content="◀" Width="28" Height="20" MinWidth="28" MinHeight="20"
+                    Padding="0" FontSize="9" Click="StatsPrev_Click" ToolTip="Previous page of custom values"/>
+            <TextBlock x:Name="StatsPageLabel" Grid.Column="1" Text="1 / 1" FontSize="9" FontWeight="Bold"
+                       Foreground="#93A0B2" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <Button x:Name="StatsNextButton" Grid.Column="2" Content="▶" Width="28" Height="20" MinWidth="28" MinHeight="20"
+                    Padding="0" FontSize="9" Click="StatsNext_Click" ToolTip="Next page of custom values"/>
+          </Grid>
+          <ScrollViewer x:Name="StatsScroller" Grid.Row="2" Margin="0,3,0,0" VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled">
             <UniformGrid x:Name="StatsHost" Columns="2" VerticalAlignment="Top"/>
           </ScrollViewer>
         </Grid>
@@ -484,7 +505,7 @@
     </Grid>
 
     <!-- ============ PUBLISH BAR ============ -->
-    <Border Grid.Row="3" Background="#111721" CornerRadius="9" Padding="9,6" Margin="0,8,0,0">
+    <Border Grid.Row="3" Background="#111721" CornerRadius="9" Padding="9,6" Margin="0,6,0,0">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
           <ComboBox x:Name="HornType" Width="108" MinHeight="32" Margin="0,0,4,0"
@@ -508,10 +529,11 @@
             </StackPanel>
           </Border>
           <ToggleButton x:Name="LiveOutputToggle" Content="Live: ON" IsChecked="True" Checked="LiveOutput_Changed" Unchecked="LiveOutput_Changed" Padding="12,8" MinHeight="36" FontSize="12" Width="92" ToolTip="Publish score, clocks and team names as they change"/>
-          <Button x:Name="UpdateButton" Content="Update Output" FontSize="13" Padding="16,10" MinHeight="40" Background="#0B6B50" BorderBrush="#14A67C" Tag="output.publish" Click="Action_Click" Margin="6,0,0,0" ToolTip="Publish down, distance, possession, timeouts, stats and the chosen layout"/>
+          <Button x:Name="UpdateButton" Content="Update Output" Width="138" FontSize="13" Padding="16,10" MinHeight="40" Background="#0B6B50" BorderBrush="#14A67C" Tag="output.publish" Click="Action_Click" Margin="6,0,0,0" ToolTip="Publish down, distance, possession, timeouts, stats and the chosen layout"/>
         </StackPanel>
         <TextBlock x:Name="StagedText" Text="EVERYTHING ON AIR" FontSize="11" FontWeight="Bold" Foreground="#38D7A3" VerticalAlignment="Center"/>
       </DockPanel>
     </Border>
   </Grid>
+  </ScrollViewer>
 </UserControl>

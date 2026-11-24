@@ -22,11 +22,9 @@ internal static class Program
     {
         // The real App, not a bare Application: the console's drop-downs only exist in the app's own
         // styles, so a probe that runs without them proves nothing about what the operator sees.
-        // The smoke hook suppresses the launch box: the suite drives its own windows, and the
-        // first dispatcher pump would otherwise block inside the real App's startup dialog.
-#if DEBUG
-        App.SuppressStartupForSmoke = true;
-#endif
+        // The environment switch works in Release too: otherwise the real console and launch box
+        // open on top of whatever full-screen app the operator is working in.
+        Environment.SetEnvironmentVariable("SCOREPLUS_SMOKE", "1");
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.InitializeComponent();
         var layoutPath = Path.Combine(Path.GetTempPath(), $"smoke-scorebug-{Guid.NewGuid():N}.json");
@@ -342,7 +340,7 @@ internal static class Program
                     Background = new LinearGradientBrush(Colors.Blue, Colors.White, 0),
                     Child = colourText
                 };
-                var colourWindow = new Window
+                var colourWindow = new TestWindow
                 {
                     Content = colourPlate, Width = 220, Height = 110,
                     WindowStyle = WindowStyle.None, ShowInTaskbar = false,
@@ -397,7 +395,7 @@ internal static class Program
             var unsavedPrompt = new UnsavedChangesWindow("Dark", "detail");
             ShowForSmoke(unsavedPrompt);
             unsavedPrompt.UpdateLayout();
-            if (FindAll<Button>(unsavedPrompt).Count(b => (b.Content as string) is "Keep editing" or "Exit without saving" or "Save & exit") != 3)
+            if (FindAll<Button>(unsavedPrompt).Count(b => (b.Content as string) is "Keep Editing" or "Exit Without Saving" or "Save & Exit") != 3)
                 throw new Exception("FAIL: the unsaved-game prompt does not offer keep, discard and save");
             // No score card: the prompt explains the risk, it does not repeat the game summary.
             if (FindAll<TextBlock>(unsavedPrompt).Any(t => t.FontFamily.Source == "Consolas"))
@@ -566,7 +564,7 @@ internal static class Program
                     Foreground = "#FFFFFFFF", TextOpacity = 1
                 };
                 var tickerView = new TickerView(tickerItem, () => tickerEngine.State);
-                var tickerHost = new Window
+                var tickerHost = new TestWindow
                 {
                     Content = tickerView, Width = 900, Height = 100, WindowStyle = WindowStyle.None,
                     ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual
@@ -602,7 +600,7 @@ internal static class Program
                     Foreground = "#FFFFFFFF", TextOpacity = 1
                 };
                 var scrollView = new TickerView(scrollItem, () => scrollEngine.State);
-                var scrollHost = new Window
+                var scrollHost = new TestWindow
                 {
                     Content = scrollView, Width = 900, Height = 100, WindowStyle = WindowStyle.None,
                     ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual
@@ -775,6 +773,30 @@ internal static class Program
             main.Close();
             Console.WriteLine("PASS: main window loads");
 
+            // Undo and Redo live in the program preview and step the whole show back and forward.
+            {
+                var historyShell = new MainWindow(LaunchMode.New) { Width = 1280, Height = 800 };
+                ShowForSmoke(historyShell);
+                historyShell.UpdateLayout();
+                if (historyShell.FindName("UndoButton") is not Button undoButton)
+                    throw new Exception("FAIL: the program preview has no undo button");
+                if (historyShell.FindName("RedoButton") is not Button redoButton)
+                    throw new Exception("FAIL: the program preview has no redo button");
+                if (undoButton.IsEnabled || redoButton.IsEnabled)
+                    throw new Exception("FAIL: the history buttons are live before any action");
+                historyShell.Engine.Score(true, 2);
+                if (!undoButton.IsEnabled || redoButton.IsEnabled)
+                    throw new Exception("FAIL: an action did not arm the undo button");
+                undoButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                if (historyShell.Engine.State.HomeScore != 0 || !redoButton.IsEnabled)
+                    throw new Exception($"FAIL: the preview's undo button left the score at {historyShell.Engine.State.HomeScore}");
+                redoButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                if (historyShell.Engine.State.HomeScore != 2)
+                    throw new Exception($"FAIL: the preview's redo button left the score at {historyShell.Engine.State.HomeScore}");
+                historyShell.Close();
+                Console.WriteLine("PASS: the program preview's undo and redo buttons step the show back and forward");
+            }
+
             // Macros are part of the main workspace. Conditionals now belong to the Display Studio,
             // where their rules sit beside the display they affect.
             var tabShell = new MainWindow(LaunchMode.New) { Width = 1280, Height = 800 };
@@ -822,6 +844,39 @@ internal static class Program
             Pump(TimeSpan.FromMilliseconds(120));
             if (macroEditor.Visibility != Visibility.Visible)
                 throw new Exception("FAIL: the macro editor could not be shown again");
+            // The detailed steps a long macro needs are offered in the editor, and each one shows its
+            // own fields instead of leaving the operator with a score form.
+            var kindBox = (ComboBox)macroDock.FindName("KindBox")!;
+            var kindLabels = kindBox.Items.OfType<object>().Select(item => item.ToString() ?? "").ToList();
+            foreach (var expected in new[] { "Clock —", "Clock message —", "Level —", "Ticker —", "Run macro —", "Note —" })
+                if (!kindLabels.Any(label => label.StartsWith(expected, StringComparison.Ordinal)))
+                    throw new Exception($"FAIL: the macro editor does not offer a {expected} step ({string.Join(" | ", kindLabels)})");
+            kindBox.SelectedItem = kindBox.Items.OfType<object>()
+                .First(item => (item.ToString() ?? "").StartsWith("Clock —", StringComparison.Ordinal));
+            Pump(TimeSpan.FromMilliseconds(60));
+            var macroClockPanel = macroDock.FindName("ClockPanel") as StackPanel;
+            var macroValuePanel = macroDock.FindName("ValuePanel") as StackPanel;
+            if (macroClockPanel is null || macroClockPanel.Visibility != Visibility.Visible
+                || macroValuePanel is null || macroValuePanel.Visibility != Visibility.Collapsed)
+                throw new Exception("FAIL: a clock step did not show its own clock fields");
+            if (macroDock.FindName("AmountLabel") is not TextBlock { Text: var amountLabel }
+                || !amountLabel.Contains("RESET TO", StringComparison.Ordinal))
+                throw new Exception("FAIL: a clock step's number field is not labelled as reset seconds");
+            if (!new UserPreferences().MultiviewCameraSoundBars)
+                throw new Exception("FAIL: multiview camera sound bars are off by default");
+            // A show saved before the sound-bar toggle existed must take the new default once, while
+            // an operator who deliberately turned the bars off keeps them off.
+            var migratePrefs = typeof(PreferencesStore).GetMethod("Migrate", BindingFlags.Static | BindingFlags.NonPublic)
+                ?? throw new Exception("FAIL: preferences migration is missing");
+            var legacyPrefs = new UserPreferences { Schema = 3, MultiviewCameraSoundBars = false };
+            migratePrefs.Invoke(null, [legacyPrefs]);
+            if (!legacyPrefs.MultiviewCameraSoundBars)
+                throw new Exception("FAIL: an old show did not take the new multiview sound-bar default");
+            var chosenOff = new UserPreferences { Schema = 3, MultiviewCameraSoundBars = false, MultiviewSoundBarsChosen = true };
+            migratePrefs.Invoke(null, [chosenOff]);
+            if (chosenOff.MultiviewCameraSoundBars)
+                throw new Exception("FAIL: a deliberate multiview sound-bar choice was overwritten on load");
+            Console.WriteLine("PASS: the macro editor offers clock, clock-message, level, ticker, chained and note steps");
             macroCards = FindAll<Border>(macroDock).Where(border => border.Tag is SavedMacro).ToList();
             var macroMenu = macroCards[0].ContextMenu!;
             macroMenu.PlacementTarget = macroCards[0];
@@ -923,6 +978,8 @@ internal static class Program
             var macroSession = new MediaSession(PreferencesStore.Load());
             try
             {
+                var lastSnap = macroEngine.AddStat("Last ball snapped");
+                macroEngine.SetClock(754);
                 var macro = new SavedMacro
                 {
                     Label = "Smoke drive",
@@ -931,14 +988,16 @@ internal static class Program
                         new MacroAction { Kind = MacroActionKind.Score, Home = true, Amount = 3 },
                         new MacroAction { Kind = MacroActionKind.SetDown, Value = 1 },
                         new MacroAction { Kind = MacroActionKind.Wait, WaitSeconds = 0.02 },
-                        new MacroAction { Kind = MacroActionKind.SetTimeouts, Home = false, Value = 2 }
+                        new MacroAction { Kind = MacroActionKind.SetTimeouts, Home = false, Value = 2 },
+                        new MacroAction { Kind = MacroActionKind.CopyValue, Path = lastSnap.Id, Label = lastSnap.Name, Text = "{{GAME_CLOCK}}" }
                     ]
                 };
                 macroEngine.StoreMacros([macro]);
                 var result = RunMacro(new MacroRunner(macroEngine, macroSession), macroEngine.State.Macros[0]);
                 if (macroEngine.State.HomeScore != 3 || macroEngine.State.Down != 1 || macroEngine.State.AwayTimeouts != 2
-                    || !result.Contains("4 steps run", StringComparison.Ordinal))
-                    throw new Exception($"FAIL: macro steps did not run in order ({result})");
+                    || macroEngine.State.Stats.First(stat => stat.Id == lastSnap.Id).Display != "12:34"
+                    || !result.Contains("5 steps run", StringComparison.Ordinal))
+                    throw new Exception($"FAIL: macro steps did not run in order, or the copy step lost the game clock ({result} / {macroEngine.State.Stats.First(stat => stat.Id == lastSnap.Id).Display})");
 
                 // A speaker bus is a live source, not a file. A media macro must switch it on
                 // without trying to open it as a clip or replacing another camera/microphone.
@@ -965,11 +1024,33 @@ internal static class Program
                 var statMacro = new SavedMacro
                 {
                     Label = "Player stat",
-                    Actions = [new MacroAction { Kind = MacroActionKind.RosterStat, Home = true, PlayerId = statPlayer.Id, PlayerName = statPlayer.Name, StatName = "Yards", Value = 4, Delta = true }]
+                    // No player id: the step follows the player on air for that side.
+                    Actions = [new MacroAction { Kind = MacroActionKind.RosterStat, Home = true, StatName = "Yards", Value = 4, Delta = true }]
                 };
+                // The audience copy keeps the reading that was last published, while the program
+                // preview paints the staged number from the working state.
+                var statAudience = new GameEngine();
+                statAudience.LoadFromState(macroEngine.CloneState());
+                macroEngine.PlayerStatsLive = false;
                 RunMacro(new MacroRunner(macroEngine, macroSession), statMacro);
-                if (statPlayer.Stat("Yards") != 7 || macroEngine.State.HomePlayer?.Stat("Yards") != 7)
-                    throw new Exception($"FAIL: a macro did not change the live player stat (roster {statPlayer.Stat("Yards")}, graphic {macroEngine.State.HomePlayer?.Stat("Yards")})");
+                if (statPlayer.Stat("Yards") != 7
+                    || macroEngine.State.HomePlayer?.Stat("Yards") != 7
+                    || macroEngine.State.HomePlayerPending?.Stat("Yards") != 7)
+                    throw new Exception($"FAIL: a macro with automatic updates off did not stage the on-air player stat (roster {statPlayer.Stat("Yards")}, preview {macroEngine.State.HomePlayer?.Stat("Yards")}, staged {macroEngine.State.HomePlayerPending?.Stat("Yards")})");
+                statAudience.UpdateLiveScoreClock(macroEngine.State);
+                if (statAudience.State.HomePlayer?.Stat("Yards") != 3)
+                    throw new Exception($"FAIL: a staged player stat reached the audience early ({statAudience.State.HomePlayer?.Stat("Yards")})");
+                macroEngine.PublishStagedPlayers();
+                statAudience.UpdateLiveScoreClock(macroEngine.State);
+                if (macroEngine.State.HomePlayer?.Stat("Yards") != 7 || statAudience.State.HomePlayer?.Stat("Yards") != 7)
+                    throw new Exception("FAIL: Update Output did not put the macro's staged player stat on the graphic");
+                // With the desk's Live switch on, the same on-air-target step prints at once.
+                macroEngine.PlayerStatsLive = true;
+                RunMacro(new MacroRunner(macroEngine, macroSession), statMacro);
+                statAudience.UpdateLiveScoreClock(macroEngine.State);
+                if (statPlayer.Stat("Yards") != 11 || macroEngine.State.HomePlayer?.Stat("Yards") != 11
+                    || statAudience.State.HomePlayer?.Stat("Yards") != 11)
+                    throw new Exception($"FAIL: a macro with automatic updates on did not change the live player stat (roster {statPlayer.Stat("Yards")}, graphic {macroEngine.State.HomePlayer?.Stat("Yards")})");
             }
             finally { macroSession.Stop(); macroSession.Dispose(); }
             Console.WriteLine("PASS: a macro changes score, down, timeouts, a speaker bus and a player stat");
@@ -1051,11 +1132,93 @@ internal static class Program
                         throw new Exception($"FAIL: a bypass step published {bypassPublished} times and left the hold at {extendedEngine.MacroOutputHold}");
                     extendedEngine.ClearMacroOutputHold();
 
+                    // The detailed step kinds: a clock that starts twice must not flip itself off, a
+                    // clock message prints Final, a level and a mute reach a speaker bus, a ticker
+                    // step replaces the headlines, a note runs nothing and a chained macro runs here.
+                    var chainTarget = new SavedMacro
+                    {
+                        Label = "Chain target",
+                        Actions =
+                        [
+                            new MacroAction { Kind = MacroActionKind.Score, Home = false, Amount = 2 },
+                            new MacroAction { Kind = MacroActionKind.Note, Text = "chain tail" }
+                        ]
+                    };
+                    var detailedMacro = new SavedMacro
+                    {
+                        Label = "Detailed",
+                        Actions =
+                        [
+                            new MacroAction { Kind = MacroActionKind.Note, Text = "timeout routine" },
+                            new MacroAction { Kind = MacroActionKind.ClockControl, Path = "game", Value = 0 },
+                            new MacroAction { Kind = MacroActionKind.ClockControl, Path = "game", Value = 0 },
+                            new MacroAction { Kind = MacroActionKind.ClockControl, Path = "game", Value = 1 },
+                            new MacroAction { Kind = MacroActionKind.ClockMessage, Value = 1 },
+                            new MacroAction { Kind = MacroActionKind.MediaVolume, Path = speakerOnAir.Path, Label = speakerOnAir.Name, Value = 40 },
+                            new MacroAction { Kind = MacroActionKind.MediaVolume, Path = speakerOnAir.Path, Label = speakerOnAir.Name, Mute = true, Muted = true },
+                            new MacroAction { Kind = MacroActionKind.TickerNews, Text = "Home wins|Next game Friday" },
+                            new MacroAction { Kind = MacroActionKind.RunMacro, Path = chainTarget.Id, Label = chainTarget.Label }
+                        ]
+                    };
+                    extendedEngine.StoreMacros([chainTarget, detailedMacro]);
+                    var detailedResult = RunMacro(new MacroRunner(extendedEngine, extendedSession),
+                        extendedEngine.State.Macros.First(entry => entry.Label == "Detailed"));
+                    var mutedSpeaker = extendedSession.Library.First(entry => entry.Path == speakerOnAir.Path);
+                    if (extendedEngine.State.ClockRunning || extendedEngine.State.ClockMessage != GameClockMessage.Final
+                        || extendedEngine.State.AwayScore != 2
+                        || extendedEngine.State.TickerNews.Count != 2
+                        || mutedSpeaker.VolumePercent != 40 || !mutedSpeaker.SpeakerMuted
+                        || detailedResult.Contains("skipped", StringComparison.Ordinal))
+                        throw new Exception($"FAIL: detailed macro steps did not run ({detailedResult}, clock {extendedEngine.State.ClockRunning}, message {extendedEngine.State.ClockMessage}, away {extendedEngine.State.AwayScore}, headlines {extendedEngine.State.TickerNews.Count}, level {mutedSpeaker.VolumePercent}, muted {mutedSpeaker.SpeakerMuted})");
+                    extendedEngine.ClearMacroOutputHold();
+
+                    // Two speakers switched on are two separate feeds: a bus only carries clips that
+                    // name it, so an unassigned clip must not be picked up by whichever bus is first.
+                    extendedSession.SetSpeakerMuted(mutedSpeaker, false);
+                    var pressBus = extendedSession.AddSpeaker(1, "Press");
+                    var unassignedClip = new MediaEntry(Path.Combine(Path.GetTempPath(), "unassigned-smoke.mp4"), mutedSpeaker.Tag);
+                    if (extendedSession.SpeakerBusFor(unassignedClip) is not null
+                        || extendedSession.SpeakerGain(unassignedClip) != 0)
+                        throw new Exception("FAIL: two live speaker buses picked up an unassigned clip");
+                    var assignedClip = unassignedClip with { AudioDevice = pressBus.AudioDevice ?? "default" };
+                    if (extendedSession.SpeakerGain(assignedClip) <= 0)
+                        throw new Exception("FAIL: a clip assigned to its own speaker was silenced by the other bus");
+                    extendedSession.SetSpeakerMuted(pressBus, true);
+                    if (extendedSession.SpeakerBusFor(unassignedClip) is null)
+                        throw new Exception("FAIL: one live speaker bus stopped carrying an unassigned clip");
+                    // Leave the second bus switched off: the rest of the dock checks assume the
+                    // show has a single live speaker.
+
+                    // A custom value that is a clock can be started and stopped from a macro. Start
+                    // twice must not flip it, and reset returns it to the time it was created with.
+                    var smokeClock = extendedEngine.AddStat("Smoke clock", clock: true, startSeconds: 45);
+                    SavedMacro ClockMacro(params int[] verbs) => new()
+                    {
+                        Label = "Custom clock",
+                        Actions = verbs.Select(verb => new MacroAction
+                        {
+                            Kind = MacroActionKind.CustomClock, Path = smokeClock.Id, Label = smokeClock.Name, Value = verb
+                        }).ToList()
+                    };
+                    bool SmokeClockRunning() => extendedEngine.State.Stats.First(stat => stat.Id == smokeClock.Id).ClockRunning;
+                    RunMacro(new MacroRunner(extendedEngine, extendedSession), ClockMacro(0, 0));
+                    if (!SmokeClockRunning()) throw new Exception("FAIL: a macro did not start a custom value clock, or a second start stopped it");
+                    extendedEngine.ClearMacroOutputHold();
+                    RunMacro(new MacroRunner(extendedEngine, extendedSession), ClockMacro(1));
+                    if (SmokeClockRunning()) throw new Exception("FAIL: a macro did not stop a custom value clock");
+                    extendedEngine.ClearMacroOutputHold();
+                    extendedEngine.AdjustStat(smokeClock.Id, -10);
+                    RunMacro(new MacroRunner(extendedEngine, extendedSession), ClockMacro(3));
+                    var resetSmokeClock = extendedEngine.State.Stats.First(stat => stat.Id == smokeClock.Id);
+                    if (resetSmokeClock.ClockRunning || resetSmokeClock.ClockSeconds != 45)
+                        throw new Exception($"FAIL: resetting a custom value clock left {resetSmokeClock.Display} {(resetSmokeClock.ClockRunning ? "running" : "stopped")}");
+                    extendedEngine.ClearMacroOutputHold();
+
                     // The macro clock field is typed as MM:SS, not as a raw second count.
                     var clockDock = new MacroDock(extendedEngine, extendedSession);
                     var clockKindBox = (ComboBox)clockDock.FindName("KindBox")!;
                     clockKindBox.SelectedItem = clockKindBox.Items.OfType<object>()
-                        .First(item => (item.ToString() ?? "").StartsWith("Game clock", StringComparison.Ordinal));
+                        .First(item => (item.ToString() ?? "").StartsWith("Game Clock", StringComparison.Ordinal));
                     var clockValueBox = (TextBox)clockDock.FindName("ValueBox")!;
                     clockValueBox.Text = "12:34";
                     var readAction = typeof(MacroDock).GetMethod("ReadActionFromFields", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -1064,6 +1227,35 @@ internal static class Program
                     if (clockAction.Value != 754
                         || ((TextBlock)clockDock.FindName("ValueLabel")!).Text != "GAME CLOCK (MM:SS)")
                         throw new Exception($"FAIL: the macro clock read {clockAction.Value} from 12:34");
+
+                    // A clip that names its own speaker keeps it even while a GLOBAL bus is on air:
+                    // the bus used to drag every clip onto its own output. A clip with no speaker
+                    // still follows the bus, so the routing fallback is unchanged.
+                    // With more than one speaker switched on, only explicitly assigned clips route;
+                    // with a single live bus the tag/ANY fallback still applies, so the other buses
+                    // are switched off for this check and restored afterwards.
+                    var otherBuses = extendedSession.Library.Where(entry => entry.IsSpeaker && !entry.SpeakerMuted).ToArray();
+                    foreach (var bus in otherBuses) extendedSession.SetSpeakerMuted(bus, true);
+                    var anyBus = new MediaEntry(MediaLibrary.SpeakerPath(9), Tag: MediaLibrary.AnyTag,
+                        Name: "Smoke ANY bus", AudioDevice: "Smoke bus device");
+                    var ownSpeakerClip = new MediaEntry(@"C:\smoke\anthem.mp4", Tag: "Anthem", AudioDevice: "Smoke clip device");
+                    var busOnlyClip = new MediaEntry(@"C:\smoke\ad.mp4", Tag: "Ads");
+                    extendedSession.Library.Add(anyBus);
+                    try
+                    {
+                        var outputFor = typeof(MediaSession).GetMethod("OutputFor", BindingFlags.Instance | BindingFlags.NonPublic)
+                            ?? throw new Exception("FAIL: OutputFor is missing");
+                        var ownRoute = ((string? Device, double Gain))outputFor.Invoke(extendedSession, [ownSpeakerClip])!;
+                        var busRoute = ((string? Device, double Gain))outputFor.Invoke(extendedSession, [busOnlyClip])!;
+                        if (!string.Equals(ownRoute.Device, "Smoke clip device", StringComparison.OrdinalIgnoreCase) || ownRoute.Gain <= 0
+                            || !string.Equals(busRoute.Device, "Smoke bus device", StringComparison.OrdinalIgnoreCase))
+                            throw new Exception($"FAIL: a clip with its own speaker routed to {ownRoute.Device} (gain {ownRoute.Gain}) and a bus-only clip to {busRoute.Device} while a GLOBAL bus was on air");
+                    }
+                    finally
+                    {
+                        extendedSession.Library.Remove(anyBus);
+                        foreach (var bus in otherBuses) extendedSession.SetSpeakerMuted(bus, false);
+                    }
                 }
                 finally { if (File.Exists(extendedLayoutPath)) File.Delete(extendedLayoutPath); }
             }
@@ -1177,6 +1369,13 @@ internal static class Program
                 ?? throw new Exception("FAIL: the Replay Booth button opened no window");
             if (!FindAll<TextBlock>(booth).Any(text => text.Text == "REPLAY BOOTH"))
                 throw new Exception("FAIL: the Replay Booth window has no heading");
+            // The wall page is the booth's main page, and it carries the shared playback scrubber.
+            var wallScrub = FindAll<Slider>(booth).FirstOrDefault(slider => slider.Name == "WallScrub")
+                ?? throw new Exception("FAIL: the booth's wall page has no replay scrubber");
+            if (!wallScrub.IsVisible || wallScrub.ActualWidth < 80)
+                throw new Exception($"FAIL: the wall scrubber is not laid out ({wallScrub.IsVisible}, {wallScrub.ActualWidth:0} px)");
+            if (!FindAll<TextBlock>(booth).Any(text => text.Text is "LIVE" or "LIVE EDGE" || text.Text.EndsWith("s BACK", StringComparison.Ordinal)))
+                throw new Exception("FAIL: the wall scrubber has no live-edge label");
             var editBooth = FindAll<Button>(booth).First(button =>
                 (button.ToolTip as string ?? "").StartsWith("Edit the booth's labels", StringComparison.Ordinal));
             editBooth.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -1218,6 +1417,17 @@ internal static class Program
                 throw new Exception("FAIL: the unified media dock is missing its tiles or tag editor");
             if (dock.FindName("TransitionBox") is not ComboBox mediaTransitionBox || mediaTransitionBox.Items.Count < 4)
                 throw new Exception("FAIL: the unified media dock is missing its switch-animation picker");
+            if (!mediaTransitionBox.IsEnabled)
+                throw new Exception("FAIL: the media dock's switch-animation picker is disabled, so it cannot be opened");
+            if (dock.FindName("SwitchVideoButton") is not Button switchVideoButton || (switchVideoButton.Content as string) != "Video…")
+                throw new Exception("FAIL: the media dock has no video switch-animation control");
+            // The routing rail must fit its own height: it is deliberately not a scroll box.
+            var railLast = (FrameworkElement)dock.FindName("ReplaySpeedText")!;
+            var railBottom = railLast.TransformToAncestor(dock).Transform(new Point(0, railLast.ActualHeight)).Y;
+            if (railBottom > dock.ActualHeight + 0.5)
+                throw new Exception($"FAIL: the media sidebar runs past the dock ({railBottom:0} of {dock.ActualHeight:0})");
+            if (!FindAll<TextBlock>(shell).Any(label => label.Text == "MASTER SOUND"))
+                throw new Exception("FAIL: the master sound bar has no label");
             if (dock.FindName("ReplayButton") is not Button replayButton || dock.FindName("StartReplayButton") is not Button startReplayButton)
                 throw new Exception("FAIL: the media dock is missing its replay controls");
             if (dock.FindName("TransitionSecondsBox") is not TextBox switchSecondsBox
@@ -1531,6 +1741,66 @@ internal static class Program
                 Console.WriteLine("PASS: the studio keeps a multi-selection and Delete removes every selected object");
             }
 
+            // ---------- a starting template keeps its canvas, and layers group and lock together ----------
+            {
+                var layerPath = Path.Combine(Path.GetTempPath(), $"smoke-layers-{Guid.NewGuid():N}.json");
+                ScorebugEditorWindow? layerEditor = null;
+                try
+                {
+                    var layerCatalog = new ScorebugCatalog(layerPath);
+                    layerCatalog.ResetToDefault(ScorebugPresets.Stadium);
+                    layerEditor = new ScorebugEditorWindow(layerCatalog, engine);
+                    ShowForSmoke(layerEditor);
+                    layerEditor.UpdateLayout();
+                    // Opening the studio used to fire the canvas-size list's first selection and
+                    // quietly resize every template to 1280 × 720, scaling all of its artwork.
+                    if (layerCatalog.Layout.Width != 1920 || layerCatalog.Layout.Height != 1080)
+                        throw new Exception($"FAIL: opening the studio resized the stadium template to {layerCatalog.Layout.Width}×{layerCatalog.Layout.Height}");
+                    var canvasWidth = (TextBox)layerEditor.FindName("CanvasWidthInput")!;
+                    if (canvasWidth.Text != "1920")
+                        throw new Exception($"FAIL: the canvas size field reads {canvasWidth.Text} for a 1920-wide template");
+
+                    var layerRows = (ListBox)layerEditor.FindName("Layers")!;
+                    layerRows.SelectedItems.Add(layerRows.Items[0]);
+                    layerRows.SelectedItems.Add(layerRows.Items[1]);
+                    layerEditor.UpdateLayout();
+                    FindAll<Button>(layerEditor).First(button => (button.Content as string) == "Group")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    layerEditor.UpdateLayout();
+                    var grouped = layerCatalog.Layout.Elements.TakeLast(2).ToArray();
+                    if (string.IsNullOrWhiteSpace(grouped[0].GroupId) || grouped[0].GroupId != grouped[1].GroupId)
+                        throw new Exception("FAIL: the Group button did not group the selected layers");
+
+                    // One row of a group picks the whole group.
+                    layerRows.SelectedItems.Clear();
+                    layerRows.SelectedItems.Add(layerRows.Items[1]);
+                    layerEditor.UpdateLayout();
+                    if (layerRows.SelectedItems.Count != 2)
+                        throw new Exception($"FAIL: picking one grouped layer selected {layerRows.SelectedItems.Count} rows instead of its 2");
+
+                    // Locking the group locks every member, and a locked layer cannot be selected again.
+                    // The toolbar's Lock/Unlock-all buttons are gone; the lock lives on each row.
+                    layerEditor.UpdateLayout();
+                    var lockRow = (FrameworkElement)layerRows.ItemContainerGenerator.ContainerFromIndex(1)!;
+                    FindAll<Button>(lockRow).First(button => (button.Content as string) == "\uE785")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    layerEditor.UpdateLayout();
+                    if (!grouped[0].Locked || !grouped[1].Locked)
+                        throw new Exception($"FAIL: locking a group left it locked {grouped[0].Locked}/{grouped[1].Locked}");
+                    layerRows.SelectedItems.Clear();
+                    layerRows.SelectedItems.Add(layerRows.Items[1]);
+                    layerEditor.UpdateLayout();
+                    if (layerRows.SelectedItems.Count != 0)
+                        throw new Exception("FAIL: a locked layer could still be selected in the layer list");
+                    Console.WriteLine("PASS: a starting template keeps its canvas size, and layers group and lock together");
+                }
+                finally
+                {
+                    layerEditor?.Close();
+                    if (File.Exists(layerPath)) File.Delete(layerPath);
+                }
+            }
+
             // ---------- layout hand-over that slides matching items between their old and new spots ----------
             {
                 var movePath = Path.Combine(Path.GetTempPath(), $"smoke-move-{Guid.NewGuid():N}.json");
@@ -1566,7 +1836,7 @@ internal static class Program
                     moveCatalog.SelectLayout(0);
                     moveView = new ScorebugCanvasView(moveCatalog, engine, stateProvider: () => engine.State,
                         layoutProvider: () => moveCatalog.Layout);
-                    moveWindow = new Window
+                    moveWindow = new TestWindow
                     {
                         Width = 800, Height = 450, Content = moveView, ShowInTaskbar = false,
                         WindowStyle = WindowStyle.None, Left = -32000, Top = -32000
@@ -2118,8 +2388,14 @@ internal static class Program
                 addEditor.UpdateLayout();
                 if (freshCatalog.Layout.Elements.Count != beforeAdd + 2)
                     throw new Exception("FAIL: copy and paste did not add an independent element");
-                var photoButton = FindAll<Button>(addEditor).First(b => (b.Content as string) == "PLAYER PHOTO +");
-                photoButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                // The portrait is no longer a toolbar button of its own: it is one of the PLAYER
+                // DATA + choices, alongside Name, Number and the stats. The picker is modal, so the
+                // test adds the element the way that choice does.
+                if (FindAll<Button>(addEditor).Any(b => (b.Content as string) == "PLAYER PHOTO +"))
+                    throw new Exception("FAIL: the player photo still has a toolbar button of its own");
+                typeof(ScorebugEditorWindow)
+                    .GetMethod("AddPlayerPhoto", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .Invoke(addEditor, null);
                 addEditor.UpdateLayout();
                 var portrait = freshCatalog.Layout.Elements[^1];
                 if (portrait.Kind != ScorebugElementKind.Image || portrait.PlayerPhotoSide != ScorebugPlayerPhotoSide.Home)
@@ -2153,11 +2429,8 @@ internal static class Program
             var view = fitPanel.Panel;
             view.UpdateLayout();
             double Left(FrameworkElement element) => element.TransformToAncestor(view).Transform(new Point(0, 0)).X;
-            Rect Bounds(FrameworkElement element)
-            {
-                var topLeft = element.TransformToAncestor(view).Transform(new Point(0, 0));
-                return new Rect(topLeft, new Size(element.ActualWidth, element.ActualHeight));
-            }
+            Rect Bounds(FrameworkElement element) => element.TransformToAncestor(view)
+                .TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
             Border FootballCardFor(DependencyObject node)
             {
                 var cardStyle = (Style)view.FindResource("Card");
@@ -2289,7 +2562,7 @@ internal static class Program
                 if (card.ActualHeight + 0.5 < card.DesiredSize.Height)
                     throw new Exception($"FAIL: a section is squeezed ({card.ActualHeight:0} of {card.DesiredSize.Height:0} needed)");
             var updateButton = (Button)view.FindName("UpdateButton")!;
-            var updateBottom = updateButton.TransformToAncestor(view).Transform(new Point(0, updateButton.ActualHeight)).Y;
+            var updateBottom = Bounds(updateButton).Bottom;
             if (updateBottom > view.ActualHeight + 0.5)
                 throw new Exception($"FAIL: Update Output is off the page ({updateBottom:0} of {view.ActualHeight:0})");
             var scrollers = FindAll<ScrollViewer>(view).Where(s => s.IsVisible && s.ScrollableHeight > 0).ToArray();
@@ -2325,19 +2598,42 @@ internal static class Program
                 throw new Exception("FAIL: timeout clock is missing");
             if (view.FindName("ShotClockValue") is not TextBox)
                 throw new Exception("FAIL: the shot clock is not an editable text box");
-            // A long stat list must not push the page: it scrolls inside its own card.
+            // A long stat list must not push the page: it pages inside its own card.
             engine.AddStat("Red zone trips");
             engine.AddStat("Explosive plays");
+            for (var extra = 0; extra < 6; extra++) engine.AddStat($"Page test {extra}");
             view.UpdateLayout();
             var statsScroller = (ScrollViewer)view.FindName("StatsScroller")!;
-            var afterStats = updateButton.TransformToAncestor(view).Transform(new Point(0, updateButton.ActualHeight)).Y;
+            var afterStats = Bounds(updateButton).Bottom;
             if (afterStats > view.ActualHeight + 0.5)
                 throw new Exception($"FAIL: extra stats pushed Update Output off the page ({afterStats:0} of {view.ActualHeight:0})");
-            if (statsScroller.ScrollableHeight <= 0)
-                throw new Exception("FAIL: extra stats did not stay inside their card");
+            if (statsScroller.ScrollableHeight > 0.5)
+                throw new Exception($"FAIL: custom values still scroll ({statsScroller.ScrollableHeight:0.#}px)");
+            var pageLabel = (TextBlock)view.FindName("StatsPageLabel")!;
+            var nextPage = (Button)view.FindName("StatsNextButton")!;
+            if (pageLabel.Text != "1 / 3" || !nextPage.IsEnabled)
+                throw new Exception($"FAIL: custom values did not page ({pageLabel.Text})");
+            // A full page is six values in three rows; none may be clipped by the card background.
+            var consoleStatsHost = (Panel)view.FindName("StatsHost")!;
+            var statsViewportBottom = Bounds(statsScroller).Bottom;
+            foreach (FrameworkElement statRow in consoleStatsHost.Children)
+                if (Bounds(statRow).Bottom > statsViewportBottom + 0.5)
+                    throw new Exception($"FAIL: a custom value is clipped into the card background " +
+                        $"({Bounds(statRow).Bottom:0.#} below {statsViewportBottom:0.#})");
+            nextPage.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            view.UpdateLayout();
+            if (pageLabel.Text != "2 / 3")
+                throw new Exception($"FAIL: the next page did not open ({pageLabel.Text})");
+            var firstStat = engine.State.Stats.First();
+            engine.SetStatPinned(firstStat.Id, true);
+            ((Button)view.FindName("StatsPrevButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            view.UpdateLayout();
+            var pinnedRow = (Grid)consoleStatsHost.Children[0];
+            if ((string?)pinnedRow.ToolTip != firstStat.Name)
+                throw new Exception("FAIL: a pinned custom value did not move to the first page");
             fitPanel.Close();
             Console.WriteLine($"PASS: football console fits {view.ActualWidth:0}x{view.ActualHeight:0} with no scrolling, visitors left of home");
-            Console.WriteLine("PASS: a long stat list scrolls inside its card without moving the page");
+            Console.WriteLine("PASS: a long custom-value list pages inside its card without moving the page");
 
             // The ball spot names the half of the field it sits on, and the console flips it.
             var ballEngine = new GameEngine();
@@ -2491,17 +2787,61 @@ internal static class Program
             };
             var arrowView = new ScorebugIconView(arrowItem, () => arrowEngine.State);
             var arrowMark = FindAll<System.Windows.Shapes.Polygon>(arrowView).Single();
-            if (arrowMark.Opacity < 0.999 || arrowMark.RenderTransform is TranslateTransform)
+            // The mark carries a rotate and a slide in one group, so the tumble and the possession
+            // turn never fight over the same transform slot.
+            static TranslateTransform? SlideOf(System.Windows.Shapes.Polygon mark) =>
+                mark.RenderTransform is TransformGroup group
+                    ? group.Children.OfType<TranslateTransform>().FirstOrDefault()
+                    : mark.RenderTransform as TranslateTransform;
+            if (arrowMark.Opacity < 0.999 || SlideOf(arrowMark)?.HasAnimatedProperties == true)
                 throw new Exception("FAIL: the possession arrow plays an entrance on its first paint");
             arrowEngine.SetPossession(false);
             arrowView.Update();
-            if (arrowMark.RenderTransform is not TranslateTransform)
+            if (SlideOf(arrowMark) is not { HasAnimatedProperties: true })
                 throw new Exception("FAIL: the possession arrow stopped animating when possession actually changed");
-            arrowItem.IconArrowDown = true;
+            // The mark moves to the other plate but keeps the direction it was drawn in: switching
+            // possession must never turn the arrow around.
+            if (arrowMark.HorizontalAlignment != HorizontalAlignment.Right)
+                throw new Exception($"FAIL: the possession arrow did not move to the away plate ({arrowMark.HorizontalAlignment})");
+            var awayPoints = arrowMark.Points.Select(point => (point.X, point.Y)).ToArray();
+            arrowEngine.SetPossession(true);
             arrowView.Update();
-            if (arrowMark.VerticalAlignment != VerticalAlignment.Bottom || arrowMark.Visibility != Visibility.Visible)
-                throw new Exception($"FAIL: the downward possession arrow is {arrowMark.VerticalAlignment}/{arrowMark.Visibility} instead of a visible bottom mark");
+            if (!arrowMark.Points.Select(point => (point.X, point.Y)).SequenceEqual(awayPoints))
+                throw new Exception("FAIL: switching possession flipped the possession arrow");
+            if (arrowMark.HorizontalAlignment != HorizontalAlignment.Left)
+                throw new Exception("FAIL: the possession arrow did not move back to the home plate");
+            // The turned arrow must still paint. It used to swing out of its plate and vanish,
+            // because the whole icon box turned instead of the mark on its own centre.
+            // A fresh mark, so no possession animation is mid-flight while the pixels are counted.
+            arrowEngine.SetPossession(true);
+            var paintItem = new ScorebugElement
+            {
+                Name = "Arrow paint", Kind = ScorebugElementKind.Text, Content = "",
+                Icon = ScorebugIcon.PossessionArrow, Width = 80, Height = 40, FontSize = 24,
+                IconColor = "#FFFFFFFF"
+            };
+            var paintView = new ScorebugIconView(paintItem, () => arrowEngine.State);
+            paintView.Update();
+            var paintedStraight = PaintedArrowPixels(paintView);
+            paintItem.IconRotation = 90;
+            paintView.Update();
+            var paintMark = FindAll<System.Windows.Shapes.Polygon>(paintView).Single();
+            var turnedMark = paintMark.RenderTransform is TransformGroup turnGroup
+                ? turnGroup.Children.OfType<RotateTransform>().FirstOrDefault()
+                : null;
+            if (turnedMark is null || Math.Abs(turnedMark.Angle - 90) > 0.01)
+                throw new Exception("FAIL: the icon rotation property does not turn the possession arrow");
+            if (paintMark.RenderTransformOrigin.X < 0.49 || paintMark.RenderTransformOrigin.Y < 0.49)
+                throw new Exception("FAIL: the turned arrow does not pivot on its own centre");
+            var paintedTurned = PaintedArrowPixels(paintView);
+            if (paintedStraight < 20 || paintedTurned < paintedStraight * 0.5)
+                throw new Exception($"FAIL: turning the possession arrow lost it ({paintedStraight} → {paintedTurned} painted pixels)");
+            paintItem.IconRotation = 0;
+            paintView.Update();
+            if (turnedMark.Angle > 0.01)
+                throw new Exception("FAIL: a zero icon rotation still turns the possession arrow");
             Console.WriteLine("PASS: timeout bars and the possession dot follow live data, and the dot can be flipped");
+            Console.WriteLine("PASS: the possession arrow turns on its own centre and keeps painting");
             Console.WriteLine("PASS: the possession arrow paints its first frame still and only animates a real possession change");
 
             // The same icons render on a real scorebug canvas, and the studio offers the property.
@@ -2986,9 +3326,9 @@ internal static class Program
                         throw new Exception("FAIL: editing a selected camera put it on air");
                 }
                 finally { selectionSession.Stop(); selectionSession.Dispose(); }
-                var micRouteButton = (Button)dock.FindName("MicrophoneRouteButton")!;
-                if ((micRouteButton.Content as string) != "Route…")
-                    throw new Exception($"FAIL: the microphone route button reads '{micRouteButton.Content}'");
+                var routeButton = (Button)dock.FindName("RouteSelectedButton")!;
+                if ((routeButton.Content as string) != "Route…")
+                    throw new Exception($"FAIL: the source route button reads '{routeButton.Content}'");
                 // The playlist view's way back is a labelled button, not a lone clipped arrow.
                 var playlistBack = (Button)dock.FindName("BackToLibraryButton")!;
                 if ((playlistBack.Content as string) != "← Back")
@@ -3166,7 +3506,7 @@ internal static class Program
                 // where the operator left it.
                 var seekDock = new MediaDock();
                 seekDock.Attach(seekSession);
-                var seekHost = new Window { Width = 420, Height = 320, Content = seekDock };
+                var seekHost = new TestWindow { Width = 420, Height = 320, Content = seekDock };
                 ShowForSmoke(seekHost);
                 seekHost.UpdateLayout();
                 var bar = (Slider)seekDock.FindName("ScrubBar")!;
@@ -3208,7 +3548,7 @@ internal static class Program
                 speakerSession.Select(speakerSession.Library[0]);
                 var speakerDock = new MediaDock();
                 speakerDock.Attach(speakerSession);
-                var speakerHost = new Window { Width = 420, Height = 780, Content = speakerDock };
+                var speakerHost = new TestWindow { Width = 420, Height = 780, Content = speakerDock };
                 ShowForSmoke(speakerHost);
                 speakerHost.UpdateLayout();
                 var speakerBox = (ComboBox)speakerDock.FindName("AudioDeviceBox")!;
@@ -3310,6 +3650,40 @@ internal static class Program
                 throw new Exception("FAIL: the audience annotation toolbar did not open");
             if (!annotateOutput.Title.StartsWith("Operator Draw Window", StringComparison.Ordinal))
                 throw new Exception($"FAIL: the draw window is titled {annotateOutput.Title}");
+            var arrowTool = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Arrow")
+                ?? throw new Exception("FAIL: the drawing tools have no arrow tool");
+            var lineTool = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Line")
+                ?? throw new Exception("FAIL: the drawing tools have no line tool");
+            var penTool = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Pen")
+                ?? throw new Exception("FAIL: the drawing tools have no pen tool");
+            if (arrowTool.ActualHeight < 32 || arrowTool.FontSize < 13)
+                throw new Exception($"FAIL: drawing tools are too small ({arrowTool.ActualHeight:0}px, {arrowTool.FontSize:0}pt)");
+            bool ToolSelected(Button button) => button.BorderBrush is SolidColorBrush brush
+                && brush.Color == Color.FromRgb(56, 215, 163);
+            arrowTool.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            annotateOutput.UpdateLayout();
+            if (!ToolSelected(arrowTool) || ToolSelected(lineTool))
+                throw new Exception("FAIL: the arrow tool does not show that it is selected");
+            if (FindAll<TextBlock>(annotateOutput).Any(text => text.Text.StartsWith("PEN ·", StringComparison.Ordinal)))
+                throw new Exception("FAIL: the drawing toolbar still prints its status beside Done");
+            penTool.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            annotateOutput.UpdateLayout();
+            if (!ToolSelected(penTool) || ToolSelected(arrowTool))
+                throw new Exception("FAIL: selecting the pen does not clear the arrow selection");
+            // The arrow must survive a completed stroke, ready for the next one.
+            arrowTool.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            typeof(OutputWindow).GetField("_drawingStroke", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(annotateOutput, true);
+            typeof(OutputWindow).GetMethod("FinishLiveStroke", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(annotateOutput, null);
+            if (typeof(OutputWindow).GetField("_annotationMode", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(annotateOutput)?.ToString() != "Arrow")
+                throw new Exception("FAIL: drawing one arrow reset the tool back to the pen");
+            penTool.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            DependencyObject toolbarOwner = arrowTool;
+            while (toolbarOwner is not null and not Border) toolbarOwner = VisualTreeHelper.GetParent(toolbarOwner);
+            if (toolbarOwner is not Border annotationBar || annotationBar.VerticalAlignment != VerticalAlignment.Bottom)
+                throw new Exception("FAIL: the drawing tools are not at the bottom of the audience window");
             var widthBox = FindAll<TextBox>(annotateOutput).FirstOrDefault(box =>
                 (box.ToolTip as string ?? "").StartsWith("Pen width", StringComparison.Ordinal))
                 ?? throw new Exception("FAIL: the annotation toolbar has no typeable pen-width box");
@@ -3337,6 +3711,14 @@ internal static class Program
             Pump(TimeSpan.FromMilliseconds(1200));
             if (ink.Strokes.Count != 1)
                 throw new Exception("FAIL: permanent ink was cleared by the fade timer");
+            var clearInk = FindAll<Button>(annotateOutput).FirstOrDefault(button => (button.Content as string) == "Clear")
+                ?? throw new Exception("FAIL: the drawing toolbar has no Clear button");
+            clearInk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            if (ink.Strokes.Count != 1)
+                throw new Exception("FAIL: Clear removed the ink immediately instead of fading it out");
+            Pump(TimeSpan.FromMilliseconds(300));
+            if (ink.Strokes.Count != 0)
+                throw new Exception("FAIL: Clear did not remove the ink after its fade");
             fadePicker.SelectedItem = "0.5 s";
             Pump(TimeSpan.FromMilliseconds(900));
             if (ink.Strokes.Count != 0)
@@ -3567,7 +3949,7 @@ internal static class Program
                 var nodeWindow = new AutomationWindow(ruleCatalog, ruleEngine, "Dark", ruleDisplay.Id, runtime);
                 ShowForSmoke(nodeWindow);
                 nodeWindow.UpdateLayout();
-                if (nodeWindow.Title != "Conditionals" || !FindAll<TextBlock>(nodeWindow).Any(text => text.Text == "CONDITIONALS"))
+                if (nodeWindow.Title != "Layout Conditionals" || !FindAll<TextBlock>(nodeWindow).Any(text => text.Text == "CONDITIONALS"))
                     throw new Exception($"FAIL: the node editor is still titled {nodeWindow.Title}");
                 if (nodeWindow.Rules.Count != 2 || !FindAll<TextBlock>(nodeWindow).Any(text => text.Text == "TRIGGER")
                     || !FindAll<TextBlock>(nodeWindow).Any(text => text.Text == "CONDITION 1")
@@ -3592,6 +3974,30 @@ internal static class Program
                 if (nodeWindow.Rules.Count != 3)
                     throw new Exception("FAIL: the node editor did not add a rule");
                 nodeWindow.Close();
+                // The three conditionals pages are separate lists. A rule added on the media page
+                // must not appear on the layout's page or the macro page, and each page starts with
+                // the action it is about.
+                var mediaWindow = new AutomationWindow(ruleCatalog, ruleEngine, "Dark", ruleDisplay.Id, runtime, scope: AutomationScope.Media);
+                ShowForSmoke(mediaWindow);
+                mediaWindow.UpdateLayout();
+                if (mediaWindow.Title != "Media Conditionals" || mediaWindow.Rules.Count != 0)
+                    throw new Exception($"FAIL: the media page is not separate ({mediaWindow.Title}, {mediaWindow.Rules.Count} rules)");
+                mediaWindow.AddRule();
+                if (!mediaWindow.Rules[0].Actions.Any(action => action.Kind == AutomationActionKind.MediaOnAir))
+                    throw new Exception("FAIL: a media rule did not start with a media action");
+                var macroWindow = new AutomationWindow(ruleCatalog, ruleEngine, "Dark", ruleDisplay.Id, runtime, scope: AutomationScope.Macro);
+                ShowForSmoke(macroWindow);
+                macroWindow.UpdateLayout();
+                if (macroWindow.Title != "Macro Conditionals" || macroWindow.Rules.Count != 0)
+                    throw new Exception("FAIL: the media page's rule leaked into the macro page");
+                var layoutWindow = new AutomationWindow(ruleCatalog, ruleEngine, "Dark", ruleDisplay.Id, runtime);
+                ShowForSmoke(layoutWindow);
+                layoutWindow.UpdateLayout();
+                if (layoutWindow.Rules.Count != 3)
+                    throw new Exception("FAIL: a media rule leaked into the layout page");
+                layoutWindow.Close();
+                macroWindow.Close();
+                mediaWindow.Close();
             }
             Console.WriteLine("PASS: annotation toolbar opens; conditionals recolor the live layout, switch layouts, and draw in the conditionals editor");
 
@@ -3695,7 +4101,7 @@ internal static class Program
             AutosaveStore.Save(demoAutosave, startNewPoint: true);
 
             // Studio dialogs are plain Windows: the theme has to reach them too.
-            var dialogProbe = new Window { Width = 300, Height = 200 };
+            var dialogProbe = new TestWindow { Width = 300, Height = 200 };
             var probeList = new ListBox();
             dialogProbe.Content = probeList;
             ThemeManager.Apply(dialogProbe, "Dark");
@@ -3784,7 +4190,7 @@ internal static class Program
             }
             Console.WriteLine("PASS: reopening a saved game restores its text, score and team logo");
 
-            // Closing a changed game opens the app's own prompt; Keep editing leaves it open.
+            // Closing a changed game opens the app's own prompt; Keep Editing leaves it open.
             MainWindow.PromptOnExit = true;
             var dirty = new MainWindow(LaunchMode.New);
             ShowForSmoke(dirty);
@@ -3796,8 +4202,8 @@ internal static class Program
                 var prompt = Application.Current.Windows.OfType<UnsavedChangesWindow>().FirstOrDefault();
                 if (prompt is null) return;
                 promptTimer.Stop();
-                var keep = FindAll<Button>(prompt).FirstOrDefault(b => (b.Content as string) == "Keep editing")
-                    ?? throw new Exception("FAIL: the exit prompt has no Keep editing action");
+                var keep = FindAll<Button>(prompt).FirstOrDefault(b => (b.Content as string) == "Keep Editing")
+                    ?? throw new Exception("FAIL: the exit prompt has no Keep Editing action");
                 keep.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             };
             promptTimer.Start();
@@ -3911,7 +4317,7 @@ internal static class Program
                 Console.WriteLine("PASS: End Game applies a tie after the clock has already marked the game final");
             }
 
-            // Choosing Exit without saving must actually close, and must do so after OnClosing
+            // Choosing Exit Without Saving must actually close, and must do so after OnClosing
             // has finished (calling Close from inside it is what raised the WPF error).
             MainWindow.PromptOnExit = true;
             var discarding = new MainWindow(LaunchMode.New);
@@ -3924,7 +4330,7 @@ internal static class Program
                 var prompt = Application.Current.Windows.OfType<UnsavedChangesWindow>().FirstOrDefault();
                 if (prompt is null) return;
                 discardTimer.Stop();
-                var discard = FindAll<Button>(prompt).FirstOrDefault(b => (b.Content as string) == "Exit without saving")
+                var discard = FindAll<Button>(prompt).FirstOrDefault(b => (b.Content as string) == "Exit Without Saving")
                     ?? throw new Exception("FAIL: the exit prompt has no discard action");
                 discard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             };
@@ -3932,9 +4338,9 @@ internal static class Program
             discarding.Close();
             Pump(TimeSpan.FromMilliseconds(250));
             if (discarding.IsVisible)
-                throw new Exception("FAIL: Exit without saving left the game window open");
+                throw new Exception("FAIL: Exit Without Saving left the game window open");
             MainWindow.PromptOnExit = false;
-            Console.WriteLine("PASS: closing a changed game asks first, Keep editing returns, and Exit without saving closes cleanly");
+            Console.WriteLine("PASS: closing a changed game asks first, Keep Editing returns, and Exit Without Saving closes cleanly");
 
             // The studio's working surface keeps the navy artwork backdrop in both themes: it is
             // the same surface the audience graphic is designed on, not an operator panel.
@@ -3963,6 +4369,9 @@ internal static class Program
             {
                 var contextCatalog = new ScorebugCatalog(contextPath);
                 var contextEditor = new ScorebugEditorWindow(contextCatalog, engine);
+                // ShowForSmoke keeps probes off-screen and normal-sized so they cannot disturb a
+                // full-screen operator app. Remember the state the studio asked for before that.
+                var studioOpenedFullWindow = contextEditor.WindowState == WindowState.Maximized;
                 ShowForSmoke(contextEditor);
                 contextEditor.UpdateLayout();
                 // The studio must never open past the desktop: a window that runs past the edge hides
@@ -3973,7 +4382,7 @@ internal static class Program
                 if (contextEditor.ActualWidth > SystemParameters.WorkArea.Width + 40 ||
                     contextEditor.ActualHeight > SystemParameters.WorkArea.Height + 40)
                     throw new Exception($"FAIL: the studio opened {contextEditor.ActualWidth:0}x{contextEditor.ActualHeight:0} on a {SystemParameters.WorkArea.Width:0}x{SystemParameters.WorkArea.Height:0} desktop");
-                if (contextEditor.WindowState != WindowState.Maximized)
+                if (!studioOpenedFullWindow)
                     throw new Exception($"FAIL: the studio opened {contextEditor.WindowState} instead of full windowed");
                 var contextLayers = (ListBox)contextEditor.FindName("Layers")!;
                 var textIndex = contextCatalog.Layout.Elements.FindIndex(e => e.Kind == ScorebugElementKind.Text);
@@ -4103,7 +4512,7 @@ internal static class Program
                 };
                 var transitionBlock = new ScorebugTextBlock(transitionItem);
                 transitionBlock.UpdateText("0", ScorebugTransition.Cut);
-                var transitionHost = new Window
+                var transitionHost = new TestWindow
                 {
                     Width = 220, Height = 140, Content = transitionBlock,
                     ShowInTaskbar = false, WindowStyle = WindowStyle.None, Left = -32000, Top = -32000
@@ -4663,7 +5072,7 @@ internal static class Program
                 {
                     var duration = transition == ScorebugTransition.JumpFlip ? 0.8 : 0.2;
                     var block = new ScorebugTextBlock(new ScorebugElement { Transition = transition, FontSize = 40 });
-                    var transitionHost = new Window { Width = 360, Height = 160, Content = block };
+                    var transitionHost = new TestWindow { Width = 360, Height = 160, Content = block };
                     ShowForSmoke(transitionHost);
                     transitionHost.UpdateLayout();
                     block.UpdateText("10", ScorebugTransition.Cut);
@@ -4698,7 +5107,7 @@ internal static class Program
                 // ShrinkWheel must roll through every integer, not jump from 31 to 37.
                 {
                     var wheelBlock = new ScorebugTextBlock(new ScorebugElement { Transition = ScorebugTransition.ShrinkWheel, TransitionSeconds = 1.1, FontSize = 40 });
-                    var wheelHost = new Window { Width = 360, Height = 160, Content = wheelBlock };
+                    var wheelHost = new TestWindow { Width = 360, Height = 160, Content = wheelBlock };
                     ShowForSmoke(wheelHost);
                     wheelHost.UpdateLayout();
                     wheelBlock.UpdateText("31", ScorebugTransition.Cut);
@@ -4727,7 +5136,7 @@ internal static class Program
                 // was finishing at the default 0.2-second speed, which is what made it unreadable.
                 {
                     var slowJump = new ScorebugTextBlock(new ScorebugElement { Transition = ScorebugTransition.JumpFlip, TransitionSeconds = 2, FontSize = 40 });
-                    var slowJumpHost = new Window { Width = 360, Height = 160, Content = slowJump };
+                    var slowJumpHost = new TestWindow { Width = 360, Height = 160, Content = slowJump };
                     ShowForSmoke(slowJumpHost);
                     slowJumpHost.UpdateLayout();
                     slowJump.UpdateText("10", ScorebugTransition.Cut);
@@ -4740,7 +5149,7 @@ internal static class Program
                         throw new Exception($"FAIL: a 2-second JumpFlip did not land on 17 ('{slowJump.Text}')");
                     slowJumpHost.Close();
                     var slowWheel = new ScorebugTextBlock(new ScorebugElement { Transition = ScorebugTransition.ShrinkWheel, TransitionSeconds = 2, FontSize = 40 });
-                    var slowWheelHost = new Window { Width = 360, Height = 160, Content = slowWheel };
+                    var slowWheelHost = new TestWindow { Width = 360, Height = 160, Content = slowWheel };
                     ShowForSmoke(slowWheelHost);
                     slowWheelHost.UpdateLayout();
                     slowWheel.UpdateText("31", ScorebugTransition.Cut);
@@ -4781,7 +5190,7 @@ internal static class Program
                 scoreEventCatalog.ApplyScoreAnimationToLayout(false, fieldGoal);
                 var eventView = new ScorebugCanvasView(scoreEventCatalog, scoreEventEngine,
                     stateProvider: () => scoreEventEngine.State, layoutProvider: () => scoreEventCatalog.Layout);
-                var eventWindow = new Window
+                var eventWindow = new TestWindow
                 {
                     Width = 960, Height = 540, Content = eventView, WindowStyle = WindowStyle.None,
                     ShowInTaskbar = false, Left = -20000, Top = -20000
@@ -4853,7 +5262,7 @@ internal static class Program
                 colourCatalog.ApplyScoreAnimationToLayout(true, colourClip);
                 var colourView = new ScorebugCanvasView(colourCatalog, colourEngine,
                     stateProvider: () => colourEngine.State, layoutProvider: () => colourCatalog.Layout);
-                var colourWindow = new Window
+                var colourWindow = new TestWindow
                 {
                     Width = 960, Height = 540, Content = colourView, WindowStyle = WindowStyle.None,
                     ShowInTaskbar = false, Left = -20000, Top = -20000
@@ -4939,7 +5348,7 @@ internal static class Program
                 if (instant.Text != "B")
                     throw new Exception("FAIL: a 0-second transition did not snap to the new value");
                 var slow = new ScorebugTextBlock(new ScorebugElement { FontSize = 40, TransitionSeconds = 3 });
-                var slowHost = new Window { Width = 320, Height = 140, Content = slow };
+                var slowHost = new TestWindow { Width = 320, Height = 140, Content = slow };
                 ShowForSmoke(slowHost);
                 slowHost.UpdateLayout();
                 slow.UpdateText("A", ScorebugTransition.Cut);
@@ -4975,7 +5384,7 @@ internal static class Program
 
                 var folderDock = new MediaDock();
                 folderDock.Attach(playlistSession);
-                var folderWindow = new Window { Width = 470, Height = 680, Content = folderDock };
+                var folderWindow = new TestWindow { Width = 470, Height = 680, Content = folderDock };
                 ShowForSmoke(folderWindow);
                 folderWindow.UpdateLayout();
                 // Folders and playlists are browser items now, like a file explorer: no rails, no dropdowns.
@@ -5602,9 +6011,11 @@ internal static class Program
                 cold.UpdateLayout();
                 if (!coldRoot.IsEnabled)
                     throw new Exception("FAIL: choosing New Game left the workspace locked");
+                // The log now records the media reset that a new game performs too, so the check is
+                // that the game itself starts blank and its own New game event is present.
                 if (cold.Engine.State.HomeScore != 0 || cold.Engine.State.AwayScore != 0
-                    || cold.Engine.State.Period != 1 || cold.Engine.State.Events.Count != 1
-                    || !cold.Engine.State.Events[0].Description.Contains("New", StringComparison.Ordinal))
+                    || cold.Engine.State.Period != 1
+                    || !cold.Engine.State.Events.Any(e => e.Type == "Game" && e.Description.Contains("New", StringComparison.Ordinal)))
                     throw new Exception($"FAIL: a fresh game from the launcher is not a blank slate ({cold.Engine.State.HomeScore}-{cold.Engine.State.AwayScore}, period {cold.Engine.State.Period}, {cold.Engine.State.Events.Count} events)");
                 cold.Close();
                 Console.WriteLine("PASS: the main window opens locked behind the launch box, keeps its tab outline, and starts blank");
@@ -5656,6 +6067,12 @@ internal static class Program
                     throw new Exception("FAIL: the audience monitor did not follow the layout after Update Output");
                 if (monitor.Layout is null || monitor.Layout.Id != monitorMain.Scorebug.PublishedLayoutOf(monitor.DisplayId).Id)
                     throw new Exception("FAIL: the audience monitor is not drawing the published layout");
+                // The small line under the picture names the layout the display is on air with.
+                var audienceName = monitorMain.Scorebug.PublishedLayoutOf(monitor.DisplayId).Name;
+                var layoutLabel = FindAll<TextBlock>((DependencyObject)monitor)
+                    .FirstOrDefault(text => text.Text.StartsWith("LAYOUT ·", StringComparison.Ordinal));
+                if (layoutLabel is null || !layoutLabel.Text.Contains(audienceName, StringComparison.Ordinal))
+                    throw new Exception($"FAIL: the audience monitor's layout line read '{layoutLabel?.Text ?? "nothing"}' instead of '{audienceName}'");
                 monitorMain.Close();
                 Console.WriteLine("PASS: the audience monitor mirrors the published display and only changes on Update Output");
             }
@@ -6066,7 +6483,7 @@ internal static class Program
                     var diamondEngine = new GameEngine();
                     diamondEngine.NewGame("baseball");
                     var diamondView = new ScorebugIconView(diamondItem, () => diamondEngine.State);
-                    var diamondHost = new Window { Content = diamondView, Width = 300, Height = 240, ShowInTaskbar = false, WindowStyle = WindowStyle.None };
+                    var diamondHost = new TestWindow { Content = diamondView, Width = 300, Height = 240, ShowInTaskbar = false, WindowStyle = WindowStyle.None };
                     ShowForSmoke(diamondHost);
                     Pump(TimeSpan.FromMilliseconds(250));
                     diamondEngine.SetSportValue("baseball.first", 1);
@@ -6284,22 +6701,38 @@ internal static class Program
     /// offscreen and unactivated still gives WPF a real presentation source for layout, rendering
     /// and routed events, but the smoke run no longer interrupts whatever the operator is doing.
     /// </summary>
+    /// <summary>
+    /// Counts how many pixels an icon actually paints at 80×40, so a mark that turns and vanishes
+    /// is caught by a measurement instead of by eye.
+    /// </summary>
+    static int PaintedArrowPixels(FrameworkElement view)
+    {
+        view.Measure(new Size(80, 40));
+        view.Arrange(new Rect(0, 0, 80, 40));
+        view.UpdateLayout();
+        var bitmap = new RenderTargetBitmap(80, 40, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(view);
+        var pixels = new byte[80 * 40 * 4];
+        bitmap.CopyPixels(pixels, 80 * 4, 0);
+        var lit = 0;
+        for (var index = 3; index < pixels.Length; index += 4)
+            if (pixels[index] > 40) lit++;
+        return lit;
+    }
+
     static void ShowForSmoke(Window window)
     {
-        // WPF refuses to show an unactivated maximized window. Normalize it for the initial show
-        // and restore the state afterwards, so tests that assert full-screen sizing still work.
-        var maximized = window.WindowState == WindowState.Maximized;
-        if (maximized) window.WindowState = WindowState.Normal;
+        // Keep every probe a normal off-screen window. Restoring a maximized state put an
+        // invisible full-screen window on the operator's monitor, which knocked full-screen
+        // applications out of exclusive mode even though the probe had Opacity 0.
+        window.WindowState = WindowState.Normal;
         window.ShowActivated = false;
         window.ShowInTaskbar = false;
         window.WindowStartupLocation = WindowStartupLocation.Manual;
         window.Left = -32000;
         window.Top = -32000;
-        // Fully transparent so a maximized probe cannot cover the desktop; it is still a visible
-        // window to WPF, so layout, rendering and focus-independent routed events work normally.
         window.Opacity = 0;
         window.Show();
-        if (maximized) window.WindowState = WindowState.Maximized;
     }
 
     static void Pump(TimeSpan duration)
@@ -6309,5 +6742,24 @@ internal static class Program
         timer.Tick += (_, _) => { timer.Stop(); frame.Continue = false; };
         timer.Start();
         System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+}
+
+/// <summary>
+/// A probe window for the smoke suite. WPF still lays it out and renders its content into
+/// RenderTargetBitmap, but it is transparent and parked off the desktop, so running the suite
+/// never flashes a black window over the operator's work or steals focus from a full-screen app.
+/// </summary>
+sealed class TestWindow : Window
+{
+    public TestWindow()
+    {
+        ShowActivated = false;
+        ShowInTaskbar = false;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = -32000;
+        Top = -32000;
+        Opacity = 0;
+        Topmost = false;
     }
 }

@@ -34,6 +34,12 @@ public sealed class AutomationWindow : Window
     readonly string _displayId;
     readonly string _layoutId;
     readonly AutomationRuntime? _runtime;
+    readonly AutomationScope _scope = AutomationScope.Layout;
+
+    /// <summary>True when a rule belongs on this page: same scope, and for a layout the same layout.</summary>
+    bool Belongs(AutomationRule rule) => rule.Scope == _scope
+        && (_scope != AutomationScope.Layout
+            || string.Equals(rule.LayoutId, _layoutId, StringComparison.OrdinalIgnoreCase));
     readonly List<AutomationRule> _rules = [];
     readonly ListBox _ruleList = new();
     readonly Canvas _graph = new();
@@ -47,8 +53,10 @@ public sealed class AutomationWindow : Window
     FrameworkElement? _detachedView;
 
     public AutomationWindow(ScorebugCatalog catalog, GameEngine engine, string theme, string? displayId,
-        AutomationRuntime? runtime, GameEngine? liveEngine = null, bool embedded = false, string? layoutId = null)
+        AutomationRuntime? runtime, GameEngine? liveEngine = null, bool embedded = false, string? layoutId = null,
+        AutomationScope scope = AutomationScope.Layout)
     {
+        _scope = scope;
         _embedded = embedded;
         _catalog = catalog;
         _engine = engine;
@@ -64,16 +72,25 @@ public sealed class AutomationWindow : Window
         // Legacy rules had no layout scope. Adopt them into the layout whose editor is opened first,
         // then every layout keeps its own separate list from here on.
         var all = display.Automations;
-        if (all.Any(rule => string.IsNullOrWhiteSpace(rule.LayoutId)) && _layoutId.Length > 0)
+        if (_scope == AutomationScope.Layout && all.Any(rule => rule.Scope == AutomationScope.Layout
+                && string.IsNullOrWhiteSpace(rule.LayoutId)) && _layoutId.Length > 0)
         {
-            foreach (var rule in all.Where(rule => string.IsNullOrWhiteSpace(rule.LayoutId))) rule.LayoutId = _layoutId;
+            foreach (var rule in all.Where(rule => rule.Scope == AutomationScope.Layout
+                         && string.IsNullOrWhiteSpace(rule.LayoutId)))
+                rule.LayoutId = _layoutId;
             catalog.UpdateAutomations(_displayId, all);
         }
-        _rules.AddRange(all.Where(rule => string.Equals(rule.LayoutId, _layoutId, StringComparison.OrdinalIgnoreCase))
-            .Select(rule => rule.Copy()));
+        // Each page owns its own slice: a media rule is never listed on a layout's page, and a
+        // layout's rules never appear beside the macro rules.
+        _rules.AddRange(all.Where(Belongs).Select(rule => rule.Copy()));
         _selected = _rules.FirstOrDefault();
 
-        Title = "Conditionals";
+        Title = scope switch
+        {
+            AutomationScope.Media => "Media Conditionals",
+            AutomationScope.Macro => "Macro Conditionals",
+            _ => "Layout Conditionals"
+        };
         Width = 1280;
         Height = 780;
         MinWidth = 900;
@@ -273,24 +290,41 @@ public sealed class AutomationWindow : Window
 
     AutomationRule CreateRule(bool withExample)
     {
-        var rule = new AutomationRule { Name = $"Rule {_rules.Count + 1}" };
+        var rule = new AutomationRule { Name = $"Rule {_rules.Count + 1}", Scope = _scope };
         if (withExample)
         {
-            var layout = _catalog.FindDisplay(_displayId)?.Layouts.FirstOrDefault(candidate => string.Equals(candidate.Id, _layoutId, StringComparison.OrdinalIgnoreCase));
-            var target = layout?.Elements.FirstOrDefault(element => element.Kind == ScorebugElementKind.Text) ?? layout?.Elements.FirstOrDefault();
             rule.Conditions.Add(new AutomationCondition
             {
                 Field = AutomationField.PlayClock,
                 Operator = AutomationOperator.Less,
                 Value = 5
             });
-            rule.Actions.Add(new AutomationAction
+            // A new rule starts with the action its page is about: a colour change on a layout,
+            // a media cue on the media page, a macro on the macro page.
+            if (_scope == AutomationScope.Media)
+                rule.Actions.Add(new AutomationAction
+                {
+                    Kind = AutomationActionKind.MediaOnAir,
+                    Value = PreferencesStore.Load().Media?.FirstOrDefault()?.Path ?? ""
+                });
+            else if (_scope == AutomationScope.Macro)
+                rule.Actions.Add(new AutomationAction
+                {
+                    Kind = AutomationActionKind.RunMacro,
+                    Value = _engine.State.Macros?.FirstOrDefault()?.Id ?? ""
+                });
+            else
             {
-                Kind = AutomationActionKind.SetTextColor,
-                LayoutId = layout?.Id ?? "",
-                ElementId = target?.Id ?? "",
-                Value = "#FFFF3B30"
-            });
+                var layout = _catalog.FindDisplay(_displayId)?.Layouts.FirstOrDefault(candidate => string.Equals(candidate.Id, _layoutId, StringComparison.OrdinalIgnoreCase));
+                var target = layout?.Elements.FirstOrDefault(element => element.Kind == ScorebugElementKind.Text) ?? layout?.Elements.FirstOrDefault();
+                rule.Actions.Add(new AutomationAction
+                {
+                    Kind = AutomationActionKind.SetTextColor,
+                    LayoutId = layout?.Id ?? "",
+                    ElementId = target?.Id ?? "",
+                    Value = "#FFFF3B30"
+                });
+            }
         }
         _rules.Add(rule);
         _selected = rule;
@@ -422,13 +456,18 @@ public sealed class AutomationWindow : Window
     void Persist()
     {
         if (_building) return;
-        // Keep other layouts' rules intact: this editor owns only the current layout's slice.
+        // Keep every other page's rules intact: this editor owns one scope, and for a layout page
+        // only that layout's slice of it.
         var display = _catalog.FindDisplay(_displayId);
         var merged = (display?.Automations ?? [])
-            .Where(rule => !string.Equals(rule.LayoutId, _layoutId, StringComparison.OrdinalIgnoreCase))
+            .Where(rule => !Belongs(rule))
             .Select(rule => rule.Copy())
             .ToList();
-        foreach (var rule in _rules) rule.LayoutId = _layoutId;
+        foreach (var rule in _rules)
+        {
+            rule.Scope = _scope;
+            rule.LayoutId = _scope == AutomationScope.Layout ? _layoutId : "";
+        }
         merged.AddRange(_rules.Select(rule => rule.Copy()));
         _catalog.UpdateAutomations(_displayId, merged);
         _status.Text = $"{_rules.Count} rule{(_rules.Count == 1 ? "" : "s")} · {_catalog.FindDisplay(_displayId)?.Layouts.FirstOrDefault(layout => string.Equals(layout.Id, _layoutId, StringComparison.OrdinalIgnoreCase))?.Name} · {_runtime?.ActiveRuleCount ?? 0} active right now";
@@ -570,6 +609,41 @@ public sealed class AutomationWindow : Window
         any.Checked += (_, _) => { rule.MatchAny = true; any.Content = "Match any condition"; Persist(); };
         any.Unchecked += (_, _) => { rule.MatchAny = false; any.Content = "Match all conditions"; Persist(); };
         panel.Children.Add(any);
+
+        // A time of day is a trigger of its own: at 19:30 the rule fires even if nobody has touched
+        // the console, which is how a show opens on its opening layout on the dot.
+        panel.Children.Add(FieldLabel("Run at real-world time (optional)"));
+        var atTime = Box(rule.AtTime, 11);
+        atTime.ToolTip = "24-hour HH:mm or HH:mm:ss. HH:mm runs once during that minute; HH:mm:ss runs on that exact second. The actions run even if nobody touches the game. Leave it empty for a rule that only reacts to the game.";
+        atTime.TextChanged += (_, _) =>
+        {
+            if (_building) return;
+            rule.AtTime = AutomationRules.NormalizeTime(atTime.Text);
+            Persist();
+        };
+        atTime.LostFocus += (_, _) =>
+        {
+            var normalized = AutomationRules.NormalizeTime(atTime.Text);
+            if (normalized.Length > 0) atTime.Text = normalized;
+        };
+        panel.Children.Add(atTime);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "HH:mm for a minute, or HH:mm:ss for an exact second.",
+            Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 3, 0, 0)
+        });
+        var daily = new CheckBox
+        {
+            Content = "Run again every day",
+            IsChecked = rule.AtTimeDaily,
+            Foreground = MutedBrush,
+            FontSize = 10,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+        daily.Checked += (_, _) => { rule.AtTimeDaily = true; Persist(); };
+        daily.Unchecked += (_, _) => { rule.AtTimeDaily = false; Persist(); };
+        panel.Children.Add(daily);
         var active = MatchesNow(rule);
         panel.Children.Add(new TextBlock
         {
@@ -664,15 +738,41 @@ public sealed class AutomationWindow : Window
                 };
                 panel.Children.Add(key);
             }
-            panel.Children.Add(FieldLabel("Value"));
-            var value = Box(condition.Value.ToString("0.##"), 11);
-            value.TextChanged += (_, _) =>
+            // A clock is read as MM:SS on air, so it is typed the same way here. The rule still
+            // stores seconds, which keeps old saved rules and every comparison unchanged.
+            var clockField = AutomationRules.IsClockField(condition.Field);
+            panel.Children.Add(FieldLabel(clockField ? "Value (MM:SS)" : "Value"));
+            var value = Box(clockField
+                ? AutomationRules.FormatClockValue(condition.Value)
+                : condition.Value.ToString("0.##"), 11);
+            if (clockField)
             {
-                if (_building || !double.TryParse(value.Text, out var number)) return;
-                condition.Value = number;
-                Persist();
-            };
+                value.ToolTip = "Type a clock as MM:SS, for example 00:59. It is compared with the clock in seconds.";
+                value.TextChanged += (_, _) =>
+                {
+                    if (_building || !AutomationRules.TryParseClockValue(value.Text, out var seconds)) return;
+                    condition.Value = seconds;
+                    Persist();
+                };
+                value.LostFocus += (_, _) => value.Text = AutomationRules.FormatClockValue(condition.Value);
+            }
+            else
+            {
+                value.TextChanged += (_, _) =>
+                {
+                    if (_building || !double.TryParse(value.Text, out var number)) return;
+                    condition.Value = number;
+                    Persist();
+                };
+            }
             panel.Children.Add(value);
+            if (clockField)
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "Minutes and seconds, for example 00:59. This compares against the clock, not a raw number.",
+                    Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 3, 0, 0)
+                });
         }
         else
         {
@@ -743,6 +843,17 @@ public sealed class AutomationWindow : Window
             if (choice.Kind == AutomationActionKind.SwitchLayout
                 && string.IsNullOrWhiteSpace(action.LayoutId))
                 action.LayoutId = _catalog.FindDisplay(_displayId)?.Layouts.FirstOrDefault()?.Id ?? "";
+            if (choice.Kind == AutomationActionKind.SetClockDecimals)
+            {
+                // Decimals only exist on a clock, so never leave the action pointing at a score
+                // or a down line just because that happened to be the previous target.
+                var clocks = ClockElementChoices(_catalog.FindDisplay(_displayId));
+                if (!clocks.Any(choice => string.Equals(choice.ElementId, action.ElementId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    action.ElementId = clocks.FirstOrDefault()?.ElementId ?? "";
+                    action.LayoutId = clocks.FirstOrDefault()?.LayoutId ?? action.LayoutId;
+                }
+            }
             Persist();
             RefreshGraph();
         };
@@ -796,6 +907,163 @@ public sealed class AutomationWindow : Window
                 Foreground = MutedBrush,
                 FontSize = 9,
                 TextWrapping = TextWrapping.Wrap
+            });
+        }
+        else if (action.Kind == AutomationActionKind.RunMacro)
+        {
+            var macros = _engine.State.Macros?.ToArray() ?? [];
+            panel.Children.Add(FieldLabel("Macro to run"));
+            if (macros.Length == 0)
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "This game has no macros yet. Build one on the Macros tab, then come back and pick it here.",
+                    Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap
+                });
+            }
+            else
+            {
+                var labels = macros.Select(macro => $"{macro.Label} · {macro.ActionCount} step{(macro.ActionCount == 1 ? "" : "s")}").ToArray();
+                var picker = new ComboBox
+                {
+                    ItemsSource = labels, FontSize = 11, MinHeight = 28,
+                    Margin = new Thickness(0, 0, 0, 5)
+                };
+                var current = Array.FindIndex(macros, macro =>
+                    string.Equals(macro.Id, action.Value, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(macro.Label, action.Value, StringComparison.OrdinalIgnoreCase));
+                picker.SelectedIndex = current < 0 ? 0 : current;
+                if (current < 0) action.Value = macros[0].Id;
+                picker.SelectionChanged += (_, _) =>
+                {
+                    if (_building || picker.SelectedIndex < 0 || picker.SelectedIndex >= macros.Length) return;
+                    action.Value = macros[picker.SelectedIndex].Id;
+                    Persist();
+                };
+                panel.Children.Add(picker);
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "The macro runs its steps top to bottom, exactly as pressing its button does.",
+                    Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap
+                });
+            }
+        }
+        else if (action.Kind is AutomationActionKind.MediaOnAir or AutomationActionKind.MediaOffAir)
+        {
+            var items = (PreferencesStore.Load().Media ?? [])
+                .Where(item => !string.IsNullOrWhiteSpace(item.Path)).ToArray();
+            panel.Children.Add(FieldLabel(action.Kind == AutomationActionKind.MediaOnAir
+                ? "Item to put on air" : "Item to take off air"));
+            if (items.Length == 0)
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "The media library is empty. Add a clip, camera, microphone, screen or speaker bus in the Media tab first.",
+                    Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap
+                });
+            }
+            else
+            {
+                var labels = items.Select(item => $"{item.KindLabel} · {item.Label} · {item.Tag}").ToArray();
+                var picker = new ComboBox
+                {
+                    ItemsSource = labels, FontSize = 11, MinHeight = 28,
+                    Margin = new Thickness(0, 0, 0, 5)
+                };
+                var current = Array.FindIndex(items, item =>
+                    string.Equals(item.Path, action.Value, StringComparison.OrdinalIgnoreCase));
+                picker.SelectedIndex = current < 0 ? 0 : current;
+                if (current < 0) action.Value = items[0].Path;
+                picker.SelectionChanged += (_, _) =>
+                {
+                    if (_building || picker.SelectedIndex < 0 || picker.SelectedIndex >= items.Length) return;
+                    action.Value = items[picker.SelectedIndex].Path;
+                    Persist();
+                };
+                panel.Children.Add(picker);
+                panel.Children.Add(new TextBlock
+                {
+                    Text = action.Kind == AutomationActionKind.MediaOnAir
+                        ? "A clip restarts, a camera, microphone, screen or speaker bus simply goes on air."
+                        : "Taking something already off air is not a failure; the rule just makes sure it is clear.",
+                    Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap
+                });
+            }
+        }
+        else if (action.Kind == AutomationActionKind.SetClockDecimals)
+        {
+            // The decimal column belongs to the element, so the rule points at the element that
+            // prints the clock. It is live only while the rule matches, and leaves again by itself.
+            var clockElements = ClockElementChoices(display);
+            if (clockElements.Length == 0)
+            {
+                panel.Children.Add(FieldLabel("Element whose clock prints the decimal"));
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "This display has no clock element. Add an element that prints {{GAME_CLOCK}}, {{PLAY_CLOCK}} or {{STOPPAGE}} in the studio first.",
+                    Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 5)
+                });
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "Decimals are a timing-clock readout. Scores, downs, periods and other whole numbers never show a decimal column.",
+                    Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap
+                });
+                var noClockRemove = new Button { Content = "Remove action", FontSize = 9, Padding = new Thickness(7, 2, 7, 2), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 7, 0, 0) };
+                noClockRemove.Click += (_, _) =>
+                {
+                    _selected?.Actions.Remove(action);
+                    Persist();
+                    RefreshGraph();
+                };
+                panel.Children.Add(noClockRemove);
+                return card;
+            }
+            if (!clockElements.Any(choice => string.Equals(choice.ElementId, action.ElementId, StringComparison.OrdinalIgnoreCase)))
+            {
+                action.ElementId = clockElements[0].ElementId;
+                action.LayoutId = clockElements[0].LayoutId;
+                // Repair a rule made before the target list was limited to clocks, after the graph
+                // finishes rebuilding (Persist intentionally ignores edits during the build).
+                Dispatcher.BeginInvoke(() => Persist());
+            }
+            var elementPicker = new ComboBox
+            {
+                ItemsSource = clockElements,
+                DisplayMemberPath = "Label",
+                SelectedItem = clockElements.FirstOrDefault(choice =>
+                    string.Equals(choice.ElementId, action.ElementId, StringComparison.OrdinalIgnoreCase)),
+                FontSize = 11, MinHeight = 28,
+                Margin = new Thickness(0, 0, 0, 5)
+            };
+            elementPicker.SelectionChanged += (_, _) =>
+            {
+                if (_building || elementPicker.SelectedItem is not ElementChoice choice) return;
+                action.ElementId = choice.ElementId;
+                action.LayoutId = choice.LayoutId;
+                Persist();
+            };
+            panel.Children.Add(FieldLabel("Element whose clock prints the decimal"));
+            panel.Children.Add(elementPicker);
+            var amounts = new[] { "No decimals · MM:SS", "One decimal · MM:SS.d", "Two decimals · MM:SS.dd" };
+            var amountPicker = new ComboBox
+            {
+                ItemsSource = amounts, FontSize = 11, MinHeight = 28,
+                SelectedIndex = Math.Clamp((int)Math.Round(action.Number), 0, 2),
+                Margin = new Thickness(0, 0, 0, 5)
+            };
+            amountPicker.SelectionChanged += (_, _) =>
+            {
+                if (_building || amountPicker.SelectedIndex < 0) return;
+                action.Number = amountPicker.SelectedIndex;
+                Persist();
+            };
+            panel.Children.Add(FieldLabel("Decimal column"));
+            panel.Children.Add(amountPicker);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Set it to tenths with a condition that the game clock is below 60 and the decimal appears by itself for the last minute.",
+                Foreground = MutedBrush, FontSize = 9, TextWrapping = TextWrapping.Wrap
             });
         }
         else
@@ -986,6 +1254,18 @@ public sealed class AutomationWindow : Window
             .ToArray();
     }
 
+    /// <summary>Only elements that print a timing clock can carry a decimal column.</summary>
+    static ElementChoice[] ClockElementChoices(ScorebugDisplay? display)
+    {
+        if (display is null) return [];
+        return display.Layouts
+            .SelectMany(layout => layout.Elements
+                .Where(element => AutomationRules.HasClockToken(element.Content))
+                .Select(element => new ElementChoice(
+                    layout.Id, element.Id, $"{layout.Name} · {element.Name}")))
+            .ToArray();
+    }
+
     void AddCard(Border card, double x, double y, double width)
     {
         card.Width = width;
@@ -1041,7 +1321,7 @@ public sealed class AutomationWindow : Window
             Text = eyebrow, Foreground = accent, FontSize = 9, FontWeight = FontWeights.Bold,
             Margin = new Thickness(0, 0, 0, 5)
         });
-        return new Border
+        var card = new Border
         {
             Background = PanelBrush,
             BorderBrush = EdgeBrush,
@@ -1051,6 +1331,11 @@ public sealed class AutomationWindow : Window
             Child = panel,
             MinHeight = 150
         };
+        // The global theme pass repaints every Border with the window panel colour. On the dark
+        // graph that made these cards disappear into the canvas until a hover or a control forced
+        // a repaint. Keep the card's own raised fill and edge intact.
+        ThemeManager.SetSkipTheme(card, true);
+        return card;
     }
 
     static TextBlock FieldLabel(string text) => new()

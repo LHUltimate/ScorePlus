@@ -68,8 +68,6 @@
           <Button Content="VIDEO +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddVideo_Click"/>
           <Button Content="HTML +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddHtml_Click"
                   ToolTip="A live HTML/CSS widget, drawn by a browser engine on every screen"/>
-          <Button Content="PLAYER PHOTO +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddPlayerPhoto_Click"
-                  ToolTip="A picture element that follows the selected player's uploaded portrait"/>
           <Button Content="LAYOUT +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="AddLayoutFeed_Click"
                   ToolTip="Put another layout inside this one as a resizeable live feed"/>
           <Button Content="PARTS +" Style="{StaticResource ToolButton}" FontWeight="SemiBold" Click="ImportParts_Click"
@@ -94,8 +92,8 @@
               <Button Content="New display…" Style="{StaticResource LayoutButton}" Click="DisplayNew_Click" ToolTip="Add another screen, for example a lower-thirds display"/>
               <Button Content="Import .spd…" Style="{StaticResource LayoutButton}" Click="DisplayImport_Click" ToolTip="Add a whole ScorePlus Display file — every layout it holds — to this game"/>
               <Button Content="Export .spd…" Style="{StaticResource LayoutButton}" Click="DisplayExport_Click" ToolTip="Write this display and all its layouts to a ScorePlus Display file"/>
-              <Button x:Name="ConditionalsButton" Content="Conditionals…" Style="{StaticResource LayoutButton}" Click="Conditionals_Click"
-                      ToolTip="Edit this display's automation rules in their own window"/>
+              <Button x:Name="ConditionalsButton" Content="Layout Conditionals" Style="{StaticResource LayoutButton}" Click="Conditionals_Click"
+                      ToolTip="Edit this layout's own automation rules. Media and macro rules live on their own pages"/>
               <Button Content="Motions…" Style="{StaticResource LayoutButton}" Click="MotionWindow_Click"
                       ToolTip="Open transitions and score celebrations in their own window"/>
               <Button Content="Rename…" Style="{StaticResource LayoutButton}" Click="DisplayRename_Click"/>
@@ -245,6 +243,14 @@
             <Button x:Name="LayerBackButton" Content="▼ To back" FontSize="11" Padding="6,6" Margin="3,0,0,0"
                     Click="LayerBack_Click" ToolTip="Move the selected element behind every other element"/>
           </UniformGrid>
+          <!-- Locking freezes a layer (and its group) so it cannot be selected, moved or deleted;
+               grouping makes several layers select and move as one. -->
+          <UniformGrid Columns="2" Margin="0,0,0,6">
+            <Button x:Name="GroupSelectionButton" Content="Group" FontSize="11" Padding="6,6" Margin="0,0,3,0"
+                    Click="Group_Click" ToolTip="Make the selected layers one group: picking any of them picks them all"/>
+            <Button x:Name="UngroupSelectionButton" Content="Ungroup" FontSize="11" Padding="6,6" Margin="3,0,0,0"
+                    Click="Ungroup_Click" ToolTip="Take the selected layers out of their groups"/>
+          </UniformGrid>
         </StackPanel>
         <ListBox x:Name="Layers" Background="#10151D" Foreground="White" BorderBrush="#364151"
                  ItemContainerStyle="{StaticResource LayerRow}"
@@ -260,10 +266,18 @@
                   <ColumnDefinition Width="20"/>
                   <ColumnDefinition Width="*"/>
                   <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="20"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding Glyph}" FontSize="12" Foreground="{DynamicResource Accent}" VerticalAlignment="Center"/>
                 <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                 <TextBlock Grid.Column="2" Text="{Binding KindLabel}" FontSize="9" Foreground="#5C6B7E" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                <!-- The lock lives on the row so a locked layer can always be unlocked again, even
+                     though selecting it is refused. A locked row cannot be moved or deleted. -->
+                <Button Grid.Column="3" Content="{Binding LockGlyph}" ToolTip="{Binding LockTip}"
+                        Click="LayerLock_Click" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                        Padding="0" Width="20" MinWidth="20" Height="18"
+                        Background="Transparent" BorderThickness="0" Foreground="#93A0B2" Cursor="Hand"
+                        local:ThemeManager.SkipTheme="True"/>
               </Grid>
             </DataTemplate>
           </ListBox.ItemTemplate>
@@ -287,7 +301,7 @@
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
               <TextBlock x:Name="CanvasZoomText" Text="100%" FontSize="10" Foreground="#5C6B7E"
                          VerticalAlignment="Center" Margin="0,0,10,0" ToolTip="Scroll over the canvas to zoom"/>
-              <ComboBox x:Name="CanvasPreset" Width="170" FontSize="11" SelectedIndex="0" ToolTip="Canvas size presets" SelectionChanged="CanvasPreset_Changed"/>
+              <ComboBox x:Name="CanvasPreset" Width="170" FontSize="11" ToolTip="Canvas size presets" SelectionChanged="CanvasPreset_Changed"/>
               <TextBox x:Name="CanvasWidthInput" Width="58" FontSize="11" Margin="4,0,0,0" ToolTip="Canvas width in pixels"/>
               <TextBox x:Name="CanvasHeightInput" Width="58" FontSize="11" Margin="4,0,0,0" ToolTip="Canvas height in pixels"/>
               <Button Content="Resize" FontSize="11" Padding="8,4" Margin="4,0,0,0" Click="CanvasResize_Click" ToolTip="Scale the whole layout into this canvas size"/>
@@ -443,6 +457,14 @@
             <ComboBox x:Name="PeriodFormatInput" Margin="10,0,10,4" SelectionChanged="Property_Changed"
                       ToolTip="How {{PERIOD}} prints on this element — Quarter 1, Q1, 1 or 1st"/>
           </StackPanel>
+          <StackPanel x:Name="TeamRecordSection">
+            <TextBlock Text="TEAM RECORD" Style="{StaticResource SectionTitle}"/>
+            <CheckBox x:Name="RecordDivisionInput" Content="Include the division record in parentheses" FontSize="11"
+                      Margin="10,2,10,2" Checked="Property_Changed" Unchecked="Property_Changed"
+                      ToolTip="Off prints 8-2. On prints 8-2 (2-1) when a division record is set in team details."/>
+            <TextBlock Text="Off by default. Use on an element that prints {{HOME_RECORD}} or {{AWAY_RECORD}}."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap" Margin="10,0,10,4"/>
+          </StackPanel>
           <StackPanel x:Name="DownFormatSection">
             <TextBlock Text="Down and distance for this element" Style="{StaticResource FieldLabel}"/>
             <CheckBox x:Name="DownCapsInput" Content="Print the down words in full caps" FontSize="11" Margin="10,2,10,2"
@@ -454,13 +476,23 @@
           <StackPanel x:Name="PlayClockFormatSection">
             <CheckBox x:Name="PlayClockColonInput" Content="Print the play clock with a colon (:22)" FontSize="11" Margin="10,2,10,2"
                       Checked="Property_Changed" Unchecked="Property_Changed"
-                      ToolTip="This element only. {{PLAY_CLOCK}} prints :22 instead of 22."/>
+                      ToolTip="This element only. {{PLAY_CLOCK}} prints :22 instead of 22, and :5 for a single digit unless the pad option below is on."/>
+            <CheckBox x:Name="PlayClockLeadingZeroInput" Content="Pad a single-digit play clock (05 instead of 5)" FontSize="11" Margin="10,2,10,2"
+                      Checked="Property_Changed" Unchecked="Property_Changed"
+                      ToolTip="This element only. Works with the colon: :05 or 05. Use on an element that prints {{PLAY_CLOCK}}."/>
           </StackPanel>
           <StackPanel x:Name="GameClockFormatSection">
             <CheckBox x:Name="GameClockLeadingZeroInput" Content="Print the game clock with a leading zero (09:59)" FontSize="11" Margin="10,2,10,2"
                       Checked="Property_Changed" Unchecked="Property_Changed"
                       ToolTip="This element only. Off prints 9:59 and :59 under a minute. The setting travels with the element."/>
-            <TextBlock Text="Use on any element that prints {{GAME_CLOCK}}." Foreground="#93A0B2" FontSize="10"
+            <TextBlock Text="Clock decimals on this element" Style="{StaticResource FieldLabel}"/>
+            <ComboBox x:Name="ClockDecimalsInput" Margin="10,0,10,4" SelectedIndex="0" SelectionChanged="Property_Changed"
+                      ToolTip="This element only: prints 0:59, 0:59.9 or 0:59.99 after every clock token it carries. A conditional can switch it on for the last minute.">
+              <ComboBoxItem Content="No decimals (0:59)"/>
+              <ComboBoxItem Content="One decimal (0:59.9)"/>
+              <ComboBoxItem Content="Two decimals (0:59.99)"/>
+            </ComboBox>
+            <TextBlock Text="Use on any element that prints {{GAME_CLOCK}}, {{PLAY_CLOCK}} or {{STOPPAGE}}." Foreground="#93A0B2" FontSize="10"
                        TextWrapping="Wrap" Margin="10,0,10,4"/>
           </StackPanel>
           <StackPanel x:Name="TickerSection">
@@ -696,9 +728,11 @@
                     Checked="Property_Changed" Unchecked="Property_Changed"/>
           <CheckBox x:Name="IconFlipInput" Content="Put the home side on the left" Margin="10,2,10,8"
                     Checked="Property_Changed" Unchecked="Property_Changed"/>
-          <CheckBox x:Name="IconArrowDownInput" Content="Point the possession arrow down" Margin="10,2,10,8"
-                    Checked="Property_Changed" Unchecked="Property_Changed"
-                    ToolTip="Draw a downward arrow instead of pointing it sideways into the team with possession"/>
+          <StackPanel x:Name="IconRotationPanel">
+            <TextBlock Text="Icon rotation (degrees)" Style="{StaticResource FieldLabel}"/>
+            <TextBox x:Name="IconRotationInput" Style="{StaticResource FieldBox}" TextChanged="Property_Changed"
+                     ToolTip="Turn the icon on its own centre: 90 makes a possession arrow point down, 180 points it back, any angle works"/>
+          </StackPanel>
           <!-- Timeout bars have their own size, independent of the plate. -->
           <StackPanel x:Name="IconScalePanel">
             <TextBlock Text="Timeout bar size (0.25–3)" Style="{StaticResource FieldLabel}"/>

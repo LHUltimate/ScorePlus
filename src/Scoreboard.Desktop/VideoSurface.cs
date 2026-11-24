@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Scoreboard.Core;
 
 namespace Scoreboard.Desktop;
@@ -39,8 +40,11 @@ public sealed class VideoSurface : Grid
     // True for a surface that is showing what the audience gets, even when it is muted. The
     // audience-view monitor is one: silent, but it must never show a replay the audience cannot.
     readonly bool _onAir;
-    CameraFeed? _feed;
-    int _cameraIndex = -1;
+    // A camera and a captured desktop behave the same way here: frames arrive, and the element
+    // paints the newest one. Keeping one field for both means a screen is a media piece with no
+    // special case in the scorebug's drawing code.
+    ILiveSource? _feed;
+    string _liveKey = "";
     // The last raw picture from each live source, kept so a crop change can re-cut a paused frame
     // immediately instead of waiting for the next camera/replay update.
     ImageSource? _liveFrame;
@@ -245,7 +249,9 @@ public sealed class VideoSurface : Grid
             }
             catch { }
         }
-        if (colour is null)
+        // Zero tolerance means the key is off. The shader used to key the exact colour even at
+        // zero, so pixels still vanished on a picture the operator had deliberately un-keyed.
+        if (colour is null || _item.ChromaKeyTolerance <= 0)
         {
             _chromaKey = null;
             _video.Effect = null;
@@ -368,6 +374,7 @@ public sealed class VideoSurface : Grid
         // picture before any layer is switched, then let it leave over the incoming source.
         var cueKey = entry is null ? ""
             : entry.IsCamera ? $"camera:{entry.CameraIndex}"
+            : entry.IsScreen ? $"screen:{entry.ScreenIndex}"
             : $"file:{entry.Path}:{entry.ReplayCue}";
         if (_cueKey is not null && !string.Equals(_cueKey, cueKey, StringComparison.OrdinalIgnoreCase))
             BeginSwitchAnimation(entry);
@@ -380,7 +387,7 @@ public sealed class VideoSurface : Grid
 
         // A live camera has no file to open: its frames replace the video player until the
         // operator cuts to an instant replay or another clip.
-        if (entry is { IsCamera: true })
+        if (entry is { IsCamera: true } or { IsScreen: true })
         {
             // A live feed has no file for the router to open. Stop the player even when the same
             // camera index is already selected: a surface that previously held a file must never
@@ -390,7 +397,7 @@ public sealed class VideoSurface : Grid
             _loadedPath = null;
             _opened = false;
             _playing = false;
-            ShowLiveCamera(entry.CameraIndex);
+            ShowLiveSource(entry);
             if (_placeholder is not null) _placeholder.Visibility = Visibility.Collapsed;
             return;
         }
@@ -424,10 +431,15 @@ public sealed class VideoSurface : Grid
         // this element) is muted here so its sound never comes out of two places at once.
         try
         {
-            _player.IsMuted = _mute || !string.IsNullOrWhiteSpace(_item.AudioDevice) || (_playback?.RoutedToDevice ?? false);
-            // The clip's own level, through the bus that carries its tag: a speaker switched off
-            // takes its clips silent with it instead of leaving them playing on another output.
-            var level = (_playback?.Volume ?? 1) * (_playback?.SpeakerGain ?? 0);
+            // Routing is judged for this cue, not for the newest cue on the show: a video on
+            // another tag keeps its own sound while a second video is routed to a speaker. A
+            // speaker that could not be opened leaves the box silent instead of jumping to
+            // whichever other speaker is switched on.
+            _player.IsMuted = _mute || !string.IsNullOrWhiteSpace(_item.AudioDevice)
+                || (_playback?.RoutedToDeviceFor(entry) ?? false)
+                || (_playback?.AudioFailedFor(entry) ?? false);
+            // The clip's own level, through the bus that carries its tag.
+            var level = (_playback?.VolumeFor(entry) ?? entry.Volume) * (_playback?.GainFor(entry) ?? 1);
             _player.Volume = Math.Clamp(level, 0, 1);
         }
         catch { }
@@ -539,12 +551,14 @@ public sealed class VideoSurface : Grid
         {
             // Start at the transport's point so joining a running clip stays in sync.
             var start = _playback?.Position ?? 0;
-            _router.Play(entry.Path, device, Math.Clamp((_playback?.Volume ?? entry.Volume) * (_playback?.SpeakerGain ?? 0), 0, 1), start);
+            _router.Play(entry.Path, device,
+                Math.Clamp((_playback?.VolumeFor(entry) ?? entry.Volume) * (_playback?.GainFor(entry) ?? 1), 0, 1), start);
             _routedPath = entry.Path;
             _routedDevice = device;
         }
         if (_playback is { IsPlaying: false }) _router.Pause(); else _router.Resume();
-        if (_playback is not null) _router.SetVolume(Math.Clamp(_playback.Volume * _playback.SpeakerGain, 0, 1));
+        if (_playback is not null)
+            _router.SetVolume(Math.Clamp(_playback.VolumeFor(entry) * _playback.GainFor(entry), 0, 1));
     }
 
     void StopRouting()
@@ -555,15 +569,16 @@ public sealed class VideoSurface : Grid
         _routedDevice = null;
     }
 
-    void ShowLiveCamera(int index)
+    void ShowLiveSource(MediaEntry entry)
     {
-        if (_cameraIndex != index)
+        var key = entry.IsScreen ? $"screen:{entry.ScreenIndex}" : $"camera:{entry.CameraIndex}";
+        if (!string.Equals(_liveKey, key, StringComparison.OrdinalIgnoreCase))
         {
             // Keep the outgoing camera's last picture visible while the new feed opens. The
             // default unsubscribe hides it, which is right when leaving camera for a file, but
             // wrong for a cut between two cameras: that briefly showed an empty video box.
             UnsubscribeLive(keepPicture: true);
-            _cameraIndex = index;
+            _liveKey = key;
             if (_loadedPath is not null)
             {
                 try { _player.Stop(); _player.Close(); } catch { }
@@ -571,7 +586,9 @@ public sealed class VideoSurface : Grid
                 _opened = false;
                 _playing = false;
             }
-            _feed = CameraFeed.Get(index);
+            _feed = entry.IsScreen
+                ? ScreenFeed.Get(entry.ScreenIndex)
+                : CameraFeed.Get(entry.CameraIndex);
             _feed.FrameReady += OnCameraFrame;
             _feed.Start();
         }
@@ -586,7 +603,7 @@ public sealed class VideoSurface : Grid
     {
         if (_feed is not null) _feed.FrameReady -= OnCameraFrame;
         _feed = null;
-        _cameraIndex = -1;
+        _liveKey = "";
         if (keepPicture) return;
         _liveFrame = null;
         _live.Visibility = Visibility.Collapsed;
@@ -602,7 +619,7 @@ public sealed class VideoSurface : Grid
 
     void HideLiveCamera()
     {
-        if (_cameraIndex < 0) return;
+        if (_liveKey.Length == 0) return;
         UnsubscribeLive();
     }
 
@@ -669,8 +686,66 @@ public sealed class VideoSurface : Grid
 
     void OnReplayFrame(System.Windows.Media.Imaging.BitmapSource frame)
     {
+        if (_replayFeed is null) return;
         _replayFrame = frame;
-        if (_replay.Visibility == Visibility.Visible) _replay.Source = CropFrame(frame);
+        // A prepared replay opens paused, so this may be the only frame the decoder ever sends.
+        // Draw it even if the surface was still on the live camera when it arrived; waiting for
+        // the next transport change left the preview black until the operator moved the scrubber.
+        _replay.Source = CropFrame(frame);
+        _replay.Visibility = Visibility.Visible;
+        _video.Visibility = Visibility.Collapsed;
+        _live.Visibility = Visibility.Collapsed;
+        if (_placeholder is not null) _placeholder.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Plays the cue's own switch video over this box. A replay is decoded frames, not a media
+    /// player, so its switch cannot borrow the player: a clip is painted on top of the incoming
+    /// picture through a VideoDrawing instead. False when the cue carries no usable clip, so the
+    /// ordinary fade/slide/zoom (or a cut) runs as before.
+    /// </summary>
+    bool TryPlaySwitchVideo(MediaEntry? incoming)
+    {
+        var path = incoming?.SwitchVideoPath;
+        if (string.IsNullOrWhiteSpace(path) || !IsLoaded) return false;
+        if (System.IO.Path.GetExtension(path).ToLowerInvariant()
+            is not (".mp4" or ".m4v" or ".wmv" or ".avi" or ".mov" or ".mkv" or ".webm")) return false;
+        if (!File.Exists(path)) return false;
+        var width = (int)Math.Round(ActualWidth);
+        var height = (int)Math.Round(ActualHeight);
+        if (width < 2 || height < 2) return false;
+        var player = new MediaPlayer { IsMuted = true, ScrubbingEnabled = false };
+        var brush = new DrawingBrush(new VideoDrawing { Player = player, Rect = new Rect(0, 0, 1, 1) })
+        {
+            Stretch = Stretch.Fill
+        };
+        var cover = new Rectangle { Fill = brush, IsHitTestVisible = false };
+        Panel.SetZIndex(cover, 1001);
+        Children.Add(cover);
+        _switchOverlay = cover;
+        var token = ++_switchToken;
+        void Finish()
+        {
+            if (token != _switchToken || !ReferenceEquals(_switchOverlay, cover)) return;
+            Children.Remove(cover);
+            _switchOverlay = null;
+            try { player.Stop(); player.Close(); } catch { }
+        }
+        // A clip that never opens must never leave the replay covered in black.
+        player.MediaFailed += (_, _) => Finish();
+        player.MediaEnded += (_, _) => Finish();
+        try { player.Open(new Uri(path)); player.Play(); }
+        catch { Finish(); return false; }
+        var cutSeconds = Math.Clamp(incoming!.SwitchVideoCutSeconds, 0, 30);
+        // The operator's cut beat reveals the replay early; with zero the clip plays to its end.
+        // The guard clears a decoder that opens but never reports its end.
+        var timer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(cutSeconds > 0.001 ? cutSeconds : 20)
+        };
+        timer.Tick += (_, _) => { timer.Stop(); Finish(); };
+        timer.Start();
+        return true;
     }
 
     /// <summary>
@@ -690,6 +765,9 @@ public sealed class VideoSurface : Grid
             _switchOverlay = null;
             _switchToken++;
         }
+        // A replay can carry its own hand-over video; it covers the incoming picture until its cut
+        // beat, so the ordinary still-over-still animation is not used for that cue.
+        if (TryPlaySwitchVideo(incoming)) return;
         if (transition == "Cut" || seconds <= 0.02 || !IsLoaded) return;
         // The outgoing frame has to be captured after layout has settled. Calling Render on a box
         // that had only just been resized produced a blank still, so the switch looked like a cut

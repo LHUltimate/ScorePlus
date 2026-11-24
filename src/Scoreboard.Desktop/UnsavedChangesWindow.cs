@@ -70,16 +70,16 @@ public sealed class UnsavedChangesWindow : Window
         };
         Grid.SetRow(buttons, 2);
 
-        var cancel = MakeButton("Keep editing", primary: false);
+        var cancel = MakeButton("Keep Editing", primary: false);
         cancel.IsCancel = true;
         cancel.Click += (_, _) => { Choice = UnsavedChoice.Cancel; Close(); };
         buttons.Children.Add(cancel);
 
-        var discard = MakeButton("Exit without saving", primary: false);
+        var discard = MakeButton("Exit Without Saving", primary: false);
         discard.Click += (_, _) => { Choice = UnsavedChoice.Discard; Close(); };
         buttons.Children.Add(discard);
 
-        var save = MakeButton("Save & exit", primary: true);
+        var save = MakeButton("Save & Exit", primary: true);
         save.IsDefault = true;
         save.Click += (_, _) => { Choice = UnsavedChoice.Save; Close(); };
         buttons.Children.Add(save);

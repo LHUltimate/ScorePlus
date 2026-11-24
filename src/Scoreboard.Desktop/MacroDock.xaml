@@ -109,6 +109,17 @@
       <StackPanel DockPanel.Dock="Top">
         <DockPanel Margin="0,0,0,4">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+            <!-- The two controls an operator needs between presses of a macro: publish what the
+                 steps staged, and stop or resume the live feed, without leaving this tab. -->
+            <Button x:Name="LiveButton" Style="{StaticResource MacroAction}" Content="Live: ON"
+                    Click="Live_Click" Margin="0,0,6,0" MinWidth="86"
+                    ToolTip="Pause or resume the live score, clock and name feed without leaving the macro board"/>
+            <Button x:Name="UpdateOutputButton" Style="{StaticResource MacroAccent}" Content="Update Output"
+                    Click="UpdateOutput_Click" Margin="0,0,6,0"
+                    ToolTip="Publish every staged value now, the same button the console has"/>
+            <Button x:Name="ConditionalsButton" Style="{StaticResource MacroAction}" Content="Macro Conditionals"
+                    Click="Conditionals_Click" Margin="0,0,6,0"
+                    ToolTip="Macro rules only — run a macro at a time, or when a condition is met. Media and layout rules have their own pages"/>
             <Button x:Name="EditorToggleButton" Style="{StaticResource MacroAction}" Content="Hide editor"
                     Click="ToggleEditor_Click" Margin="0,0,6,0"
                     ToolTip="Hide the step editor so more macro buttons fit on screen"/>
@@ -179,6 +190,10 @@
           <WrapPanel Margin="0,7,0,0">
             <Button x:Name="SaveButton" Style="{StaticResource MacroAccent}" Content="Save macro" Click="Save_Click"/>
             <Button x:Name="DeleteButton" Style="{StaticResource MacroAction}" Content="Delete" Click="Delete_Click"/>
+            <Button x:Name="UndoButton" Style="{StaticResource MacroAction}" Content="↶ Undo" Click="Undo_Click"
+                    ToolTip="Undo the last macro or step edit (Ctrl+Z)"/>
+            <Button x:Name="RedoButton" Style="{StaticResource MacroAction}" Content="↷ Redo" Click="Redo_Click"
+                    ToolTip="Redo the macro or step edit Undo took back (Ctrl+Y)"/>
           </WrapPanel>
 
           <TextBlock Text="STEPS · RUN TOP TO BOTTOM" Style="{StaticResource MacroLabel}"/>
@@ -221,12 +236,21 @@
             <CheckBox x:Name="CustomDeltaBox" Content="Add to the current value instead of replacing it"
                       Foreground="{DynamicResource MacroMutedBrush}" FontSize="10" Margin="0,6,0,0"/>
           </StackPanel>
+          <StackPanel x:Name="CopyValuePanel">
+            <TextBlock Text="CUSTOM VALUE TO UPDATE" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="CopyTargetBox" Style="{StaticResource MacroCombo}"/>
+            <TextBlock Text="VALUE TO COPY" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="CopySourceBox" Style="{StaticResource MacroCombo}"
+                      ToolTip="Any live game value: clocks, score, down, records, sport values, custom values or selected-player stats"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="For example, copy the Game Clock into “Last ball snapped” when the snap happens. A custom-value clock also accepts a clock reading."/>
+          </StackPanel>
           <StackPanel x:Name="SidePanel">
             <TextBlock Text="SIDE" Style="{StaticResource MacroLabel}"/>
             <ComboBox x:Name="SideBox" Style="{StaticResource MacroCombo}" SelectionChanged="Side_Changed"/>
           </StackPanel>
           <StackPanel x:Name="AmountPanel">
-            <TextBlock Text="POINTS TO ADD (CAN BE NEGATIVE)" Style="{StaticResource MacroLabel}"/>
+            <TextBlock x:Name="AmountLabel" Text="POINTS TO ADD (CAN BE NEGATIVE)" Style="{StaticResource MacroLabel}"/>
             <TextBox x:Name="AmountBox" Style="{StaticResource MacroBox}" Text="1"/>
           </StackPanel>
           <StackPanel x:Name="ValuePanel">
@@ -242,7 +266,8 @@
           </StackPanel>
           <StackPanel x:Name="RosterPanel">
             <TextBlock Text="PLAYER" Style="{StaticResource MacroLabel}"/>
-            <ComboBox x:Name="PlayerBox" Style="{StaticResource MacroCombo}"/>
+            <ComboBox x:Name="PlayerBox" Style="{StaticResource MacroCombo}"
+                      ToolTip="On-air player changes whoever is live for that side, even after a substitution. Pick a name to target one player instead."/>
             <TextBlock Text="STAT" Style="{StaticResource MacroLabel}"/>
             <ComboBox x:Name="StatBox" Style="{StaticResource MacroCombo}" IsEditable="True"/>
             <CheckBox x:Name="DeltaBox" Content="Add to the current value instead of replacing it"
@@ -276,6 +301,79 @@
                        Text="The chosen layout is put on air as soon as this step runs."/>
           </StackPanel>
 
+          <StackPanel x:Name="ClockPanel">
+            <TextBlock Text="CLOCK" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="ClockBox" Style="{StaticResource MacroCombo}"/>
+            <TextBlock Text="ACTION" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="ClockActionBox" Style="{StaticResource MacroCombo}"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="Start and stop check whether the clock is already running, so pressing the macro twice cannot flip it the other way."/>
+          </StackPanel>
+          <StackPanel x:Name="CustomClockPanel">
+            <TextBlock Text="CUSTOM CLOCK" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="CustomClockBox" Style="{StaticResource MacroCombo}"
+                      ToolTip="Every custom value on the console that is a clock"/>
+            <TextBlock Text="ACTION" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="CustomClockActionBox" Style="{StaticResource MacroCombo}"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="Start and stop check whether the clock is already running, so pressing the macro twice cannot flip it the other way. Reset returns it to the time it was created with."/>
+          </StackPanel>
+          <StackPanel x:Name="ClockMessagePanel">
+            <TextBlock Text="CLOCK READS" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="ClockMessageBox" Style="{StaticResource MacroCombo}"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="The words the audience clock prints instead of a time. The time itself is kept underneath."/>
+          </StackPanel>
+          <StackPanel x:Name="VolumePanel">
+            <TextBlock Text="MEDIA ITEM" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="VolumeMediaBox" Style="{StaticResource MacroCombo}"
+                      ToolTip="Clips, cameras, microphones and speaker buses from the media library"/>
+            <TextBlock Text="LEVEL ACTION" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="VolumeModeBox" Style="{StaticResource MacroCombo}" SelectionChanged="VolumeMode_Changed"/>
+            <StackPanel x:Name="VolumePercentRow">
+              <TextBlock Text="LEVEL (%) · 0–100" Style="{StaticResource MacroLabel}"/>
+              <TextBox x:Name="VolumePercentBox" Style="{StaticResource MacroBox}" Text="100"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="A level change acts at once and never restarts the picture or the capture. Mute and unmute keep the level the bus already had."/>
+          </StackPanel>
+          <StackPanel x:Name="TickerPanel">
+            <TextBlock Text="TICKER HEADLINES · ONE PER LINE" Style="{StaticResource MacroLabel}"/>
+            <TextBox x:Name="TickerTextBox" Style="{StaticResource MacroBox}" AcceptsReturn="True"
+                     Height="74" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                     ToolTip="Each line is one headline on the news ticker"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="Replaces the news headlines and leaves the ticker's rotation, dwell time and score alerts as they are."/>
+          </StackPanel>
+          <StackPanel x:Name="RunMacroPanel">
+            <TextBlock Text="MACRO TO RUN" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="MacroChoiceBox" Style="{StaticResource MacroCombo}"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="That macro's steps run here, in order, inside this press. A macro that names itself, or a chain of more than eight, is skipped."/>
+          </StackPanel>
+          <StackPanel x:Name="NotePanel">
+            <TextBlock Text="HEADING" Style="{StaticResource MacroLabel}"/>
+            <TextBox x:Name="NoteTextBox" Style="{StaticResource MacroBox}"
+                     ToolTip="Shown in the step list so a long macro can be read in sections"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="A heading runs nothing: it is a signpost between steps, like “Timeout” or “After the try”."/>
+          </StackPanel>
+          <StackPanel x:Name="ReplayPanel">
+            <TextBlock Text="REPLAY ACTION" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="ReplayActionBox" Style="{StaticResource MacroCombo}" SelectionChanged="ReplayAction_Changed"/>
+            <StackPanel x:Name="ReplaySecondsRow">
+              <TextBlock Text="SECONDS BACK FROM THE LIVE EDGE" Style="{StaticResource MacroLabel}"/>
+              <TextBox x:Name="ReplaySecondsBox" Style="{StaticResource MacroBox}" Text="8"
+                       ToolTip="How far back the replay should open. 8 puts the play's start eight seconds behind live."/>
+            </StackPanel>
+            <StackPanel x:Name="ReplaySpeedRow">
+              <TextBlock Text="SPEED · 0.1× TO 2.0×" Style="{StaticResource MacroLabel}"/>
+              <TextBox x:Name="ReplaySpeedBox" Style="{StaticResource MacroBox}" Text="1.0"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="Set up opens the replay in the preview; Start Replay sends it to air; Speed changes both. No dragging needed, and the manual buttons still work."/>
+          </StackPanel>
+
           <CheckBox x:Name="BypassOutputBox" Content="Bypass Update Output for this step"
                     Foreground="{DynamicResource MacroMutedBrush}" FontSize="10" Margin="0,9,0,2"
                     ToolTip="When checked, this step publishes immediately. When unchecked, its values wait for Update Output. Media steps always bypass."/>
@@ -286,7 +384,7 @@
             <Button x:Name="UpdateStepButton" Style="{StaticResource MacroAction}" Content="Update selected" Click="UpdateStep_Click" Margin="0"/>
           </WrapPanel>
           <TextBlock Style="{StaticResource MacroHint}" Margin="0,8,0,0"
-                     Text="A macro starts from step 1 every time. Score, down, timeouts, clocks, period, media, cameras, microphones, speaker buses, roster stats, custom values, console buttons and any sport value can be mixed freely; a step that needs a missing player or source is skipped and the rest still run."/>
+                     Text="A macro starts from step 1 every time. Score, down, timeouts, clocks and clock messages, levels and mutes, ticker headlines, period, media, cameras, microphones, speaker buses, layouts, roster stats, custom values, console buttons, chained macros and any sport value can be mixed freely; a step that needs a missing player or source is skipped and the rest still run."/>
         </StackPanel>
       </ScrollViewer>
     </Border>

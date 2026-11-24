@@ -139,10 +139,24 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     public MainWindow(LaunchMode? mode = null, string? gamePath = null, bool waitForLaunch = false)
     {
         InitializeComponent();
+        // A 720p laptop or a portrait panel must still be able to open the window. The console
+        // reflows and scrolls when it is short; this keeps the outer frame from insisting on a
+        // minimum height the monitor does not have.
+        var work = SystemParameters.WorkArea;
+        MinWidth = Math.Min(MinWidth, Math.Max(720, work.Width - 24));
+        MinHeight = Math.Min(MinHeight, Math.Max(520, work.Height - 48));
         // Follow the window onto portrait monitors and laptops at 150% scaling instead of hanging
         // the console off the screen; the console itself is reflowable down to its minimum width.
         ScreenFit.Track(this);
         _session = new MediaSession(_preferences);
+        // Every media action already reports a clear status line; mirror those into the event log
+        // so playing, stopping, retagging and quick-media presses are part of the show record.
+        _session.Status += message =>
+        {
+            // Media events can arrive from a decoder thread, so the log is written on the UI thread.
+            if (Dispatcher.CheckAccess()) _engine.RecordEvent("Media", message);
+            else Dispatcher.BeginInvoke(new Action(() => _engine.RecordEvent("Media", message)));
+        };
         CameraFeed.ReplayWindowSeconds = Math.Clamp(_preferences.ReplaySeconds, 10, 900);
         _booth = new ReplayBoothController(_session, _engine, _preferences);
         _playback = _session.Playback;
@@ -171,10 +185,16 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _engine.Changed += () => _leagueCloud?.MarkDirty();
         _timer.Tick += (_, _) => _engine.Tick();
         _timer.Start();
+        SyncHistory();
         _autosave.Tick += (_, _) => AutoSave();
         _autosave.Start();
 
-        _automation = new AutomationRuntime(_scorebug, _publishedEngine, _engine);
+        _automation = new AutomationRuntime(_scorebug, _publishedEngine, _engine)
+        {
+            // A conditional can run a macro or put a media piece on or off air, not only repaint an
+            // element. The runtime owns the artwork; the show owns these two.
+            RunCommand = RunAutomationCommand
+        };
         _program = new ProgramSelection(_scorebug);
         _program.Changed += ProgramChanged;
         // The preview is the staging desk: it must show the values the operator is about to put on
@@ -207,14 +227,16 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         ControlHost.Content = _panel;
         _panel.SetHintVisibility(_preferences.ShowHeadingHints);
 
-        RosterControl.Attach(_engine);
+        RosterControl.Attach(_engine, PublishGameState, () => _liveScoreClock, SetLiveScoreClock);
         RosterControl.ApplyTheme(_preferences.Theme);
         RosterControl.SetHintVisibility(_preferences.ShowHeadingHints);
-        _macroDock = new MacroDock(_engine, _session, _preferences.Theme, _panel.Execute, _scorebug, PublishGameState);
+        _macroDock = new MacroDock(_engine, _session, _preferences.Theme, _panel.Execute, _scorebug, PublishGameState,
+            () => _liveScoreClock, SetLiveScoreClock, () => OpenConditionals(AutomationScope.Macro));
         _macroDock.SetHintVisibility(_preferences.ShowHeadingHints);
         _macroDock.Status += message => StatusText.Text = message;
         MacroHost.Content = _macroDock;
         MediaControl.Attach(_session);
+        MediaControl.OpenConditionals = () => OpenConditionals(AutomationScope.Media);
         MediaControl.ApplyTheme(_preferences.Theme);
         // The dock now lives in a full-width tab instead of a narrow rail, so its controls are the
         // same size as the console's.
@@ -299,13 +321,13 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     /// <summary>
     /// Applies the choice made in the launch box to the window that is already open behind it.
     /// </summary>
-    public void StartFromLauncher(LaunchMode mode, string? path, string? sportId = null, string? gameName = null)
+    public void StartFromLauncher(LaunchMode mode, string? path, string? sportId = null, string? gameName = null, string? templateId = null)
     {
         if (mode == LaunchMode.Open && !string.IsNullOrWhiteSpace(path) && LoadGame(path))
             StatusText.Text = $"GAME OPENED · {Path.GetFileNameWithoutExtension(path)}";
         else
         {
-            StartNewGame(sportId ?? (string.IsNullOrWhiteSpace(_preferences.LastSport) ? "football" : _preferences.LastSport), announce: false, gameName: gameName);
+            StartNewGame(sportId ?? (string.IsNullOrWhiteSpace(_preferences.LastSport) ? "football" : _preferences.LastSport), announce: false, gameName: gameName, templateId: templateId);
             StatusText.Text = "NEW GAME · set the teams and you are live";
         }
         _savedStateJson = _engine.ExportJson();
@@ -412,9 +434,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         set => SetLiveScoreClock(value);
     }
 
-    public bool HasStagedChanges =>
-        GameEngine.StagedSignature(_engine.State) != GameEngine.StagedSignature(_publishedEngine.State) ||
-        _program.HasStagedChanges;
+    public bool HasStagedChanges => HasStagedGameState() || _program.HasStagedChanges;
 
     /// <summary>The layout the preview is showing: the one that Update Output will publish.</summary>
     public string LayoutLabel => _program.Label;
@@ -568,9 +588,11 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
                 if (player is null) return false;
                 player.SetStat(stat, number);
                 RosterStore.Save();
+                _engine.RecordEvent("Roster", $"{(home ? "Home" : "Visitors")} · {player.Record} · {stat} = {number} · remote");
                 // The graphic prints a snapshot of the selected player, so an edit to the player on
                 // air has to be re-resolved or the phone would change the number backstage only.
-                _engine.ReloadSelectedPlayer(home);
+                // With automatic stat updates off it waits for Update Output, like the desk.
+                _engine.ReloadSelectedPlayer(home, publish: _engine.PlayerStatsLive);
                 return true;
             }
             default: return false;
@@ -597,6 +619,10 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
 
     public void PublishGameState()
     {
+        // A quick-media item staged by its button goes on air with Update Output, like a layout.
+        _session.PublishQuickMedia();
+        // A staged player stat is part of what Update Output publishes.
+        _engine.PublishStagedPlayers();
         // Update Output is the explicit release for a macro that held its live values back.
         _engine.ClearMacroOutputHold();
         // Remember the down going to air, so Last down can put back the one before it.
@@ -605,6 +631,43 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _preview?.Refresh();
         // The monitor listens to the published engine itself, so the copy above already repaints it.
         foreach (var output in _outputs) output.Publish();
+    }
+
+    /// <summary>
+    /// Runs a conditional's show-level action: a saved macro from the board, or a library item on
+    /// or off air. Element artwork is applied by the runtime itself, so it never reaches here.
+    /// </summary>
+    void RunAutomationCommand(AutomationAction action)
+    {
+        var runner = new MacroRunner(_engine, _session, _panel.Execute, _scorebug, PublishGameState);
+        switch (action.Kind)
+        {
+            case AutomationActionKind.RunMacro:
+                var macro = _engine.State.Macros.FirstOrDefault(item =>
+                    string.Equals(item.Id, action.Value, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(item.Label, action.Value, StringComparison.OrdinalIgnoreCase));
+                if (macro is not null) _ = runner.RunAsync(macro.Copy());
+                break;
+            case AutomationActionKind.MediaOnAir:
+                runner.RunMediaStep(action.Value, onAir: true);
+                break;
+            case AutomationActionKind.MediaOffAir:
+                runner.RunMediaStep(action.Value, onAir: false);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Opens this display's rule editor from the macro board or the media rail, so a conditional
+    /// that runs a macro or puts a clip, camera or screen on air can be written without going into
+    /// the studio first.
+    /// </summary>
+    void OpenConditionals(AutomationScope scope)
+    {
+        var window = new AutomationWindow(_scorebug, _engine, _preferences.Theme,
+            _scorebug.ActiveDisplay.Id, _automation, _engine, scope: scope) { Owner = this };
+        ThemeManager.Apply(window, _preferences.Theme);
+        window.ShowDialog();
     }
 
     public void PublishOutput()
@@ -800,8 +863,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     }
 
     /// <summary>
-    /// Repaints the meter and the show line beside it: what is on air, and the score and clock the
-    /// audience is actually looking at. Read from the published copy, not from staged edits.
+    /// Repaints the rail's peak meter from the sound the machine is actually putting out.
     /// </summary>
     void UpdateSoundMeter()
     {
@@ -816,15 +878,12 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
             for (var index = 0; index < _meterBars.Length; index++)
                 _meterBars[index].Background = index < lit ? new SolidColorBrush((Color)_meterBars[index].Tag) : unlit;
         }
+        // The reading beside the bar, in decibels, so the level is a number and not only a shape.
         SoundLevelText.Text = SoundLevelMeter.Suppressed
-            ? "speakers off"
+            ? "off"
             : level <= 0
-                ? (SoundLevelMeter.Available ? "−∞ dB" : "no output")
+                ? (SoundLevelMeter.Available ? "−∞ dB" : "no out")
                 : $"{SoundLevelMeter.Decibels(level):0} dB";
-        if (_preview is null) { OnAirInfo.Text = "STANDBY"; ShowInfo.Text = "Start a game to go live"; return; }
-        OnAirInfo.Text = _program.HasStagedChanges ? "STAGED · UPDATE TO AIR" : $"ON AIR · {_program.Display.Name.ToUpperInvariant()}";
-        var s = _publishedEngine.State;
-        ShowInfo.Text = $"{s.AwayAbbreviation} {s.AwayScore} · {s.HomeAbbreviation} {s.HomeScore} · {GameEngine.FormatClock(s.ClockSeconds)} · {PeriodDisplay.Format(s)}";
     }
 
     void ApplyHintVisibility()
@@ -921,9 +980,15 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
 
     void Preferences_Click(object sender, RoutedEventArgs e)
     {
+        // The desk's own Live switch is the running truth for automatic stat updates; put it on
+        // this window's copy so the page opens showing what the operator is actually using.
+        _preferences.RosterStatsLive = _engine.PlayerStatsLive;
         var dialog = new SettingsWindow(_preferences) { Owner = this };
         ThemeManager.Apply(dialog, _preferences.Theme);
         if (dialog.ShowDialog() != true) return; // Cancel discards: nothing is applied or saved.
+        // The stats desk follows the new automatic-update choice without a restart.
+        RosterControl.ApplyStatsPreference();
+        _quickMedia?.Refresh();
         ThemeManager.Apply(this, _preferences.Theme);
         _leagueCloud?.ApplySettings();
         // The new theme paints buttons as it runs; put the active tab's outline back on top.
@@ -1106,7 +1171,8 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
 
     /// <summary>True when the game data differs from what is on air, ignoring any layout choice.</summary>
     public bool HasStagedGameState() =>
-        GameEngine.StagedSignature(_engine.State) != GameEngine.StagedSignature(_publishedEngine.State);
+        GameEngine.StagedSignature(_engine.State) != GameEngine.StagedSignature(_publishedEngine.State)
+        || _session.PendingQuickMedia is not null;
 
     void SportProfiles_Click(object sender, RoutedEventArgs e)
     {
@@ -1184,7 +1250,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         // states what a new game resets.
         var picker = new SportPickerWindow(_engine.Sports, _engine.State.SportId, _preferences.Theme) { Owner = this };
         if (picker.ShowDialog() != true || string.IsNullOrWhiteSpace(picker.SportId)) return;
-        StartNewGame(picker.SportId, gameName: picker.GameName);
+        StartNewGame(picker.SportId, gameName: picker.GameName, templateId: picker.TemplateId);
     }
 
     /// <summary>
@@ -1203,9 +1269,11 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
                 "Start fresh", "Undo end game");
             if (restart.SecondaryConfirmed)
             {
-                if (_engine.Undo())
+                // The end may have been recorded twice (the clock expiring, then the final record), so
+                // this goes back to the last state where the game was still live rather than one step.
+                if (_engine.UndoEndGame())
                 {
-                    StatusText.Text = "END GAME UNDONE · the final result was restored";
+                    StatusText.Text = "END GAME UNDONE · the clock, the down and the result are back";
                     AutoSave();
                 }
                 else StatusText.Text = "NOTHING TO UNDO · End Game could not be undone";
@@ -1240,10 +1308,10 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     /// from the previous game survives on air. Operator settings that are not part of a game — sport
     /// profiles, keybinds, preferences, the media library and the scorebug design — are untouched.
     /// </summary>
-    public void StartNewGame(string sportId, bool announce = true, bool keepDesign = false, bool restart = false, string? gameName = null)
-        => WithoutLayoutTransitions(() => StartNewGameCore(sportId, announce, keepDesign, restart, gameName));
+    public void StartNewGame(string sportId, bool announce = true, bool keepDesign = false, bool restart = false, string? gameName = null, string? templateId = null)
+        => WithoutLayoutTransitions(() => StartNewGameCore(sportId, announce, keepDesign, restart, gameName, templateId));
 
-    void StartNewGameCore(string sportId, bool announce = true, bool keepDesign = false, bool restart = false, string? gameName = null)
+    void StartNewGameCore(string sportId, bool announce = true, bool keepDesign = false, bool restart = false, string? gameName = null, string? templateId = null)
     {
         _autoHornReady = false;
         // keepDesign is the sport switch: the teams, their rosters and the scorebug layout stay.
@@ -1269,7 +1337,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         try { PreferencesStore.Save(_preferences); } catch { }
         // A new game really starts over: one factory layout and no folder/playlist organisation.
         // Imported media files stay in the library; the game's design and shelves begin blank.
-        if (!keepDesign) _scorebug.ResetToDefault();
+        if (!keepDesign) _scorebug.ResetToDefault(templateId);
         _savedDesignJson = DesignJson();
         _program.Sync();
         SyncDisplayPicker();
@@ -1433,13 +1501,62 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     void SetLiveScoreClock(bool enabled)
     {
         _liveScoreClock = enabled;
+        // One Live state for the whole show: the console switch, the stats desk and the saved
+        // preference cannot drift apart, whichever one the operator presses.
+        _engine.PlayerStatsLive = enabled;
+        _preferences.RosterStatsLive = enabled;
+        PreferencesStore.RosterStatsLive = enabled;
+        // Save a fresh reading of the file, so a Live press never writes back an older copy of the
+        // media or roster settings this window happens to hold.
+        try { PreferencesStore.Save(PreferencesStore.Load()); } catch { }
         foreach (var panel in _controlPanels) panel.SyncLiveState(enabled);
         _panel.SyncLiveState(enabled);
-        if (enabled) PublishLiveValues();
+        // The macro board mirrors the same switch, so a press on any panel relabels every copy.
+        _macroDock?.SyncLiveState(enabled);
+        if (enabled)
+        {
+            // Going live means "put what is waiting on air", including staged roster readings.
+            _engine.PublishStagedPlayers();
+            PublishLiveValues();
+        }
+    }
+
+    void Undo_Click(object sender, RoutedEventArgs e)
+    {
+        if (_engine.Undo())
+        {
+            StatusText.Text = "UNDONE · the last action was taken back";
+            // A macro or roster edit is part of the same history, so the board and the stats desk
+            // have to show the restored values rather than the ones they were holding.
+            _macroDock?.RefreshView();
+            RosterControl.RefreshView();
+            AutoSave();
+        }
+        SyncHistory();
+    }
+
+    void Redo_Click(object sender, RoutedEventArgs e)
+    {
+        if (_engine.Redo())
+        {
+            StatusText.Text = "REDONE · the action was put back";
+            _macroDock?.RefreshView();
+            RosterControl.RefreshView();
+            AutoSave();
+        }
+        SyncHistory();
+    }
+
+    /// <summary>Greys a history button out when there is nothing to step to.</summary>
+    void SyncHistory()
+    {
+        UndoButton.IsEnabled = _engine.CanUndo;
+        RedoButton.IsEnabled = _engine.CanRedo;
     }
 
     void EngineChanged()
     {
+        SyncHistory();
         // The Replay Booth maps a recorded frame back to the game and play clocks that were showing
         // when it happened. Sample here, on the same UI thread as every clock tick and correction.
         ReplayBoothHistory.Sample(_engine.State);
