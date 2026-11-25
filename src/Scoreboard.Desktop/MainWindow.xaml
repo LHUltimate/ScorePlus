@@ -94,13 +94,8 @@
           <Button Style="{StaticResource HeaderButton}" Content="Animation Maker" Click="AnimationMaker_Click" ToolTip="Key motion a value follows — a loop while it is up, or a flourish when it changes"/>
           <Button Style="{StaticResource HeaderButton}" Content="Multiview" Click="Multiview_Click" ToolTip="Every camera at once, with the replay preview beside the live picture"/>
           <Button Style="{StaticResource HeaderButton}" Content="Replay Booth" Click="ReplayBooth_Click" ToolTip="Review the last replay window of every camera with the clocks that were showing"/>
-          <Button Style="{StaticResource HeaderButton}" Content="Venue" Click="Venue_Click"
-                  ToolTip="Venue — displays, playlists, schedules, sponsors, proof of play and channels"/>
           <Button Style="{StaticResource HeaderButton}" Content="Control Room" Click="ControlRoom_Click"
-                  ToolTip="Show Control Map — Display Studio, Content Studio, Live Switch and Live Channel, each in its own window"/>
-          <Button Style="{StaticResource HeaderButton}" Content="Content Studio" Click="ContentStudio_Click"
-                  ToolTip="Template gallery, brand kit, storyboards, sponsor inventory and content packs"/>
-          <Button Style="{StaticResource HeaderButton}" Content="Display Studio" Click="ScorebugStudio_Click"/>
+                  ToolTip="Control Room — map of display, content, show, live switch, live channel and venue surfaces"/>
           <Button Style="{StaticResource HeaderButton}" Content="Sport Profiles" Click="SportProfiles_Click"/>
           <Button Style="{StaticResource HeaderButton}" Content="Swap Teams" Click="SwapTeams_Click"
                   ToolTip="Swap the home and visitors identity — names, colours, logos and records — across every layout"/>
@@ -215,7 +210,7 @@
 
       <GridSplitter Grid.Column="1" Style="{StaticResource SplitterStyle}" Width="7" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
 
-      <!-- Operator surface: the console on one tab, the whole media desk on the other. -->
+      <!-- Operator surface: scoring, media, stats and data; the show board lives in Control Room. -->
       <Grid Grid.Column="2">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>
@@ -226,8 +221,6 @@
           <Button x:Name="MediaTab" Style="{StaticResource TabButton}" Content="MEDIA" Click="MediaTab_Click" ToolTip="Clips, camera, replay and playlists"/>
           <Button x:Name="RosterTab" Style="{StaticResource TabButton}" Content="STATS" Click="RosterTab_Click"
                   ToolTip="Rosters, player stats and the player on the graphic"/>
-          <Button x:Name="MacrosTab" Style="{StaticResource TabButton}" Content="SHOW" Click="MacrosTab_Click"
-                  ToolTip="The show's ordered cues, the macro palette they run, and the step editor"/>
           <Button x:Name="DataTab" Style="{StaticResource TabButton}" Content="DATA" Click="DataTab_Click"
                   ToolTip="Data sources, row viewer and mappings into game and custom values"/>
         </StackPanel>
@@ -235,7 +228,6 @@
           <ContentControl x:Name="ControlHost"/>
           <local:MediaDock x:Name="MediaControl" Visibility="Collapsed"/>
           <local:RosterDock x:Name="RosterControl" Visibility="Collapsed"/>
-          <ContentControl x:Name="MacroHost" Visibility="Collapsed"/>
           <ContentControl x:Name="DataHost" Visibility="Collapsed"/>
         </Grid>
       </Grid>

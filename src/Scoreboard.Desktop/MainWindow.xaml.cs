@@ -37,6 +37,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     readonly ReplayBoothController _booth;
     readonly HardwareService _hardware;
     readonly VenueEngine _venue;
+    readonly NodeService _nodes;
     readonly DataDock _dataDock;
     LeagueCloudService? _leagueCloud;
     bool _displaySync;
@@ -48,6 +49,9 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     // on the projector and on the operator's copy rather than existing inside a single window.
     readonly Dictionary<string, AnnotationBoard> _annotationBoards = new(StringComparer.OrdinalIgnoreCase);
     EventLogWindow? _log;
+    ControlRoomWindow? _controlRoom;
+    ShowWindow? _showWindow;
+    VenueWindow? _venueWindow;
     RemoteControlServer? _remote;
     // What /watch is showing, one frame per display, and a counter the page watches so a wall
     // screen only fetches a picture when the graphic changed.
@@ -198,6 +202,10 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         };
         _venue.Status += message => Dispatcher.BeginInvoke(new Action(() => StatusText.Text = message));
         _venue.Changed += () => Dispatcher.BeginInvoke(new Action(() => RefreshLayoutIndicators()));
+        // Stage 5 is optional infrastructure: with no nodes this service is inert and the console
+        // keeps rendering every display in-process. A node only joins when the operator adds one.
+        _nodes = new NodeService(_venue, _engine, _scorebug, Dispatcher);
+        _nodes.Changed += NodesChanged;
         _dataDock = new DataDock(_engine, _preferences.Theme, _leagueCloud)
         {
             OpenLeagueCloudRequested = () => LeagueCloud_Click(this, new RoutedEventArgs()),
@@ -243,14 +251,6 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         RemoteControlServer.ActionAllowed = action => OperatorCanScore(_preferences.OperatorRole) || !ScoreChanging(action);
         // The theme pass repaints every button when the window loads, which used to wipe the green
         // outline off the already-selected tab until another tab was clicked.
-        // Space, Page Up and Page Down belong to the run of show while its tab is open; text and
-        // combo boxes keep them, so typing a cue name never fires the show.
-        PreviewKeyDown += (_, e) =>
-        {
-            if (_tab != GameControlWindow.ConsoleTab.Macros || _macroDock is null) return;
-            if (Keyboard.FocusedElement is TextBox or ComboBox) return;
-            if (_macroDock.HandleTransportKey(e.Key)) e.Handled = true;
-        };
         Loaded += (_, _) =>
         {
             ApplyTabVisuals();
@@ -269,11 +269,13 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         RosterControl.Attach(_engine, PublishGameState, () => _liveScoreClock, SetLiveScoreClock);
         RosterControl.ApplyTheme(_preferences.Theme);
         RosterControl.SetHintVisibility(_preferences.ShowHeadingHints);
+        // The show window and Control Room share this board, but the console owns it so the phone
+        // remote and detached panels keep reading one cue list. compact turns it into the live-book
+        // macro grid.
         _macroDock = new MacroDock(_engine, _session, _preferences.Theme, _panel.Execute, _scorebug, PublishGameState,
-            () => _liveScoreClock, SetLiveScoreClock, () => OpenConditionals(AutomationScope.Macro));
+            () => _liveScoreClock, SetLiveScoreClock, () => OpenConditionals(AutomationScope.Macro), compact: true);
         _macroDock.SetHintVisibility(_preferences.ShowHeadingHints);
         _macroDock.Status += message => StatusText.Text = message;
-        MacroHost.Content = _macroDock;
         MediaControl.Attach(_session);
         MediaControl.OpenConditionals = () => OpenConditionals(AutomationScope.Media);
         MediaControl.ApplyTheme(_preferences.Theme);
@@ -673,6 +675,16 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _preview?.Refresh();
         // The monitor listens to the published engine itself, so the copy above already repaints it.
         foreach (var output in _outputs) output.Publish();
+        // A no-node show does no network work. With nodes, Update Output is the one GO that
+        // sequence-stamps the state for every player and sync group.
+        _nodes.Broadcast();
+    }
+
+    void NodesChanged()
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(NodesChanged); return; }
+        _lastHealthSecond = -1;
+        UpdateShowHealth();
     }
 
     /// <summary>
@@ -801,27 +813,25 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
 
     void RosterTab_Click(object sender, RoutedEventArgs e) => ShowTab(GameControlWindow.ConsoleTab.Rosters);
 
-    void MacrosTab_Click(object sender, RoutedEventArgs e) => ShowTab(GameControlWindow.ConsoleTab.Macros);
-
     void DataTab_Click(object sender, RoutedEventArgs e) => ShowTab(GameControlWindow.ConsoleTab.Data);
 
-    /// <summary>Switches the operator surface between the console, media, roster, macros and data.</summary>
+    /// <summary>Switches the operator surface between the console, media, roster and data.</summary>
     void ShowTab(GameControlWindow.ConsoleTab tab)
     {
-        // Leaving the macro editor is a natural save point; the operator should not lose the
-        // name or step they just typed by clicking another tab.
-        if (_tab == GameControlWindow.ConsoleTab.Macros && tab != GameControlWindow.ConsoleTab.Macros)
-            _macroDock?.CommitPendingEdits();
+        // SHOW is the live-book window; the console does not host a second board.
+        if (tab == GameControlWindow.ConsoleTab.Macros)
+        {
+            OpenShowWindow();
+            return;
+        }
         _tab = tab;
         ControlHost.Visibility = tab == GameControlWindow.ConsoleTab.Control ? Visibility.Visible : Visibility.Collapsed;
         MediaControl.Visibility = tab == GameControlWindow.ConsoleTab.Media ? Visibility.Visible : Visibility.Collapsed;
         RosterControl.Visibility = tab == GameControlWindow.ConsoleTab.Rosters ? Visibility.Visible : Visibility.Collapsed;
-        MacroHost.Visibility = tab == GameControlWindow.ConsoleTab.Macros ? Visibility.Visible : Visibility.Collapsed;
         DataHost.Visibility = tab == GameControlWindow.ConsoleTab.Data ? Visibility.Visible : Visibility.Collapsed;
         ApplyTabVisuals();
         if (tab == GameControlWindow.ConsoleTab.Media) MediaControl.RefreshView();
         if (tab == GameControlWindow.ConsoleTab.Rosters) RosterControl.RefreshView();
-        if (tab == GameControlWindow.ConsoleTab.Macros) _macroDock?.RefreshView();
         if (tab == GameControlWindow.ConsoleTab.Data) _dataDock.RefreshView();
     }
 
@@ -842,8 +852,15 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         var offBorder = (Brush)new BrushConverter().ConvertFromString(light ? "#C9D2DC" : "#28323F")!;
         var muted = (Brush)new BrushConverter().ConvertFromString(light ? "#586576" : "#93A0B2")!;
         var onText = (Brush)new BrushConverter().ConvertFromString(light ? "#18202B" : "#F4F7FB")!;
-        Button[] tabs = [ControlTab, MediaTab, RosterTab, MacrosTab, DataTab];
-        var active = (int)_tab;
+        Button[] tabs = [ControlTab, MediaTab, RosterTab, DataTab];
+        var active = _tab switch
+        {
+            GameControlWindow.ConsoleTab.Control => 0,
+            GameControlWindow.ConsoleTab.Media => 1,
+            GameControlWindow.ConsoleTab.Rosters => 2,
+            GameControlWindow.ConsoleTab.Data => 3,
+            _ => -1
+        };
         for (var i = 0; i < tabs.Length; i++)
         {
             tabs[i].Background = i == active ? on : off;
@@ -959,9 +976,13 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(UpdateShowHealth); return; }
         var events = ShowBus.Shared.Count;
         var live = _automation.ActiveRuleCount;
-        ShowHealth.Text = $"SPINE · {events} event{(events == 1 ? "" : "s")} · {live} live";
+        var fabric = _nodes.IsLocalMode ? "LOCAL" : $"{_nodes.OnlineCount}/{_nodes.Nodes.Count} NODES";
+        ShowHealth.Text = $"SPINE · {events} event{(events == 1 ? "" : "s")} · {live} live · {fabric}";
         ShowHealth.ToolTip =
             $"Show spine: {events} events this session, {live} automation rule{(live == 1 ? "" : "s")} matching now.\n" +
+            (_nodes.IsLocalMode
+                ? "Fabric: local mode. This PC renders every display."
+                : $"Fabric: {_nodes.Summary}. Open Venue → Nodes for roles, sync groups and packages.") + "\n" +
             "Open the Event Log and choose Triggers for the rule list and its last state.";
     }
 
@@ -973,38 +994,61 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _log.Show();
     }
 
-    void ControlRoom_Click(object sender, RoutedEventArgs e)
+    void ControlRoom_Click(object sender, RoutedEventArgs e) => OpenControlRoom();
+
+    /// <summary>The compact live-book board, shared with the Show window and phone remote.</summary>
+    public MacroDock? ShowBoard => _macroDock;
+
+    /// <summary>One map for every surface. Show and Venue open from it as their own windows.</summary>
+    void OpenControlRoom()
     {
-        var hub = new ControlRoomWindow(_scorebug, _engine, _playback, _automation, _preferences.Theme) { Owner = this };
-        hub.Show();
+        if (_controlRoom is { IsVisible: true })
+        {
+            if (_controlRoom.WindowState == WindowState.Minimized) _controlRoom.WindowState = WindowState.Normal;
+            _controlRoom.Activate();
+            return;
+        }
+        _controlRoom = new ControlRoomWindow(_scorebug, _engine, _playback, _automation, _preferences.Theme,
+            _venue, OpenShowWindow, OpenVenueWindow) { Owner = this };
+        _controlRoom.Closed += (_, _) => _controlRoom = null;
+        _controlRoom.Show();
     }
 
-    void Venue_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Opens the live-book page in its own window. A Cues-role profile may ask for it before the
+    /// console has finished building its board, so wait for the window and board to exist.
+    /// </summary>
+    void OpenShowWindow(Window? owner = null)
     {
-        new VenueWindow(_venue, _scorebug, _engine, _playback, _automation, _preferences.Theme) { Owner = this }.Show();
+        if (!IsLoaded || _macroDock is null)
+        {
+            Dispatcher.BeginInvoke(new Action(() => OpenShowWindow(owner)), DispatcherPriority.ApplicationIdle);
+            return;
+        }
+        if (_showWindow is { IsVisible: true })
+        {
+            if (_showWindow.WindowState == WindowState.Minimized) _showWindow.WindowState = WindowState.Normal;
+            _showWindow.Activate();
+            return;
+        }
+        _showWindow = new ShowWindow(_scorebug, _engine, _macroDock, _preferences.Theme) { Owner = owner ?? this };
+        _showWindow.Closed += (_, _) => _showWindow = null;
+        _showWindow.Show();
     }
 
-    void ContentStudio_Click(object sender, RoutedEventArgs e)
+    /// <summary>Opens the venue fleet and scheduled-content desk in its own window.</summary>
+    void OpenVenueWindow(Window? owner = null)
     {
-        var studio = new ContentStudioWindow(_scorebug, _engine, _preferences.Theme) { Owner = this };
-        studio.Show();
-    }
-
-    void ScorebugStudio_Click(object sender, RoutedEventArgs e)
-    {
-        // The studio edits exactly the display and layout this window is previewing.
-        var displayIndex = _scorebug.Displays.FindIndex(display => string.Equals(display.Id, _program.DisplayId, StringComparison.OrdinalIgnoreCase));
-        if (displayIndex >= 0) _scorebug.SelectDisplay(displayIndex);
-        _scorebug.SelectLayout(_program.LayoutIndex);
-        var studio = new ScorebugEditorWindow(_scorebug, _engine, _playback, _preferences.Theme, _automation) { Owner = this };
-        studio.ShowDialog();
-        // The studio can add, delete or switch layouts; the preview and every panel follow.
-        _preview?.Rebuild();
-        RefreshLayoutIndicators();
-        _panel.Refresh();
-        foreach (var panel in _controlPanels.Where(p => p.IsVisible)) panel.Panel.Refresh();
-        // A quick button may point at the layout that was just renamed or removed.
-        _quickLayouts?.Refresh();
+        if (_venueWindow is { IsVisible: true })
+        {
+            if (_venueWindow.WindowState == WindowState.Minimized) _venueWindow.WindowState = WindowState.Normal;
+            _venueWindow.Activate();
+            return;
+        }
+        _venueWindow = new VenueWindow(_venue, _scorebug, _engine, _playback, _automation, _preferences.Theme, _nodes)
+            { Owner = owner ?? this };
+        _venueWindow.Closed += (_, _) => _venueWindow = null;
+        _venueWindow.Show();
     }
 
     /// <summary>
@@ -1118,7 +1162,6 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         ControlTab.Visibility = control ? Visibility.Visible : Visibility.Collapsed;
         MediaTab.Visibility = media ? Visibility.Visible : Visibility.Collapsed;
         RosterTab.Visibility = rosters ? Visibility.Visible : Visibility.Collapsed;
-        MacrosTab.Visibility = cues ? Visibility.Visible : Visibility.Collapsed;
         DataTab.Visibility = data ? Visibility.Visible : Visibility.Collapsed;
         var allowed = _tab switch
         {
@@ -1129,7 +1172,11 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
             GameControlWindow.ConsoleTab.Data => data,
             _ => false
         };
-        if (!allowed) ShowTab(cues ? GameControlWindow.ConsoleTab.Macros : control ? GameControlWindow.ConsoleTab.Control : GameControlWindow.ConsoleTab.Media);
+        if (!allowed)
+        {
+            if (cues) OpenShowWindow();
+            else ShowTab(control ? GameControlWindow.ConsoleTab.Control : GameControlWindow.ConsoleTab.Media);
+        }
         else ApplyTabVisuals();
     }
 
@@ -2005,6 +2052,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         try { _hardware.Dispose(); } catch { }
         try { HornPlayer.Stop(); } catch { }
         try { _remote?.Dispose(); } catch { }
+        try { _nodes.Dispose(); } catch { }
         try { _automation.Dispose(); } catch { }
         try { _booth.Dispose(); } catch { }
         try { _program.Dispose(); } catch { }

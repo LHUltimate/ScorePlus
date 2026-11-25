@@ -220,9 +220,9 @@ researched tool set is left out, and nothing here requires dedicated appliance h
 | Proof-of-play reporting with export | 4 | No |
 | Sponsor inventory, ad slots and rotation weights | 4 | No |
 | Headend channel: camera plus overlays to venue TVs over IPTV | 4 | No |
-| Software playback nodes with sync groups | 5 | No |
-| Processor node: scaling, pixel mapping, colour match, low latency | 5 | No |
-| High resolution and HDR output | 5 | No |
+| Software playback nodes with sync groups | 5 | Yes — local mode plus headless agents |
+| Processor node: scaling, pixel mapping, colour match, low latency | 5 | Yes — calibration and test pattern per node |
+| High resolution and HDR output | 5 | Yes — per-node output settings |
 | Clip server: two channels, audio, alpha, internal or external keying | 6 | Single clip player |
 | Audio normalisation and per-clip levels | 6 | Partial |
 | Graphics output to a router as fill+key | 6 | No |
@@ -238,6 +238,7 @@ researched tool set is left out, and nothing here requires dedicated appliance h
 | Replay desk: multi-angle, variable slow motion, frame stepping, tagged clips, export | 6 | Basic replay |
 | Clip export to social, network share or FTP | 6 | No |
 | Stream overlays (scorebug and stats over a stream) | 6 | No |
+| Live Book: software-only stream compositor with scorebugs, lower thirds, scenes and destinations | 6 | No |
 | Stream destinations | 6 | No |
 | Lighting control: cue stacks, fades, effects for small rigs | 7 | No |
 | Audio scene control (play, stop, levels, routing presets) | 7 | Partial |
@@ -510,8 +511,12 @@ rings, corner boards and concourse screens fed by separate computers, and they m
 Ships:
 
 - **A node agent**: a headless mode of the same application, installed on any ordinary PC on the
-  venue network. It receives show state and content packages, renders locally, reports health and
-  frame stats, and keeps playing its last known state if the control machine disappears.
+  venue network (`ScorePlus.exe --node --port 8098 --name "Ribbon"`). It receives show state and
+  content packages, renders locally, reports health and frame stats, and keeps playing its last
+  known state if the control machine disappears.
+- **Local mode is the default**: with no nodes configured the console renders every display
+  in-process, so a one-machine school show or small production needs no agent, network service or
+  extra licence. Nodes are opt-in when a larger venue adds computers or processors.
 - **Node roles**: player node (layouts, clips, ticker), processor node (scaling, pixel mapping,
   colour matching, curved and irregular display shapes, low-latency output), monitor node (multiview
   of program, preview, cameras and node health).
@@ -584,6 +589,11 @@ Ships:
   levels).
 - **Stream overlays**: a scorebug and stat graphics rendered over any outgoing stream — browser
   source, NDI or key/fill — so streaming audiences see the same data as the venue.
+- **Live Book**: a software-only broadcast graphics page that stacks scorebugs, lower thirds, stat
+  cards and full-frame graphics over the programme feed, then encodes to a stream destination. It
+  runs on the control PC or an ordinary graphics-output PC — no dedicated hardware or appliance —
+  and reads the same layouts, cues and live game data as the venue. Benchmark:
+  [Daktronics LiveBook GFX](https://www.daktronics.com/en-us/products/software-and-controllers/show-control/products/livebook-gfx).
 - **Stream destinations**: saved endpoints for one or more platforms, with the live state and health
   visible on air.
 
@@ -592,8 +602,9 @@ settings rather than a separate app. **Key/Fill** is another mode on the output 
 manages audience displays. Channels are a second selector on the existing MEDIA tab — not a second
 clip player — and the broadcast panel is the current output list with take/edit. A **Vision** page
 holds the switcher's program/preview and the replay desk; the camera wall becomes its source rack. A
-**Graphics output** toggle marks which machine renders the router feed; a **Destinations** page holds
-stream endpoints.
+**Graphics output** toggle marks which machine renders the router feed; a **Live Book** surface
+launched from the Control Room holds the stream compositor, scene list and destination state, and a
+**Destinations** page holds stream endpoints.
 
 Program changes: an output abstraction with NDI and SDI backends; an alpha render path through
 `ScorebugRender`/`VideoSurface`; clip-server channels inside `MediaSession`, reusing the existing

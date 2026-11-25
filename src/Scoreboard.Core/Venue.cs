@@ -152,6 +152,13 @@ public sealed class VenueState
     public List<VenueSponsor> Sponsors { get; set; } = [];
     public List<VenueChannel> Channels { get; set; } = [];
     public List<VenueProof> Proof { get; set; } = [];
+
+    /// <summary>Optional playback nodes. An empty list is the normal single-machine setup: this
+    /// PC renders every display and no network service is needed.</summary>
+    public List<DisplayNode> Nodes { get; set; } = [];
+
+    /// <summary>Frame-clock groups shared by nodes. A group is optional on one machine.</summary>
+    public List<SyncGroup> SyncGroups { get; set; } = [];
 }
 
 /// <summary>Persistence for the venue document, with the same never-crash-a-show policy as the
@@ -190,6 +197,12 @@ public sealed class VenueStore
         State.Sponsors ??= [];
         State.Channels ??= [];
         State.Proof ??= [];
+        State.Nodes ??= [];
+        State.SyncGroups ??= [];
+        State.Nodes = State.Nodes.Where(node => node is not null).Take(64).ToList();
+        foreach (var node in State.Nodes) node.Normalize();
+        State.SyncGroups = State.SyncGroups.Where(group => group is not null).Take(32).ToList();
+        foreach (var group in State.SyncGroups) group.Normalize();
         foreach (var playlist in State.Playlists)
         {
             playlist.Id = string.IsNullOrWhiteSpace(playlist.Id) ? Guid.NewGuid().ToString("N") : playlist.Id.Trim();
@@ -247,6 +260,29 @@ public sealed class VenueStore
         var schedule = new VenueSchedule { Name = string.IsNullOrWhiteSpace(name) ? $"Schedule {State.Schedules.Count + 1}" : name.Trim() };
         State.Schedules.Add(schedule);
         return schedule;
+    }
+
+    public DisplayNode AddNode(string? address = null, string? name = null)
+    {
+        var node = new DisplayNode
+        {
+            Name = string.IsNullOrWhiteSpace(name) ? $"Node {State.Nodes.Count + 1}" : name.Trim(),
+            Address = string.IsNullOrWhiteSpace(address) ? "127.0.0.1" : address.Trim()
+        };
+        if (State.SyncGroups.Count == 0) AddSyncGroup("Main sync");
+        node.SyncGroupId = State.SyncGroups[0].Id;
+        State.Nodes.Add(node);
+        return node;
+    }
+
+    public SyncGroup AddSyncGroup(string? name = null)
+    {
+        var group = new SyncGroup
+        {
+            Name = string.IsNullOrWhiteSpace(name) ? $"Sync group {State.SyncGroups.Count + 1}" : name.Trim()
+        };
+        State.SyncGroups.Add(group);
+        return group;
     }
 }
 

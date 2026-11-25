@@ -51,6 +51,8 @@ public partial class MacroDock : UserControl
     sealed record MacroDropTarget(int Row, int Column, bool NewRow);
     sealed record MacroPlacement(SavedMacro Macro, int Row, int Column);
     bool _editorVisible = true;
+    readonly bool _compact;
+    bool _engineHooked;
     bool _showHints;
     int _page;
     int _pageCount = 1;
@@ -169,8 +171,10 @@ public partial class MacroDock : UserControl
 
     public MacroDock(GameEngine engine, MediaSession session, string? theme = null, Action<string>? executeControl = null,
         ScorebugCatalog? catalog = null, Action? publishOutput = null,
-        Func<bool>? liveState = null, Action<bool>? setLive = null, Action? openConditionals = null)
+        Func<bool>? liveState = null, Action<bool>? setLive = null, Action? openConditionals = null,
+        bool compact = false)
     {
+        _compact = compact;
         InitializeComponent();
         _openConditionals = openConditionals;
         // A host that cannot open the rule editor leaves the button out instead of showing a dead one.
@@ -183,10 +187,12 @@ public partial class MacroDock : UserControl
         _setLive = setLive;
         _runner = new MacroRunner(engine, session, executeControl, catalog, publishOutput);
         _cues = new CueRunner(engine, _runner);
-        _engine.Changed += CueChanged;
         _practice.Tick += RefreshPracticeStatus;
-        _engine.Changed += PracticeChanged;
-        Unloaded += (_, _) => { _engine.Changed -= CueChanged; _engine.Changed -= PracticeChanged; _practice.Stop(); };
+        AttachEngine();
+        // The compact show page is a grid of small macro boxes, like a live-book page. The step
+        // editor is still one click away, but it must not eat the space the buttons need.
+        Loaded += (_, _) => AttachEngine();
+        Unloaded += (_, _) => DetachEngine();
         // The board paints itself from its own palette so generated cards, the step list and the
         // editor all follow the active theme. Opting out keeps the window-wide theme pass from
         // flattening the card hierarchy and its accent.
@@ -265,6 +271,28 @@ public partial class MacroDock : UserControl
         RefreshView();
         RefreshPractice();
         RefreshCues(force: true);
+        if (_compact) SetEditorVisible(false);
+    }
+
+    /// <summary>True for the small live-book grid used by Control Room.</summary>
+    public bool Compact => _compact;
+
+    /// <summary>Keeps the board subscribed while it is hosted, including after a tab rehosts it.</summary>
+    void AttachEngine()
+    {
+        if (_engineHooked) return;
+        _engine.Changed += CueChanged;
+        _engine.Changed += PracticeChanged;
+        _engineHooked = true;
+    }
+
+    void DetachEngine()
+    {
+        if (!_engineHooked) return;
+        _engine.Changed -= CueChanged;
+        _engine.Changed -= PracticeChanged;
+        _practice.Stop();
+        _engineHooked = false;
     }
 
     /// <summary>
@@ -637,33 +665,39 @@ public partial class MacroDock : UserControl
         Status?.Invoke($"MACRO · Added blank page {_page + 1}");
     }
 
-    void ToggleEditor_Click(object sender, RoutedEventArgs e)
+    public void SetEditorVisible(bool visible)
     {
-        _editorVisible = !_editorVisible;
+        _editorVisible = visible;
         MacroEditorColumn.Width = _editorVisible ? new GridLength(358) : new GridLength(0);
         MacroEditorSplitterColumn.Width = _editorVisible ? new GridLength(8) : new GridLength(0);
         MacroEditor.Visibility = _editorVisible ? Visibility.Visible : Visibility.Collapsed;
         MacroEditorSplitter.Visibility = _editorVisible ? Visibility.Visible : Visibility.Collapsed;
         EditorToggleButton.Content = _editorVisible ? "Hide editor" : "Show editor";
-        // The board has not arranged at its new width yet; let layout settle, then fit the
-        // cards so nine occupy each row when the editor is hidden instead of four.
+        // The board has not arranged at its new width yet; let layout settle, then fit the cards
+        // so the chosen density uses the whole page instead of the old count.
         Dispatcher.BeginInvoke(new Action(RenderMacros), System.Windows.Threading.DispatcherPriority.Loaded);
     }
+
+    void ToggleEditor_Click(object sender, RoutedEventArgs e) => SetEditorVisible(!_editorVisible);
+
+    double CardGap => _compact ? 4 : 8;
 
     double CardWidth()
     {
         var available = MacroButtons.ActualWidth;
         if (available <= 0) available = Math.Max(360, ActualWidth - (_editorVisible ? 380 : 16));
-        // Nine cards is the board's maximum and the uncluttered board always uses all nine. Every
-        // card carries a right margin of 8, including the last one in the row, so the width must
-        // leave room for all nine margins; subtracting only the gaps made the ninth card wrap.
+        // Every card carries a right margin, including the last one in the row, so the width must
+        // leave room for all the gaps; subtracting only the spaces between cards made the last
+        // card wrap.
         var columns = MacroColumns();
-        // Leave a half-pixel of slack so layout rounding can never push the ninth card onto a
+        // Leave a half-pixel of slack so layout rounding can never push the last card onto a
         // second row when the board is exactly wide enough.
-        return Math.Max(32, (available - columns * 8 - 0.5) / columns);
+        return Math.Max(24, (available - columns * CardGap - 0.5) / columns);
     }
 
-    int MacroColumns() => _editorVisible ? 5 : 9;
+    int MacroColumns() => _compact
+        ? (_editorVisible ? 7 : 12)
+        : (_editorVisible ? 5 : 9);
 
     void UpdateCardWidths()
     {
@@ -714,12 +748,12 @@ public partial class MacroDock : UserControl
         var card = new Border
         {
             Width = CardWidth(),
-            Margin = new Thickness(0, 0, 8, 8),
-            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, CardGap, CardGap),
+            Padding = new Thickness(_compact ? 3 : 8),
             Background = (Brush)Resources["MacroSurfaceBrush"],
             BorderBrush = customColor is Color cardColor ? ColorBrush(cardColor) : (Brush)Resources["MacroBorderBrush"],
             BorderThickness = new Thickness(customColor is null ? 1 : 2),
-            CornerRadius = new CornerRadius(9),
+            CornerRadius = new CornerRadius(_compact ? 5 : 9),
             Tag = macro
         };
         card.PreviewMouseLeftButtonDown += MacroCard_MouseDown;
@@ -738,7 +772,13 @@ public partial class MacroDock : UserControl
             Tag = macro,
             ToolTip = "Drag to any cell · click or double-click to edit · right-click for Edit / Delete"
         };
-        if (_showHints)
+        if (_compact)
+        {
+            // The tiny live-book button keeps the drag surface but gives the label every pixel.
+            header.MinHeight = 6;
+            header.Padding = new Thickness(0);
+        }
+        else if (_showHints)
         {
             header.Child = new TextBlock
             {
@@ -768,9 +808,16 @@ public partial class MacroDock : UserControl
                 TextWrapping = TextWrapping.Wrap
             },
             Tag = macro,
-            HorizontalContentAlignment = HorizontalAlignment.Left,
+            HorizontalContentAlignment = _compact ? HorizontalAlignment.Center : HorizontalAlignment.Left,
             ToolTip = string.Join(Environment.NewLine, macro.Actions.Select(action => action.Summary))
         };
+        if (_compact)
+        {
+            run.FontSize = 9;
+            run.Padding = new Thickness(4, 2, 4, 2);
+            run.MinHeight = 20;
+            run.Margin = new Thickness(0);
+        }
         if (customColor is Color fill)
         {
             // A custom colour owns the button itself, not just a tiny border stripe, so a

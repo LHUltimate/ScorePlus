@@ -57,13 +57,15 @@ internal static class Program
             Seed(macroWindow.Engine);
             macroWindow.PublishOutput();
             macroWindow.UpdateLayout();
-            if (macroWindow.FindName("MacroHost") is ContentControl macroHost
-                && macroHost.Content is MacroDock macroDock)
-                macroDock.RefreshView(force: true);
-            if (macroWindow.FindName("MacrosTab") is Button macrosTab)
-                macrosTab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var macroRoom = new ShowWindow(macroWindow.Scorebug, macroWindow.Engine, macroWindow.ShowBoard!, "Dark")
+            {
+                Width = 1440,
+                Height = 960
+            };
+            macroRoom.ShowBoard.RefreshView(force: true);
             Pump(250);
-            Capture(macroWindow, Path.Combine(output, "macros.png"), 1440, 960);
+            Capture(macroRoom, Path.Combine(output, "macros.png"), 1440, 960);
+            macroRoom.Close();
             macroWindow.Close();
 
             var studio = new ScorebugEditorWindow(catalog, engine) { Width = 1892, Height = 1004 };
@@ -118,9 +120,13 @@ internal static class Program
             });
             var venueEngine = new VenueEngine(catalog, engine, venueStore);
             venueEngine.BeginPlaylist(venuePlaylist.Id, DateTimeOffset.Now);
-            var venueWindow = new VenueWindow(venueEngine, catalog, engine) { Width = 1480, Height = 920 };
-            Capture(venueWindow, Path.Combine(output, "venue.png"), 1480, 920);
-            venueWindow.Close();
+            var venueRoom = new VenueWindow(venueEngine, catalog, engine)
+            {
+                Width = 1480,
+                Height = 920
+            };
+            Capture(venueRoom, Path.Combine(output, "venue.png"), 1480, 920);
+            venueRoom.Close();
 
             var dataShell = new MainWindow(LaunchMode.New) { Width = 1440, Height = 960 };
             Seed(dataShell.Engine);

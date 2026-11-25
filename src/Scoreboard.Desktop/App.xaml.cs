@@ -12,6 +12,7 @@ public partial class App : Application
 {
     // Held for the life of the process; the OS releases it when ScorePlus exits.
     static Mutex? _singleInstance;
+    static NodeAgent? _nodeAgent;
 
     /// <summary>
     /// The smoke harness sets this environment variable before creating the App. It is read in
@@ -24,6 +25,13 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         if (SuppressStartupForSmoke) return;
+        // Node mode is the same executable with no console and no single-instance mutex, so an
+        // output PC can run beside the control room. It is opt-in; a normal launch never sees it.
+        if (NodeAgent.TryParseLaunch(e.Args, out var nodeOptions))
+        {
+            StartNode(nodeOptions);
+            return;
+        }
         // Media decoders and other native components can fail on threads the dispatcher never
         // sees. Log those too, so a window that closes on its own leaves a trace to diagnose.
         // F11 belongs to the application, not to one window: the studio, output, media panel and
@@ -75,6 +83,20 @@ public partial class App : Application
         window.StartFromLauncher(launcher.Mode, launcher.GamePath, launcher.SportId, launcher.GameName, launcher.TemplateId);
     }
 
+    void StartNode(NodeAgentOptions options)
+    {
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        _nodeAgent = new NodeAgent(options, Dispatcher);
+        if (!_nodeAgent.Start())
+        {
+            NoticeWindow.Tell(null, "ScorePlus node could not start",
+                _nodeAgent.Error ?? "The node port is not available.", warning: true);
+            Shutdown();
+            return;
+        }
+        if (!options.Headless) _nodeAgent.ShowOutput(options.Fullscreen);
+    }
+
     static void HandleWindowKey(object sender, KeyEventArgs e)
     {
         if (sender is not Window window || e.Handled) return;
@@ -122,6 +144,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        try { _nodeAgent?.Dispose(); } catch { }
         base.OnExit(e);
         // The smoke harness shares this App but creates and closes windows all run; don't terminate
         // it before its own cleanup and result reporting.

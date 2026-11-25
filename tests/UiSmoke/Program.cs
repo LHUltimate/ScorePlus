@@ -824,16 +824,27 @@ internal static class Program
                 Console.WriteLine("PASS: the program preview's undo and redo buttons step the show back and forward");
             }
 
-            // Macros are part of the main workspace. Conditionals now belong to the Display Studio,
-            // where their rules sit beside the display they affect.
+            // The compact live-book board lives in its own Show window, opened from Control Room.
+            // The main window has no SHOW tab; conditionals belong to the Display Studio.
             var tabShell = new MainWindow(LaunchMode.New) { Width = 1280, Height = 800 };
             ShowForSmoke(tabShell);
             tabShell.UpdateLayout();
-            ((Button)tabShell.FindName("MacrosTab")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            tabShell.UpdateLayout();
-            if (tabShell.FindName("MacroHost") is not ContentControl { Content: MacroDock })
-                throw new Exception("FAIL: the Macros tab does not host the macro board");
-            var macroDock = (MacroDock)((ContentControl)tabShell.FindName("MacroHost")!).Content!;
+            if (tabShell.FindName("MacrosTab") is not null
+                || FindAll<Button>(tabShell).Any(button => button.Content as string == "SHOW"))
+                throw new Exception("FAIL: the main window still has a SHOW tab");
+            var controlRoomButton = FindAll<Button>(tabShell).First(button => button.Content as string == "Control Room");
+            controlRoomButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            var showRoom = Application.Current.Windows.OfType<ControlRoomWindow>().LastOrDefault()
+                ?? throw new Exception("FAIL: Control Room did not open from the main window");
+            ((Button)showRoom.FindName("ShowCard")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            var showWindow = Application.Current.Windows.OfType<ShowWindow>().LastOrDefault()
+                ?? throw new Exception("FAIL: Control Room's Show card did not open the Show window");
+            showWindow.UpdateLayout();
+            if (showWindow.FindName("ShowHost") is not ContentControl { Content: MacroDock })
+                throw new Exception("FAIL: the Show window does not host the macro board");
+            var macroDock = showWindow.ShowBoard;
             var firstDrag = new SavedMacro { Label = "First drag", Color = "#FF6B6B" };
             var secondDrag = new SavedMacro { Label = "Second drag", Color = "#4C9AFF" };
             tabShell.Engine.StoreMacros([firstDrag, secondDrag]);
@@ -842,24 +853,30 @@ internal static class Program
             var macroCards = FindAll<Border>(macroDock).Where(border => border.Tag is SavedMacro && border.Child is StackPanel).ToList();
             var dragStrips = FindAll<TextBlock>(macroDock).Where(text => text.Text.Contains("DRAG", StringComparison.Ordinal)).ToList();
             var hintsOn = PreferencesStore.Load().ShowHeadingHints;
-            if (macroCards.Count != 2 || dragStrips.Count != (hintsOn ? 2 : 0) || macroCards.Any(card => card.ContextMenu is null)
+            // The compact page has no drag caption: the whole little box is the button.
+            if (macroCards.Count != 2 || dragStrips.Count != 0 || macroCards.Any(card => card.ContextMenu is null)
                 || macroCards.Any(card => FindAll<Button>(card).Any(button => (button.Content as string) is "Edit" or "Delete")))
-                throw new Exception($"FAIL: macro cards lost their drag strip, context menu, compact board or removable action row (cards {macroCards.Count}, drags {dragStrips.Count}, hints {hintsOn})");
-            // Five cards fit across the board with the editor open; hiding it gives the board more room.
+                throw new Exception($"FAIL: compact macro cards lost their context menu or removable action row (cards {macroCards.Count}, drags {dragStrips.Count}, hints {hintsOn})");
+            // The live-book page starts with its editor tucked away so the macro grid owns the page.
             var editorToggle = (Button)macroDock.FindName("EditorToggleButton")!;
             var macroEditor = (Border)macroDock.FindName("MacroEditor")!;
+            if (macroEditor.Visibility != Visibility.Collapsed)
+                throw new Exception("FAIL: the compact show page did not start with its editor hidden");
+            editorToggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (macroEditor.Visibility != Visibility.Visible)
+                throw new Exception("FAIL: the macro editor could not be shown");
             editorToggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Pump(TimeSpan.FromMilliseconds(120));
             if (macroEditor.Visibility != Visibility.Collapsed || macroDock.FindName("MacroEditorSplitter") is not GridSplitter { Visibility: Visibility.Collapsed })
                 throw new Exception("FAIL: the macro editor could not be hidden to make room for more buttons");
-            // Nine cards fit across the uncluttered board. Every card carries its own right margin,
-            // so the board width divided by (card + margin) is the real column count; the old check
-            // added eight pixels and hid the ninth card wrapping.
+            // Twelve small boxes fit across the uncluttered live-book board. Every card carries its
+            // own 4px right margin, so include that gap when measuring the real column count.
             var macroBoard = (Grid)macroDock.FindName("MacroButtons")!;
             var boardCard = macroBoard.Children.OfType<Border>().First();
-            var macroColumns = (int)Math.Floor(macroBoard.ActualWidth / (boardCard.ActualWidth + 8));
-            if (macroColumns != 9)
-                throw new Exception($"FAIL: the macro board fits {macroColumns} cards per row instead of 9 ({macroBoard.ActualWidth:0}px board, {boardCard.ActualWidth:0}px card)");
+            var macroColumns = (int)Math.Floor(macroBoard.ActualWidth / (boardCard.ActualWidth + 4));
+            if (macroColumns != 12)
+                throw new Exception($"FAIL: the compact macro board fits {macroColumns} cards per row instead of 12 ({macroBoard.ActualWidth:0}px board, {boardCard.ActualWidth:0}px card)");
             // A drop below the last populated row is still a real slot: this is what lets a card
             // move into a new row before the current one is full.
             var dropIndexAt = typeof(MacroDock).GetMethod("MacroDropIndexAt", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -1010,8 +1027,10 @@ internal static class Program
             Pump(TimeSpan.FromMilliseconds(100));
             if (tabShell.Engine.State.GameName != "Friday Night Lights")
                 throw new Exception("FAIL: the game name field did not reach the game state");
+            showWindow.Close();
+            showRoom.Close();
             tabShell.Close();
-            Console.WriteLine("PASS: macros open in the main workspace and conditionals have no main-window tab");
+            Console.WriteLine("PASS: Control Room opens the compact live-book board and the main window has no SHOW tab");
 
             // A macro runs its steps in order against the live game.
             var macroEngine = new GameEngine();
@@ -1533,6 +1552,8 @@ internal static class Program
                 throw new Exception("FAIL: the Game Name label is missing or still in caps");
             if (!FindAll<Button>(shell).Any(button => (button.ToolTip as string ?? string.Empty).StartsWith("About ScorePlus", StringComparison.OrdinalIgnoreCase)))
                 throw new Exception("FAIL: the main window has no About button");
+            if (FindAll<Button>(shell).Any(button => (button.Content as string) is "Display Studio" or "Content Studio" or "Venue"))
+                throw new Exception("FAIL: the main header still has dedicated Display Studio, Content Studio or Venue buttons");
             var dock = FindAll<MediaDock>(shell).FirstOrDefault() ?? throw new Exception("FAIL: the main window hosts no media dock");
             var transport = (Button)dock.FindName("PlayPauseButton")!;
             var transportBottom = transport.TransformToAncestor(shellContent).Transform(new Point(0, transport.ActualHeight)).Y;
@@ -6825,22 +6846,38 @@ internal static class Program
                 throw new Exception($"FAIL: the camera was not rendered behind the scorebug (red={corner[2]})");
             liveChannel.Close();
 
-            var controlRoom = new ControlRoomWindow(smokeCatalog, smokeEngine, null, null, "Dark");
+            var showOpened = false;
+            var venueOpened = false;
+            var controlRoom = new ControlRoomWindow(smokeCatalog, smokeEngine, null, null, "Dark",
+                openShow: _ => showOpened = true, openVenue: _ => venueOpened = true);
             ShowForSmoke(controlRoom);
             controlRoom.UpdateLayout();
             Pump(TimeSpan.FromMilliseconds(120));
-            var displayCount = (TextBlock)controlRoom.FindName("DisplayCount")!;
-            var contentNames = (TextBlock)controlRoom.FindName("ContentNames")!;
-            if (controlRoom.FindName("DisplayStudioCard") is not Button || controlRoom.FindName("LiveSwitchCard") is not Button
-                || controlRoom.FindName("LiveChannelCard") is not Button)
-                throw new Exception("FAIL: the Show Control Map is missing one of its four program cards");
-            if (displayCount.Text == "—" || !contentNames.Text.Contains("brand", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("FAIL: the Show Control Map did not read the show's displays or content");
+            if (controlRoom.FindName("DisplayStudioCard") is not Button || controlRoom.FindName("ContentStudioCard") is not Button
+                || controlRoom.FindName("ShowCard") is not Button showCard
+                || controlRoom.FindName("LiveSwitchCard") is not Button
+                || controlRoom.FindName("LiveChannelCard") is not Button
+                || controlRoom.FindName("VenueCard") is not Button venueCard)
+                throw new Exception("FAIL: the Show Control Map is missing one of its six surface cards");
+            var displayStatus = (TextBlock)controlRoom.FindName("DisplayStatus")!;
+            var contentStatus = (TextBlock)controlRoom.FindName("ContentStatus")!;
+            var showStatus = (TextBlock)controlRoom.FindName("ShowStatus")!;
+            var venueStatus = (TextBlock)controlRoom.FindName("VenueStatus")!;
+            if (displayStatus.Text == "—" || !contentStatus.Text.Contains("storyboard", StringComparison.OrdinalIgnoreCase)
+                || !showStatus.Text.Contains("macros", StringComparison.OrdinalIgnoreCase)
+                || !venueStatus.Text.Contains("playlists", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("FAIL: the Show Control Map did not read the show, content, macro or venue state");
+            showCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            venueCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            if (!showOpened || !venueOpened)
+                throw new Exception("FAIL: the Show Control Map did not launch the Show and Venue windows");
+            if (controlRoom.FindName("RoomTabs") is not null)
+                throw new Exception("FAIL: Control Room still hosts surfaces as tabs");
             controlRoom.Close();
-            Console.WriteLine("PASS: Content Studio, Live Switch, Live Channel and the Show Control Map open with their galleries, multiviews and status");
+            Console.WriteLine("PASS: Control Room maps all six surfaces and launches Show and Venue as windows");
 
-            // Stage 4: the DATA tab owns a real source editor and viewer, and the Venue window owns
-            // the fleet, rotations, schedules and proof surface.
+            // Stage 4: the DATA tab owns a real source editor and viewer, and Control Room's Venue
+            // page owns the fleet, rotations, schedules and proof surface.
             var dataShell = new MainWindow(LaunchMode.New) { Width = 1280, Height = 800 };
             ShowForSmoke(dataShell);
             dataShell.UpdateLayout();
@@ -6881,27 +6918,142 @@ internal static class Program
                 });
                 var venueEngine = new VenueEngine(smokeCatalog, smokeEngine, venueStore);
                 venueEngine.BeginPlaylist(venuePlaylist.Id, DateTimeOffset.Now);
-                var venueWindow = new VenueWindow(venueEngine, smokeCatalog, smokeEngine, null, null, "Dark");
-                ShowForSmoke(venueWindow);
-                venueWindow.UpdateLayout();
+                var venueRoom = new VenueWindow(venueEngine, smokeCatalog, smokeEngine);
+                ShowForSmoke(venueRoom);
+                venueRoom.UpdateLayout();
                 Pump(TimeSpan.FromMilliseconds(120));
-                if (venueWindow.FindName("DisplayPanel") is not WrapPanel fleet || fleet.Children.Count == 0)
+                var venuePage = venueRoom.Desk;
+                if (venuePage.FindName("DisplayPanel") is not WrapPanel fleet || fleet.Children.Count == 0)
                     throw new Exception("FAIL: the Venue window has no fleet cards");
-                var venueTabs = (TabControl)venueWindow.FindName("Tabs")!;
+                var venueTabs = (TabControl)venuePage.FindName("Tabs")!;
                 venueTabs.SelectedIndex = 1;
-                venueWindow.UpdateLayout();
+                venueRoom.UpdateLayout();
                 Pump(TimeSpan.FromMilliseconds(80));
-                if (venueWindow.FindName("PlaylistList") is not ListBox playlists || playlists.Items.Count == 0)
+                if (venuePage.FindName("PlaylistList") is not ListBox playlists || playlists.Items.Count == 0)
                     throw new Exception("FAIL: the Venue window did not list its playlist");
                 venueTabs.SelectedIndex = 4;
-                venueWindow.UpdateLayout();
+                venueRoom.UpdateLayout();
                 Pump(TimeSpan.FromMilliseconds(80));
-                if (venueWindow.FindName("ProofList") is not ListBox proof || proof.Items.Count == 0)
+                if (venuePage.FindName("ProofList") is not ListBox proof || proof.Items.Count == 0)
                     throw new Exception("FAIL: the Venue window has no proof-of-play line");
-                venueWindow.Close();
+                venueRoom.Close();
             }
             finally { try { if (File.Exists(venueFile)) File.Delete(venueFile); } catch { } }
-            Console.WriteLine("PASS: the DATA tab maps a source into the game and Venue shows fleet, rotation and proof");
+            Console.WriteLine("PASS: the DATA tab maps a source into the game and the Venue window shows fleet, rotation and proof");
+
+            // Stage 5: one console still runs alone, but two ordinary agent processes can join the
+            // same show. Both receive one sequence and a shared sync target; package/rollback and
+            // test-pattern commands travel over the same authenticated local transport.
+            var nodeRootA = Path.Combine(Path.GetTempPath(), $"scoreplus-node-a-{Guid.NewGuid():N}");
+            var nodeRootB = Path.Combine(Path.GetTempPath(), $"scoreplus-node-b-{Guid.NewGuid():N}");
+            var nodeFile = Path.Combine(Path.GetTempPath(), $"smoke-nodes-{Guid.NewGuid():N}.json");
+            NodeAgent? nodeAgentA = null;
+            NodeAgent? nodeAgentB = null;
+            NodeService? nodeService = null;
+            VenueWindow? nodeRoom = null;
+            try
+            {
+                if (!NodeAgent.TryParseLaunch(["--node", "--port", "18097", "--name", "Ribbon A", "--role", "processor", "--headless"], out var nodeOptionsParsed)
+                    || nodeOptionsParsed.Port != 18097 || nodeOptionsParsed.Role != NodeRole.Processor || !nodeOptionsParsed.Headless)
+                    throw new Exception("FAIL: the node command line did not parse port, role and headless mode");
+                nodeAgentA = new NodeAgent(new NodeAgentOptions
+                {
+                    Port = 18097, Name = "Ribbon A", Role = NodeRole.Processor, Headless = true,
+                    DataDirectory = nodeRootA, DisplayId = smokeCatalog.ActiveDisplay.Id
+                }, Application.Current.Dispatcher);
+                nodeAgentB = new NodeAgent(new NodeAgentOptions
+                {
+                    Port = 18098, Name = "Ring B", Role = NodeRole.Player, Headless = true,
+                    DataDirectory = nodeRootB, DisplayId = smokeCatalog.ActiveDisplay.Id
+                }, Application.Current.Dispatcher);
+                if (!nodeAgentA.Start() || !nodeAgentB.Start())
+                    throw new Exception($"FAIL: a local node agent did not start ({nodeAgentA.Error} / {nodeAgentB.Error})");
+                var nodeStore = new VenueStore(nodeFile);
+                var nodeVenue = new VenueEngine(smokeCatalog, smokeEngine, nodeStore);
+                nodeService = new NodeService(nodeVenue, smokeEngine, smokeCatalog, Application.Current.Dispatcher);
+                if (!nodeService.IsLocalMode || nodeService.Nodes.Count != 0)
+                    throw new Exception("FAIL: the default node fabric was not single-machine local mode");
+                var nodeA = nodeService.AddNode("127.0.0.1", "Ribbon A");
+                nodeA.Port = 18097;
+                var nodeB = nodeService.AddNode("127.0.0.1", "Ring B");
+                nodeB.Port = 18098;
+                nodeA.SyncGroupId = nodeService.SyncGroups[0].Id;
+                nodeB.SyncGroupId = nodeService.SyncGroups[0].Id;
+                nodeService.SaveNode(nodeA);
+                nodeService.SaveNode(nodeB);
+                if (!WaitFor(nodeService.DeployAsync(nodeA)) || !WaitFor(nodeService.DeployAsync(nodeB)))
+                    throw new Exception("FAIL: a node did not accept the versioned content package");
+                if (nodeA.Health.PackageVersion == 0 || nodeB.Health.PackageVersion == 0)
+                    throw new Exception("FAIL: node health did not report the deployed package version");
+                WaitFor(nodeService.RefreshHealthAsync(nodeA));
+                WaitFor(nodeService.RefreshHealthAsync(nodeB));
+                if (!nodeA.Health.Online || !nodeB.Health.Online)
+                    throw new Exception("FAIL: an online node was marked offline");
+                nodeService.Broadcast();
+                Pump(TimeSpan.FromMilliseconds(450));
+                WaitFor(nodeService.RefreshHealthAsync(nodeA));
+                WaitFor(nodeService.RefreshHealthAsync(nodeB));
+                if (nodeA.Health.Sequence != nodeB.Health.Sequence || nodeA.Health.Sequence == 0)
+                    throw new Exception($"FAIL: sync-group nodes did not receive one sequence ({nodeA.Health.Sequence}/{nodeB.Health.Sequence})");
+                if (!WaitFor(nodeService.SetTestPatternAsync(nodeA, true)) || !nodeAgentA.HealthReport().TestPattern)
+                    throw new Exception("FAIL: the node test pattern did not turn on");
+                if (!WaitFor(nodeService.SetTestPatternAsync(nodeA, false)) || nodeAgentA.HealthReport().TestPattern)
+                    throw new Exception("FAIL: the node test pattern did not turn off");
+                if (!WaitFor(nodeService.DeployAsync(nodeA)))
+                    throw new Exception("FAIL: the node did not accept the second package");
+                var versionBeforeRollback = nodeA.Health.PackageVersion;
+                if (!WaitFor(nodeService.RollbackAsync(nodeA)))
+                    throw new Exception("FAIL: the node package did not roll back");
+                if (nodeA.Health.PackageVersion >= versionBeforeRollback)
+                    throw new Exception($"FAIL: the node package version did not move back after rollback (before {versionBeforeRollback}, service {nodeA.Health.PackageVersion}, agent {nodeAgentA.HealthReport().PackageVersion})");
+                nodeRoom = new VenueWindow(nodeVenue, smokeCatalog, smokeEngine, nodes: nodeService);
+                ShowForSmoke(nodeRoom);
+                nodeRoom.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(120));
+                var nodesPage = nodeRoom.Desk;
+                var nodeTabs = (TabControl)nodesPage.FindName("Tabs")!;
+                nodeTabs.SelectedIndex = 6;
+                nodeRoom.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(80));
+                if (nodesPage.FindName("NodeModeText") is not TextBlock nodeMode || nodeMode.Text != "NODE FABRIC")
+                    throw new Exception("FAIL: the Venue Nodes page did not leave local mode after adding agents");
+                if (nodesPage.FindName("NodePanel") is not WrapPanel nodePanel || nodePanel.Children.Count < 3)
+                    throw new Exception("FAIL: the Venue Nodes page did not show This PC and both agents");
+                if (nodesPage.FindName("SyncGroupPanel") is not StackPanel syncGroups || syncGroups.Children.Count == 0)
+                    throw new Exception("FAIL: the Venue Nodes page has no sync-group editor");
+                nodeRoom.Close();
+                nodeRoom = null;
+                // A restarted console starts its sequence at one again. The epoch check must let it
+                // take over a node that stayed up through the restart.
+                nodeService.Broadcast();
+                Pump(TimeSpan.FromMilliseconds(220));
+                nodeService.Broadcast();
+                Pump(TimeSpan.FromMilliseconds(220));
+                nodeService.Dispose();
+                nodeService = new NodeService(nodeVenue, smokeEngine, smokeCatalog, Application.Current.Dispatcher);
+                nodeService.Broadcast();
+                Pump(TimeSpan.FromMilliseconds(300));
+                if (nodeAgentA.HealthReport().Sequence != 1)
+                    throw new Exception($"FAIL: a restarted console could not take over a running node (sequence {nodeAgentA.HealthReport().Sequence})");
+                // Pull the controller away: the agent must keep its last state and report itself
+                // stale instead of pretending the missing console is still live.
+                nodeService.Dispose();
+                nodeService = null;
+                Pump(TimeSpan.FromMilliseconds(5500));
+                if (!nodeAgentA.HealthReport().Stale)
+                    throw new Exception("FAIL: a node did not go stale after the controller disappeared");
+            }
+            finally
+            {
+                nodeRoom?.Close();
+                nodeService?.Dispose();
+                nodeAgentA?.Dispose();
+                nodeAgentB?.Dispose();
+                try { if (Directory.Exists(nodeRootA)) Directory.Delete(nodeRootA, true); } catch { }
+                try { if (Directory.Exists(nodeRootB)) Directory.Delete(nodeRootB, true); } catch { }
+                try { if (File.Exists(nodeFile)) File.Delete(nodeFile); } catch { }
+            }
+            Console.WriteLine("PASS: Stage 5 adds two playback nodes, one sync sequence, package rollback and the Venue Nodes page; zero nodes stays local");
 
             var comparison = new TeamComparisonWindow(smokeEngine, "Dark");
             ShowForSmoke(comparison);
@@ -7072,6 +7224,20 @@ internal static class Program
         for (var index = 3; index < pixels.Length; index += 4)
             if (pixels[index] > 40) lit++;
         return lit;
+    }
+
+    /// <summary>Waits for a task while continuing to pump the dispatcher, so node HTTP handlers
+    /// that marshal back to the UI thread cannot deadlock the probe.</summary>
+    static void WaitFor(Task task)
+    {
+        while (!task.IsCompleted) Pump(TimeSpan.FromMilliseconds(10));
+        task.GetAwaiter().GetResult();
+    }
+
+    static T WaitFor<T>(Task<T> task)
+    {
+        while (!task.IsCompleted) Pump(TimeSpan.FromMilliseconds(10));
+        return task.GetAwaiter().GetResult();
     }
 
     static void ShowForSmoke(Window window)
