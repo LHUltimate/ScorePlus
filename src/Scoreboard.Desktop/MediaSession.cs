@@ -70,6 +70,11 @@ public sealed class MediaSession
     readonly Dictionary<string, ImageSource> _thumbs = new(StringComparer.OrdinalIgnoreCase);
     readonly HashSet<string> _pendingThumbs = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, int> _thumbAttempts = new(StringComparer.OrdinalIgnoreCase);
+    // Device enumeration reaches the capture stack and is not free. The multiview and Live Clips
+    // ask for cameras several times a second, so a short cache keeps a plugged-in camera visible
+    // without probing the machine on every paint.
+    IReadOnlyList<CameraDevice>? _cameraDeviceCache;
+    DateTime _cameraDeviceCacheAt;
     readonly List<string> _folders = [];
 
     bool _playing;
@@ -585,6 +590,39 @@ public sealed class MediaSession
         Status?.Invoke(added == 0
             ? "MEDIA · those clips are already in the library"
             : $"MEDIA · {Library.Count} clip{(Library.Count == 1 ? "" : "s")} · {added} new in {normalized}{(folderName.Length == 0 ? "" : $" / {folderName}")}");
+    }
+
+    /// <summary>
+    /// Brings a replay saved by the booth into the same media library as every other clip. Its
+    /// marked range, rating, tags and the clock at the in-point travel with it, so the clip can be
+    /// searched later instead of becoming an unnamed file in a folder.
+    /// </summary>
+    public MediaEntry? ImportReplay(string path, ReplaySelection selection)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            Status?.Invoke("REPLAY SAVE · the exported clip was not written");
+            return null;
+        }
+        selection ??= new ReplaySelection();
+        selection.Normalize(Math.Max(selection.MarkInBack, selection.MarkOutBack));
+        var existing = Library.ToList().FindIndex(entry => string.Equals(entry.Path, path, StringComparison.OrdinalIgnoreCase));
+        var entry = new MediaEntry(path, MediaLibrary.ReplayTagName, "Replays", Loop: false,
+            Name: Path.GetFileName(path))
+        {
+            ReplayRating = selection.Rating,
+            ReplayTags = selection.TagsText,
+            ReplayClock = selection.GameClock,
+            ReplayPeriod = selection.Period,
+            ReplayScore = selection.Score
+        };
+        if (existing >= 0) Library[existing] = entry;
+        else Library.Add(entry);
+        Selected = entry;
+        Save();
+        StateChanged?.Invoke();
+        Status?.Invoke($"REPLAY SAVED · {entry.SearchLabel}");
+        return entry;
     }
 
     /// <summary>
@@ -1464,6 +1502,8 @@ public sealed class MediaSession
     /// them, for the routing menu.</summary>
     public IReadOnlyList<CameraDevice> CameraDevices()
     {
+        if (_cameraDeviceCache is not null && (DateTime.UtcNow - _cameraDeviceCacheAt).TotalSeconds < 2)
+            return _cameraDeviceCache;
         var found = CameraFeed.NamedDevices().ToList();
         // A camera that is already open cannot be probed, so the live one is always offered.
         if (_camera is not null && !found.Any(device => device.Index == _camera.CameraIndex))
@@ -1471,7 +1511,10 @@ public sealed class MediaSession
         foreach (var entry in Library.Where(entry => entry.IsCamera))
             if (!found.Any(device => device.Index == entry.CameraIndex))
                 found.Add(new CameraDevice(entry.CameraIndex, $"Camera {entry.CameraIndex + 1}"));
-        return found.DistinctBy(device => device.Index).OrderBy(device => device.Index).ToArray();
+        var result = found.DistinctBy(device => device.Index).OrderBy(device => device.Index).ToArray();
+        _cameraDeviceCache = result;
+        _cameraDeviceCacheAt = DateTime.UtcNow;
+        return result;
     }
 
     /// <summary>Renames a camera item; routing is by tag, so the name is purely for the operator.</summary>

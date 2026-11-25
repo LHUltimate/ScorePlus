@@ -14,6 +14,9 @@ public sealed class MultiviewLayoutTile
     public string LayoutName { get; set; } = "";
     public int CameraIndex { get; set; } = -1;
     public string CameraName { get; set; } = "";
+    /// <summary>How many base cells this tile spans: 1 for the small cell, 2 for a quarter of the
+    /// wall. Zero follows the wall's default size.</summary>
+    public int Size { get; set; }
 }
 
 /// <summary>A portable wall of preview, audience, camera, replay and blank tiles.</summary>

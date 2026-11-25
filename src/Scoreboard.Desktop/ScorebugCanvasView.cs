@@ -1508,11 +1508,12 @@ public sealed class ScorebugCanvasView : Grid
     }
 
     /// <summary>
-    /// Plays a score celebration video over the whole graphic. The same chroma shader used by
-    /// video boxes and hand-overs reaches the decoded frames, so a green-screen celebration shows
-    /// the scorebug underneath instead of a solid backdrop.
+    /// Plays a score celebration video in its own 16:9 box with a tag plate, not as a full-screen
+    /// takeover. The same chroma shader used by video boxes and hand-overs reaches the decoded
+    /// frames, so a green-screen celebration shows the scorebug underneath instead of a solid
+    /// backdrop.
     /// </summary>
-    bool TryPlayScoreVideo(ScoreVideo video)
+    bool TryPlayScoreVideo(ScoreVideo video, string? tag = null)
     {
         var path=(video.Path??"").Trim();
         if(path.Length==0||!System.IO.File.Exists(path))return false;
@@ -1521,14 +1522,41 @@ public sealed class ScorebugCanvasView : Grid
         ClearScoreAnimation();
         var width=Math.Max(1,_canvas.Width);
         var height=Math.Max(1,_canvas.Height);
+        // A celebration is a video box laid over the layout, not the whole frame. Size it from the
+        // graphic's width and keep a true 16:9 picture, capped so it still fits a short layout.
+        var boxWidth=Math.Min(width*0.46,height*0.64*16/9);
+        var boxHeight=boxWidth*9/16;
         var player=new MediaPlayer{IsMuted=true,ScrubbingEnabled=false};
         var drawing=new VideoDrawing{Player=player,Rect=new Rect(0,0,1,1)};
         var brush=new DrawingBrush(drawing){Stretch=Stretch.Fill};
-        var picture=new Rectangle{Width=width,Height=height,Fill=brush,IsHitTestVisible=false};
+        var picture=new Rectangle{Width=boxWidth,Height=boxHeight,Fill=brush,IsHitTestVisible=false};
         if(TryParseColor(video.ChromaKeyColor,out var keyColour)&&video.ChromaKeyTolerance>0)
             picture.Effect=new ChromaKeyEffect{KeyColor=keyColour,Tolerance=video.ChromaKeyTolerance};
+        var box=new Grid{Width=boxWidth,Height=boxHeight,ClipToBounds=true,IsHitTestVisible=false};
+        box.Children.Add(picture);
+        if(!string.IsNullOrWhiteSpace(tag))
+        {
+            var plate=new Border
+            {
+                Background=new SolidColorBrush(Color.FromArgb(0xCC,0,0,0)),
+                CornerRadius=new CornerRadius(0,0,6,6),
+                Padding=new Thickness(10,3,10,3),
+                HorizontalAlignment=HorizontalAlignment.Left,
+                VerticalAlignment=VerticalAlignment.Bottom,
+                Child=new TextBlock{Text=tag,FontSize=Math.Max(12,boxHeight*0.07),FontWeight=FontWeights.Bold,Foreground=Brushes.White}
+            };
+            box.Children.Add(plate);
+        }
+        var framed=new Border
+        {
+            Width=boxWidth,Height=boxHeight,Background=Brushes.Black,
+            BorderBrush=new SolidColorBrush(Color.FromArgb(0xCC,0xFF,0xFF,0xFF)),BorderThickness=new Thickness(2),
+            CornerRadius=new CornerRadius(8),ClipToBounds=true,
+            HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center,
+            Child=box
+        };
         var overlay=new Grid{Width=width,Height=height,IsHitTestVisible=false};
-        overlay.Children.Add(picture);
+        overlay.Children.Add(framed);
         Panel.SetZIndex(overlay,12000);
         _canvas.Children.Add(overlay);
         _scoreVideoPlayer=player;
@@ -1576,7 +1604,7 @@ public sealed class ScorebugCanvasView : Grid
         if(state.LastScoreAmount==0)return;
         var amount=state.LastScoreAmount;
         var mapped=Layout.ScoreVideoForAmount(amount);
-        if(mapped is not null&&TryPlayScoreVideo(mapped))return;
+        if(mapped is not null&&TryPlayScoreVideo(mapped,$"{(amount>0?"+":"")}{amount}"))return;
         // Compatibility with layouts saved before the per-value video list. These fixed clips only
         // ever described positive football scores, so they must not claim a correction or another
         // sport's score.
@@ -1595,7 +1623,7 @@ public sealed class ScorebugCanvasView : Grid
                 clip=Layout.FieldGoalAnimation;
             }
         }
-        if(video is not null&&TryPlayScoreVideo(video))return;
+        if(video is not null&&TryPlayScoreVideo(video,$"{(amount>0?"+":"")}{amount}"))return;
         if(clip is null||clip.IsEmpty)return;
         // A score event has its own name, so it uses the clip's normal take. Triggered takes remain
         // available for per-value flourishes, but they cannot accidentally replace the event clip.

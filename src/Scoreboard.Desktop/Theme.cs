@@ -121,8 +121,21 @@ public sealed class UserPreferences
     /// <summary>The operator's own multiview tile layout: previews, audience displays, cameras or replay.</summary>
     public List<MultiviewTileBinding> MultiviewTiles { get; set; } = [];
 
+    /// <summary>
+    /// Per-camera routing for Camera Switch: the displays and venue channels a take reaches, plus
+    /// the tags the camera carries so tagged scorebug video boxes show it.
+    /// </summary>
+    public List<CameraRoute> CameraRoutes { get; set; } = [];
+
     /// <summary>Show the source name in each multiview tile's bottom corner.</summary>
     public bool MultiviewShowLabels { get; set; } = true;
+
+    /// <summary>
+    /// How many multiview tiles share a row. Zero sizes the wall automatically; 2 gives each
+    /// source a quarter of the screen and 4 gives it a quarter of a quarter, which is how a
+    /// director packs a full camera bank onto one monitor.
+    /// </summary>
+    public int MultiviewColumns { get; set; }
 
     /// <summary>Show the camera name in each Replay Booth tile's bottom corner.</summary>
     public bool ReplayBoothShowLabels { get; set; } = true;
@@ -270,6 +283,8 @@ public sealed class UserPreferences
         QuickLayoutsPublish = QuickLayoutsPublish,
         QuickMediaPublish = QuickMediaPublish,
         MultiviewShowLabels = MultiviewShowLabels,
+        MultiviewColumns = MultiviewColumns,
+        CameraRoutes = CameraRoutes.Select(route => route.Copy()).ToList(),
         ReplayBoothShowLabels = ReplayBoothShowLabels,
         ReplaySeconds = ReplaySeconds,
         ReplaySpeed = ReplaySpeed,
@@ -408,7 +423,15 @@ public static class PreferencesStore
         if (!preferences.MultiviewSoundBarsChosen) preferences.MultiviewCameraSoundBars = true;
         preferences.ReplayBoothOrder ??= [];
         preferences.ReplayBoothHidden ??= [];
+        preferences.CameraRoutes ??= [];
+        foreach (var route in preferences.CameraRoutes) route?.Normalize();
+        preferences.CameraRoutes = preferences.CameraRoutes
+            .Where(route => route is not null && route.CameraIndex >= 0)
+            .GroupBy(route => route.CameraIndex).Select(group => group.Last()).ToList();
         preferences.ReplayBoothColumns = Math.Clamp(preferences.ReplayBoothColumns, 0, 6);
+        // Only the wall sizes the UI offers are legal: automatic, quarter screen, or a quarter of
+        // a quarter. A hand-edited file cannot ask for a grid the window cannot draw.
+        preferences.MultiviewColumns = preferences.MultiviewColumns is 2 or 4 ? preferences.MultiviewColumns : 0;
         // A malformed speed must not make the replay run at zero or a thousand times real time.
         if (!double.IsFinite(preferences.ReplaySpeed) || preferences.ReplaySpeed <= 0) preferences.ReplaySpeed = 1;
         preferences.ReplaySpeed = Math.Clamp(preferences.ReplaySpeed, 0.1, 2.0);

@@ -5,6 +5,8 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using Scoreboard.Core;
 
@@ -56,11 +58,18 @@ public partial class MacroDock : UserControl
     bool _showHints;
     int _page;
     int _pageCount = 1;
+    // Non-null while the board is showing one display output's dedicated macro section. Output
+    // macros are stored with an OutputSlot, never with a page number, so they stay out of the
+    // normal page list and out of Page 1/2/3 navigation.
+    string? _outputSlot;
     int _cueSelection = -1;
     bool _cueSync;
     string _cueSignature = "";
     readonly PracticeTimer _practice = new();
     bool _pageNameSync;
+    string? _previewMacroId;
+    readonly List<(string Slot, Image Image, TextBlock Caption)> _showMonitors = [];
+    bool _monitorHooked;
 
     sealed record KindChoice(MacroActionKind Kind, string Label)
     {
@@ -191,8 +200,8 @@ public partial class MacroDock : UserControl
         AttachEngine();
         // The compact show page is a grid of small macro boxes, like a live-book page. The step
         // editor is still one click away, but it must not eat the space the buttons need.
-        Loaded += (_, _) => AttachEngine();
-        Unloaded += (_, _) => DetachEngine();
+        Loaded += (_, _) => { AttachEngine(); AttachMonitors(); };
+        Unloaded += (_, _) => { DetachEngine(); DetachMonitors(); };
         // The board paints itself from its own palette so generated cards, the step list and the
         // editor all follow the active theme. Opting out keeps the window-wide theme pass from
         // flattening the card hierarchy and its accent.
@@ -200,6 +209,7 @@ public partial class MacroDock : UserControl
         _showHints = TipsEnabled();
         MacroButtons.SizeChanged += (_, _) => UpdateCardWidths();
         BuildColorChoices();
+        BuildShowMonitors();
         ApplyTheme(theme ?? PreferencesStore.Load().Theme);
         KindBox.ItemsSource = new[]
         {
@@ -329,7 +339,9 @@ public partial class MacroDock : UserControl
         var selectedId = _draft?.Id;
         _macros = _engine.State.Macros.Select(macro => macro.Copy()).ToList();
         _pageCount = Math.Clamp(_engine.State.MacroPages, 1, 99);
-        if (_macros.Count > 0) _pageCount = Math.Max(_pageCount, _macros.Max(macro => macro.Page) + 1);
+        var pageMacros = PageMacros.ToList();
+        if (pageMacros.Count > 0)
+            _pageCount = Math.Max(_pageCount, pageMacros.Max(macro => macro.Page) + 1);
         _page = Math.Clamp(_page, 0, _pageCount - 1);
         if (_draft is null || !_dirty)
         {
@@ -469,7 +481,8 @@ public partial class MacroDock : UserControl
         {
             MacroId = macro.Id,
             Name = macro.Label,
-            Section = macro.Page == 0 ? "" : $"Page {macro.Page + 1}"
+            Section = macro.OutputSlot.Length > 0 ? OutputSlotName(macro.OutputSlot)
+                : macro.Page == 0 ? "" : $"Page {macro.Page + 1}"
         };
         var at = cues.Count == 0 ? 0 : Math.Clamp(_engine.State.CueIndex + 1, 0, cues.Count);
         cues.Insert(at, cue);
@@ -603,14 +616,51 @@ public partial class MacroDock : UserControl
 
     void UpdatePageBar()
     {
-        PageLabel.Text = $"PAGE {_page + 1} / {_pageCount}";
+        var output = _outputSlot is not null;
+        PageLabel.Text = output ? $"OUTPUT · {OutputSlotName(_outputSlot!)}" : $"PAGE {_page + 1} / {_pageCount}";
         _pageNameSync = true;
-        try { PageNameBox.Text = PageName(_page); }
+        try { PageNameBox.Text = output ? "" : PageName(_page); }
         finally { _pageNameSync = false; }
-        RemovePageButton.IsEnabled = _pageCount > 1;
-        PrevPageButton.IsEnabled = _page > 0;
-        NextPageButton.IsEnabled = _page < _pageCount - 1;
-        AddPageButton.IsEnabled = _pageCount < 99;
+        PageNameBox.IsEnabled = !output;
+        RemovePageButton.IsEnabled = !output && _pageCount > 1;
+        PrevPageButton.IsEnabled = !output && _page > 0;
+        NextPageButton.IsEnabled = !output && _page < _pageCount - 1;
+        AddPageButton.IsEnabled = !output && _pageCount < 99;
+        OutputSectionBackButton.Visibility = output ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Shows the dedicated board for one display output monitor. It is a separate
+    /// section, not a page: its macros never appear on the numbered pages and the page controls
+    /// are disabled until the operator returns.</summary>
+    void OpenOutputSection(string slot)
+    {
+        if (string.Equals(_outputSlot, slot, StringComparison.OrdinalIgnoreCase)) return;
+        SaveDraft(false);
+        _outputSlot = slot;
+        _draft = MacrosOnPage.FirstOrDefault()?.Copy();
+        _dirty = false;
+        _previewMacroId = null;
+        RenderMacros();
+        LoadEditor();
+        Status?.Invoke($"MACRO · {OutputSlotName(slot)} macros · separate from the show pages");
+    }
+
+    void OutputSectionBack_Click(object sender, RoutedEventArgs e) => CloseOutputSection();
+    void OutputMacroA_Click(object sender, RoutedEventArgs e) => OpenOutputSection("A");
+    void OutputMacroB_Click(object sender, RoutedEventArgs e) => OpenOutputSection("B");
+    void OutputMacroLive_Click(object sender, RoutedEventArgs e) => OpenOutputSection("LIVE");
+    void OutputMacroPreview_Click(object sender, RoutedEventArgs e) => OpenOutputSection("PREVIEW");
+
+    void CloseOutputSection()
+    {
+        if (_outputSlot is null) return;
+        SaveDraft(false);
+        _outputSlot = null;
+        _draft = MacrosOnPage.FirstOrDefault()?.Copy();
+        _dirty = false;
+        RenderMacros();
+        LoadEditor();
+        Status?.Invoke($"MACRO · Page {_page + 1} of {_pageCount}");
     }
 
     void PreviousPage_Click(object sender, RoutedEventArgs e) => SwitchPage(-1);
@@ -618,6 +668,7 @@ public partial class MacroDock : UserControl
 
     void SwitchPage(int delta)
     {
+        if (_outputSlot is not null) { CloseOutputSection(); return; }
         var target = Math.Clamp(_page + delta, 0, _pageCount - 1);
         if (target == _page) return;
         SaveDraft(false);
@@ -637,7 +688,7 @@ public partial class MacroDock : UserControl
 
     void PageName_LostFocus(object sender, RoutedEventArgs e)
     {
-        if (_pageNameSync) return;
+        if (_pageNameSync || _outputSlot is not null) return;
         var names = Enumerable.Range(0, _pageCount)
             .Select(index => index == _page ? PageNameBox.Text : PageName(index)).ToList();
         _engine.StorePageNames(names);
@@ -645,9 +696,9 @@ public partial class MacroDock : UserControl
 
     void RemovePage_Click(object sender, RoutedEventArgs e)
     {
-        if (_pageCount <= 1) return;
+        if (_outputSlot is not null || _pageCount <= 1) return;
         SaveDraft(false);
-        _macros.RemoveAll(macro => macro.Page == _page);
+        _macros.RemoveAll(macro => string.IsNullOrEmpty(macro.OutputSlot) && macro.Page == _page);
         var names = Enumerable.Range(0, _pageCount).Where(index => index != _page).Select(PageName).ToList();
         foreach (var macro in _macros.Where(macro => macro.Page > _page)) macro.Page--;
         _pageCount--;
@@ -664,6 +715,7 @@ public partial class MacroDock : UserControl
     void AddPage_Click(object sender, RoutedEventArgs e)
     {
         if (_pageCount >= 99) return;
+        if (_outputSlot is not null) CloseOutputSection();
         SaveDraft(false);
         _pageCount++;
         _page = _pageCount - 1;
@@ -720,9 +772,179 @@ public partial class MacroDock : UserControl
             card.Width = card.Tag is SavedMacro { ColumnSpan: > 1 } ? double.NaN : width;
     }
 
-    IEnumerable<SavedMacro> MacrosOnPage => _macros.Where(macro => macro.Page == _page);
+    IEnumerable<SavedMacro> MacrosOnPage => _outputSlot is null
+        ? _macros.Where(macro => string.IsNullOrEmpty(macro.OutputSlot) && macro.Page == _page)
+        : _macros.Where(macro => string.Equals(macro.OutputSlot, _outputSlot, StringComparison.OrdinalIgnoreCase));
+
+    IEnumerable<SavedMacro> PageMacros => _macros.Where(macro => string.IsNullOrEmpty(macro.OutputSlot));
+
+    static string OutputSlotName(string slot) => slot switch
+    {
+        "A" => "CLIPS · FILL A",
+        "B" => "CLIPS · FILL B",
+        "LIVE" => "LIVE · PROGRAMME",
+        "PREVIEW" => "PREVIEW · NEXT",
+        _ => slot
+    };
 
     void StoreBoard() => _engine.StoreMacros(_macros, _pageCount);
+
+    // ---------- show page monitors ----------
+
+    void BuildShowMonitors()
+    {
+        ShowMonitors.Children.Clear();
+        _showMonitors.Clear();
+        ShowMonitors.Visibility = _compact ? Visibility.Visible : Visibility.Collapsed;
+        OutputMacroBar.Visibility = _compact ? Visibility.Visible : Visibility.Collapsed;
+        // The four pictures are 16:9 like every display, not short banners. The grid has four equal
+        // columns, so its height is the cell width converted to 16:9.
+        ShowMonitors.SizeChanged += (_, _) => SizeShowMonitors();
+        AddMonitor("A", "CLIPS · FILL A", "#3D8FB8");
+        AddMonitor("B", "CLIPS · FILL B", "#8A6BC8");
+        AddMonitor("LIVE", "LIVE · PROGRAMME", "#E63B3B");
+        AddMonitor("PREVIEW", "PREVIEW · NEXT", "#38D7A3");
+        SizeShowMonitors();
+        RefreshShowMonitors();
+    }
+
+    void SizeShowMonitors()
+    {
+        if (ShowMonitors.ActualWidth <= 0) return;
+        var wanted = Math.Max(48, Math.Round(ShowMonitors.ActualWidth / 4 * 9 / 16));
+        if (Math.Abs(ShowMonitors.Height - wanted) > 0.5) ShowMonitors.Height = wanted;
+    }
+
+    void AddMonitor(string slot, string label, string accent)
+    {
+        var image = new Image { Stretch = Stretch.Uniform };
+        RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+        var caption = new TextBlock
+        {
+            Text = label, FontSize = 8, FontWeight = FontWeights.Bold, Foreground = Brushes.White,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(6, 3, 6, 3)
+        };
+        var plate = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0xD8, 0, 0, 0)),
+            CornerRadius = new CornerRadius(4), Margin = new Thickness(5),
+            VerticalAlignment = VerticalAlignment.Bottom, Child = caption
+        };
+        var grid = new Grid { Background = Brushes.Black, ClipToBounds = true };
+        grid.Children.Add(image);
+        grid.Children.Add(plate);
+        var card = new Border
+        {
+            Margin = new Thickness(0, 0, 6, 0), CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(2), BorderBrush = (Brush)new BrushConverter().ConvertFromString(accent)!,
+            ClipToBounds = true, Child = grid, Cursor = Cursors.Hand,
+            ToolTip = $"{label} · what this monitor is showing · click for this output's own macros"
+        };
+        ThemeManager.SetSkipTheme(card, true);
+        card.MouseLeftButtonDown += (_, e) =>
+        {
+            e.Handled = true;
+            OpenOutputSection(slot);
+        };
+        ShowMonitors.Children.Add(card);
+        _showMonitors.Add((slot, image, caption));
+    }
+
+    void AttachMonitors()
+    {
+        if (_monitorHooked || !_compact) return;
+        _monitorHooked = true;
+        LiveClipsBus.Shared.Changed += QueueShowMonitors;
+        if (_catalog is not null) _catalog.Changed += QueueShowMonitors;
+        _engine.Changed += QueueShowMonitors;
+        RefreshShowMonitors();
+    }
+
+    void DetachMonitors()
+    {
+        if (!_monitorHooked) return;
+        _monitorHooked = false;
+        LiveClipsBus.Shared.Changed -= QueueShowMonitors;
+        if (_catalog is not null) _catalog.Changed -= QueueShowMonitors;
+        _engine.Changed -= QueueShowMonitors;
+    }
+
+    bool _monitorQueued;
+
+    /// <summary>
+    /// A live composite takes a few milliseconds to draw. Catalog edits arrive in bursts (a node
+    /// package, a layout drag), so the monitors coalesce into one background repaint instead of
+    /// rendering the wall once per property change and stalling the dispatcher other services need.
+    /// </summary>
+    void QueueShowMonitors()
+    {
+        if (_monitorQueued) return;
+        _monitorQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _monitorQueued = false;
+            RefreshShowMonitors();
+        }));
+    }
+
+    void RefreshShowMonitors()
+    {
+        if (!Dispatcher.CheckAccess()) { QueueShowMonitors(); return; }
+        if (!_compact || _showMonitors.Count == 0 || !IsLoaded) return;
+        var bus = LiveClipsBus.Shared;
+        var live = LiveThumbnail();
+        var liveLayout = _catalog is null ? "Layout" : _catalog.PublishedLayoutOf(_catalog.ActiveDisplay.Id).Name;
+        var liveLabel = string.Equals(bus.LiveLabel, "Layout", StringComparison.OrdinalIgnoreCase)
+            ? liveLayout : bus.LiveLabel;
+        var preview = _previewMacroId is null ? null
+            : _macros.FirstOrDefault(macro => macro.Id == _previewMacroId)?.Label;
+        SetMonitor("A", "CLIPS · FILL A", bus.FillAPicture, bus.FillALabel);
+        SetMonitor("B", "CLIPS · FILL B", bus.FillBPicture, bus.FillBLabel);
+        SetMonitor("LIVE", "LIVE · PROGRAMME", live ?? bus.LivePicture, liveLabel);
+        SetMonitor("PREVIEW", "PREVIEW · NEXT", preview is null ? null : live, preview ?? "Nothing staged");
+    }
+
+    void SetMonitor(string slot, string heading, ImageSource? picture, string caption)
+    {
+        var monitor = _showMonitors.FirstOrDefault(item => item.Slot == slot);
+        if (monitor.Image is null) return;
+        monitor.Image.Source = picture;
+        monitor.Caption.Text = $"{heading}  ·  {caption}";
+    }
+
+    /// <summary>A snapshot of the display's published composite for the live and preview monitors.</summary>
+    ImageSource? LiveThumbnail()
+    {
+        if (_catalog is null) return null;
+        try
+        {
+            var layout = _catalog.PublishedCompositeOf(_catalog.ActiveDisplay.Id);
+            var view = new ScorebugCanvasView(_catalog, _engine, stateProvider: () => _engine.State,
+                playback: null, layoutProvider: () => layout)
+            {
+                Width = 320, Height = 180
+            };
+            view.ShowAllLayers();
+            view.Measure(new Size(320, 180));
+            view.Arrange(new Rect(0, 0, 320, 180));
+            view.UpdateLayout();
+            var bitmap = new RenderTargetBitmap(320, 180, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(view);
+            bitmap.Freeze();
+            view.Dispose();
+            return bitmap;
+        }
+        catch { return null; }
+    }
+
+    void StageMacro(SavedMacro macro)
+    {
+        _previewMacroId = macro.Id;
+        LiveClipsBus.Shared.SetPreview(macro.Label, null);
+        EditStatus.Text = "PREVIEW";
+        Status?.Invoke($"PREVIEW · {macro.Label} · press it again to send it live");
+        RefreshShowMonitors();
+    }
 
     void RenderMacros()
     {
@@ -730,9 +952,11 @@ public partial class MacroDock : UserControl
         MacroButtons.RowDefinitions.Clear();
         MacroButtons.ColumnDefinitions.Clear();
         EmptyText.Visibility = MacrosOnPage.Any() ? Visibility.Collapsed : Visibility.Visible;
-        EmptyText.Text = _pageCount > 1
-            ? $"Page {_page + 1} is empty. Press + New macro to put a button here, or use ◀ / ▶ to change pages."
-            : "No macros yet. Choose New macro, add a few steps, then press the macro card to run them together.";
+        EmptyText.Text = _outputSlot is not null
+            ? $"{OutputSlotName(_outputSlot)} has no macros yet. Press + New macro to build this output's own section."
+            : _pageCount > 1
+                ? $"Page {_page + 1} is empty. Press + New macro to put a button here, or use ◀ / ▶ to change pages."
+                : "No macros yet. Choose New macro, add a few steps, then press the macro card to run them together.";
         var columns = MacroColumns();
         for (var column = 0; column < columns; column++)
             MacroButtons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -1274,13 +1498,24 @@ public partial class MacroDock : UserControl
     async void RunMacro_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: SavedMacro macro }) return;
+        // The show page is a live book: the first press stages the macro in preview, the second
+        // press on the same button runs it, so the operator can see what is next before it airs.
+        if (_compact && !string.Equals(_previewMacroId, macro.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            var staged = _macros.FirstOrDefault(item => item.Id == macro.Id) ?? macro;
+            StageMacro(staged);
+            return;
+        }
         if (_draft is not null && _draft.Id == macro.Id && _dirty) SaveDraft(false);
         var current = _macros.FirstOrDefault(item => item.Id == macro.Id);
         if (current is null) return;
+        _previewMacroId = null;
         EditStatus.Text = "RUNNING";
         var message = await _runner.RunAsync(current);
         EditStatus.Text = "RAN";
+        LiveClipsBus.Shared.SetLive(current.Label, LiveThumbnail());
         Status?.Invoke(message);
+        RefreshShowMonitors();
     }
 
     void EditMacroCard(SavedMacro macro)
@@ -1485,7 +1720,12 @@ public partial class MacroDock : UserControl
     {
         PushHistory();
         SaveDraft(false);
-        var macro = new SavedMacro { Label = $"Macro {MacrosOnPage.Count() + 1}", Page = _page };
+        var macro = new SavedMacro
+        {
+            Label = $"Macro {MacrosOnPage.Count() + 1}",
+            Page = _outputSlot is null ? _page : 0,
+            OutputSlot = _outputSlot ?? ""
+        };
         _macros.Add(macro);
         StoreBoard();
         _draft = macro.Copy();
@@ -1523,7 +1763,8 @@ public partial class MacroDock : UserControl
         var existing = _macros.FirstOrDefault(item => item.Id == _draft.Id);
         if (existing is null)
         {
-            _draft.Page = _page;
+            _draft.Page = _outputSlot is null ? _page : 0;
+            _draft.OutputSlot = _outputSlot ?? "";
             _macros.Add(_draft.Copy());
         }
         else
@@ -1534,6 +1775,7 @@ public partial class MacroDock : UserControl
             _draft.Row = existing.Row;
             _draft.Column = existing.Column;
             _draft.Page = existing.Page;
+            _draft.OutputSlot = existing.OutputSlot;
             var index = _macros.IndexOf(existing);
             _macros[index] = _draft.Copy();
         }
@@ -2292,10 +2534,14 @@ public partial class MacroDock : UserControl
         // in the second position, while dragging the second onto the first puts it before it.
         target = Math.Clamp(target, 0, page.Count);
         page.Insert(target, moved);
-        // Rebuild the full list in page order, leaving the other pages untouched.
-        var before = _macros.Where(macro => macro.Page < _page).ToList();
-        var after = _macros.Where(macro => macro.Page > _page).ToList();
-        _macros = before.Concat(page).Concat(after).ToList();
+        // Put the reordered buttons back into the same slots they already occupied. A page or an
+        // output section is a contiguous slice of the saved list, so this leaves every other board
+        // untouched without assuming output sections have page numbers.
+        var ids = page.Select(macro => macro.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var slots = _macros.Select((macro, index) => (macro, index))
+            .Where(item => ids.Contains(item.macro.Id)).Select(item => item.index).ToList();
+        for (var index = 0; index < slots.Count && index < page.Count; index++)
+            _macros[slots[index]] = page[index];
         StoreBoard();
         RenderMacros();
         Status?.Invoke($"MACRO · {moved.Label} moved");

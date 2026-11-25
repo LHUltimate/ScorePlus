@@ -50,6 +50,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     readonly Dictionary<string, AnnotationBoard> _annotationBoards = new(StringComparer.OrdinalIgnoreCase);
     EventLogWindow? _log;
     ControlRoomWindow? _controlRoom;
+    MultiviewWindow? _multiview;
     ShowWindow? _showWindow;
     VenueWindow? _venueWindow;
     RemoteControlServer? _remote;
@@ -1013,7 +1014,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
             return;
         }
         _controlRoom = new ControlRoomWindow(_scorebug, _engine, _playback, _automation, _preferences.Theme,
-            _venue, OpenShowWindow, OpenVenueWindow, _nodes) { Owner = this };
+            _venue, OpenShowWindow, OpenVenueWindow, _nodes, _session, _booth, OpenMultiviewWindow) { Owner = this };
         _controlRoom.Closed += (_, _) => _controlRoom = null;
         _controlRoom.Show();
     }
@@ -1214,8 +1215,8 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         var server = new RemoteControlServer(_engine, this, id => { _panel.Execute(id); return true; }, Dispatcher, _preferences.RemotePort, _preferences.RemotePassword);
         // The audience feed draws the published program, on the UI thread: the program selection and
         // the published game belong to this window, and the server asks from a background thread.
-        RemoteControlServer.WatchImage = display => Dispatcher.Invoke(() => WatchImageSnapshot(display));
-        RemoteControlServer.WatchLayoutImage = (display, layout) => Dispatcher.Invoke(() => WatchImageSnapshot(display, layout));
+        RemoteControlServer.WatchImage = (display, width) => Dispatcher.Invoke(() => WatchImageSnapshot(display, null, width));
+        RemoteControlServer.WatchLayoutImage = (display, layout, width) => Dispatcher.Invoke(() => WatchImageSnapshot(display, layout, width));
         server.Status += message => Dispatcher.BeginInvoke(new Action(() => StatusText.Text = message));
         server.Start();
         _remote = server;
@@ -1230,7 +1231,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     /// then gets the real fonts, palette colours, logos and made icons, and the page only downloads
     /// a new frame when the artwork or the published game changed.
     /// </summary>
-    (byte[] Png, long Version)? WatchImageSnapshot(string? displayKey, string? layoutKey = null)
+    (byte[] Png, long Version)? WatchImageSnapshot(string? displayKey, string? layoutKey = null, int maxWidth = 0)
     {
         var display = ResolveWatchDisplay(displayKey);
         if (display is null) return null;
@@ -1240,7 +1241,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         var layout = chosen is not null
             ? _automation.Effective(display.Id, chosen)
             : _automation.Effective(display.Id, _scorebug.PublishedCompositeOf(display.Id));
-        var cacheKey = display.Id + "|" + (layoutKey ?? "");
+        var cacheKey = display.Id + "|" + (layoutKey ?? "") + "|" + Math.Max(0, maxWidth);
         var state = _publishedEngine.State;
         var signature = JsonSerializer.Serialize(layout) + "|" + GameEngine.StagedSignature(state);
         if (!_watchFrames.TryGetValue(cacheKey, out var cached) || !string.Equals(cached.Signature, signature, StringComparison.Ordinal))
@@ -1248,7 +1249,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
             _watchVersion++;
             cached = (signature, null, _watchVersion);
         }
-        cached.Png ??= RenderProgramPng(layout);
+        cached.Png ??= RenderProgramPng(layout, maxWidth);
         if (cached.Png is null) return null;
         _watchFrames[cacheKey] = cached;
         return (cached.Png, cached.Version);
@@ -1271,18 +1272,25 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     }
 
     /// <summary>One off-screen render of the program layout, encoded as PNG for the browser.</summary>
-    byte[]? RenderProgramPng(ScorebugLayout layout)
+    byte[]? RenderProgramPng(ScorebugLayout layout, int maxWidth = 0)
     {
         ScorebugCanvasView? view = null;
         try
         {
             // A 1280×720 layout rendered at 1280×720 looked soft on a wall board. Render at up to
             // three times the design size (capped at 4K wide), so the PNG has real pixels for a
-            // large screen instead of a browser stretching the same small bitmap.
-            var scale = Math.Clamp((int)Math.Ceiling(1920.0 / Math.Max(1, layout.Width)), 1, 3);
+            // large screen instead of a browser stretching the same small bitmap. Remote
+            // multiview tiles ask for a small width: the phone renders them at tile size, and a
+            // 4K PNG per tile every second was what made that wall lag.
+            var scale = maxWidth > 0 ? 1 : Math.Clamp((int)Math.Ceiling(1920.0 / Math.Max(1, layout.Width)), 1, 3);
             if (layout.Width * scale > 3840) scale = 1;
             var width = Math.Max(1, layout.Width) * scale;
             var height = Math.Max(1, layout.Height) * scale;
+            if (maxWidth > 0 && width > maxWidth)
+            {
+                height = Math.Max(1, (int)Math.Round(height * (double)maxWidth / width));
+                width = maxWidth;
+            }
             view = new ScorebugCanvasView(_scorebug, _engine,
                 stateProvider: () => _publishedEngine.State, playback: null, layoutProvider: () => layout)
             {
@@ -1954,18 +1962,22 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         base.OnClosing(e);
     }
 
-    /// <summary>Opens the multiview: every camera live, with the replay preview beside it.</summary>
-    void Multiview_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Opens the multiview wall from Control Room: every camera live, with the replay preview
+    /// beside it. The room owns the window, and asking again focuses the one already open.
+    /// </summary>
+    void OpenMultiviewWindow(Window? owner = null)
     {
-        var window = new MultiviewWindow(_session, _preferences, _scorebug, _engine, _publishedEngine, _program, _automation, _playback) { Owner = this };
-        window.Show();
-    }
-
-    /// <summary>Opens the referee review room: all cameras, the configured rewind and recorded clocks.</summary>
-    void ReplayBooth_Click(object sender, RoutedEventArgs e)
-    {
-        var window = new ReplayBoothWindow(_booth, _preferences) { Owner = this };
-        window.Show();
+        if (_multiview is { IsVisible: true })
+        {
+            if (_multiview.WindowState == WindowState.Minimized) _multiview.WindowState = WindowState.Normal;
+            _multiview.Activate();
+            return;
+        }
+        _multiview = new MultiviewWindow(_session, _preferences, _scorebug, _engine, _publishedEngine, _program, _automation, _playback)
+            { Owner = owner ?? this };
+        _multiview.Closed += (_, _) => _multiview = null;
+        _multiview.Show();
     }
 
     void Open_Click(object sender, RoutedEventArgs e)

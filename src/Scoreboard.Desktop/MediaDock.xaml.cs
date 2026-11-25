@@ -534,7 +534,8 @@ public partial class MediaDock : UserControl
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return _session.Library.Where(entry =>
             Matches(entry.Label) || Matches(entry.Tag) || Matches(entry.Folder) || Matches(entry.FolderLabel)
-            || Matches(entry.KindLabel) || fromMatchingPlaylists.Contains(entry.Path)).ToArray();
+            || Matches(entry.KindLabel) || Matches(entry.ReplayTags) || Matches(entry.ReplayClock)
+            || Matches(entry.ReplayPeriod) || fromMatchingPlaylists.Contains(entry.Path)).ToArray();
     }
 
     void Search_Changed(object sender, TextChangedEventArgs e)
@@ -1004,8 +1005,9 @@ public partial class MediaDock : UserControl
             });
         }
         // A speaker, a microphone or a clip carries a bar down the right edge of its thumbnail,
-        // so the dock reads like a mixer without opening anything.
-        if (!entry.IsScreen && !entry.IsCamera && !entry.IsImage) thumb.Children.Add(LevelBar(entry));
+        // so the dock reads like a mixer without opening anything. The track is always visible;
+        // only its fill moves with the sound, so a preview click cannot make the bar flash and vanish.
+        if (!entry.IsScreen && !entry.IsImage) thumb.Children.Add(LevelBar(entry));
         Grid.SetRow(thumb, 0);
         grid.Children.Add(thumb);
 
@@ -1022,7 +1024,9 @@ public partial class MediaDock : UserControl
 
         var tag = new TextBlock
         {
-            Text = (entry.Loop ? "⟳  " : "") + (playlist is null ? entry.TagAndFolder : entry.Tag).ToUpperInvariant(),
+            Text = (entry.Loop ? "⟳  " : "") + (playlist is null ? entry.TagAndFolder : entry.Tag).ToUpperInvariant()
+                + (entry.ReplayRating > 0 ? $"  ·  ★{entry.ReplayRating}" : "")
+                + ((entry.ReplayTags ?? "").Length > 0 ? $"  ·  {entry.ReplayTags}" : ""),
             FontSize = 9,
             FontWeight = FontWeights.Bold,
             Foreground = _muted,
@@ -1133,9 +1137,11 @@ public partial class MediaDock : UserControl
         if (_session is null) return;
         foreach (var (entry, fill, track) in _meters)
         {
+            // Keep the empty track on screen for every item that can make sound. Hiding it until
+            // the source was audible is what made the bars flash into view on a preview click and
+            // immediately disappear again.
+            if (track.Visibility != Visibility.Visible) track.Visibility = Visibility.Visible;
             var live = Audible(entry);
-            var wanted = live ? Visibility.Visible : Visibility.Collapsed;
-            if (track.Visibility != wanted) track.Visibility = wanted;
             if (!live) { fill.Height = 0; continue; }
             var available = track.ActualHeight - 2;
             if (available <= 1) continue;
@@ -1433,6 +1439,9 @@ public partial class MediaDock : UserControl
     {
         if (_session?.Selected is not { } selected) return;
         _session.Retag(selected, TagBox.Text);
+        // A retag accepts several tags in one field. Normalise the spacing so the library, the
+        // scorebug matcher and the tile captions all read the same list.
+        TagBox.Text = _session.Selected?.Tag ?? TagBox.Text;
     }
 
     void ClipLoop_Changed(object sender, RoutedEventArgs e)

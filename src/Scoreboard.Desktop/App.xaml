@@ -172,14 +172,18 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Slider">
-            <Grid VerticalAlignment="Center">
-              <Border Height="7" CornerRadius="4" Background="{DynamicResource OperatorBorderBrush}"/>
-              <Track x:Name="PART_Track">
+            <Grid VerticalAlignment="Center" Height="20">
+              <!-- Keep the rail visible even on a dark operator surface: the thumb was the only
+                   part of this control that read on screen. The border makes the bar unmistakable,
+                   while the accent fill still shows how much of the range is behind the thumb. -->
+              <Border Height="8" CornerRadius="4" Background="#4F647A"
+                      BorderBrush="#7A90A7" BorderThickness="1"/>
+              <Track x:Name="PART_Track" Orientation="Horizontal" Height="20" VerticalAlignment="Center">
                 <Track.DecreaseRepeatButton>
                   <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Focusable="False">
                     <RepeatButton.Template>
                       <ControlTemplate TargetType="RepeatButton">
-                        <Border Height="7" CornerRadius="4" Background="{DynamicResource Accent}"/>
+                        <Border Height="8" CornerRadius="4" Background="{DynamicResource Accent}"/>
                       </ControlTemplate>
                     </RepeatButton.Template>
                   </RepeatButton>

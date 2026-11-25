@@ -1,7 +1,7 @@
 <Window x:Class="Scoreboard.Desktop.LiveSwitchWindow" Icon="app.ico"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ScorePlus — Live Switch" Width="1480" Height="940" MinWidth="1120" MinHeight="740"
+        Title="ScorePlus — Live Switch" Width="1480" Height="1000" MinWidth="1120" MinHeight="900"
         WindowStartupLocation="CenterOwner" Background="#0E1218" Foreground="#F4F7FB" FontFamily="Segoe UI">
   <Window.Resources>
     <Style x:Key="Card" TargetType="Border">
@@ -29,19 +29,105 @@
       <Setter Property="Foreground" Value="#8DEBCB"/>
       <Setter Property="BorderBrush" Value="#38D7A3"/>
     </Style>
+    <!-- The production strip used the system TabControl, whose white tab headers vanished into a
+         dark row. This template keeps the header readable and gives the selected tab an accent. -->
+    <Style x:Key="VisionTabItem" TargetType="TabItem">
+      <Setter Property="Foreground" Value="#93A0B2"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="Padding" Value="13,4"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TabItem">
+            <Border x:Name="Tab" Background="Transparent" BorderBrush="Transparent" BorderThickness="0,0,0,2"
+                    CornerRadius="5,5,0,0" Padding="{TemplateBinding Padding}" Margin="0,0,4,0">
+              <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Tab" Property="Background" Value="#123C33"/>
+                <Setter TargetName="Tab" Property="BorderBrush" Value="#38D7A3"/>
+                <Setter Property="Foreground" Value="#8DEBCB"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Tab" Property="Background" Value="#1D2A38"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Default WPF sliders are a white rail on a white groove. The audio trims need to read at a
+         glance against the dark strip, so the rail and thumb are drawn explicitly. -->
+    <Style x:Key="VisionSlider" TargetType="Slider">
+      <Setter Property="Height" Value="20"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Slider">
+            <Grid VerticalAlignment="Center" Background="Transparent">
+              <Border Height="4" CornerRadius="2" Background="#2A3340"/>
+              <Track x:Name="PART_Track" Orientation="Horizontal">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="Slider.DecreaseLarge" Focusable="False">
+                    <RepeatButton.Template>
+                      <ControlTemplate TargetType="RepeatButton">
+                        <Border Height="4" CornerRadius="2" Background="#38D7A3"/>
+                      </ControlTemplate>
+                    </RepeatButton.Template>
+                  </RepeatButton>
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="Slider.IncreaseLarge" Focusable="False">
+                    <RepeatButton.Template>
+                      <ControlTemplate TargetType="RepeatButton">
+                        <Border Height="4" Background="Transparent"/>
+                      </ControlTemplate>
+                    </RepeatButton.Template>
+                  </RepeatButton>
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Width="12" Height="16">
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="Thumb">
+                        <Border Width="12" Height="16" CornerRadius="3" Background="#F4F7FB"
+                                BorderBrush="#0E1218" BorderThickness="1"/>
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="LayerChip" TargetType="Button">
+      <Setter Property="FontSize" Value="9"/>
+      <Setter Property="MinHeight" Value="26"/>
+      <Setter Property="Padding" Value="7,2"/>
+      <Setter Property="Margin" Value="0,0,4,4"/>
+      <Setter Property="Background" Value="#1D2A38"/>
+      <Setter Property="Foreground" Value="#D2E1EE"/>
+      <Setter Property="BorderBrush" Value="#3D5064"/>
+    </Style>
   </Window.Resources>
 
   <Grid Margin="12">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
-      <RowDefinition Height="380"/>
+      <RowDefinition Height="320"/>
       <RowDefinition Height="*"/>
-      <RowDefinition Height="154"/>
+      <RowDefinition Height="126"/>
+      <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
     <DockPanel Grid.Row="0" Margin="2,0,2,9">
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+        <Button Content="Stream Studio" Style="{StaticResource ToolButton}" Click="LiveBook_Click"
+                ToolTip="Open the stream compositor with destinations and provider output"/>
+        <Button Content="Camera Switch" Style="{StaticResource ToolButton}" Click="CameraSwitch_Click"
+                ToolTip="Open the camera-only switcher with Fill A and Fill B previews"/>
         <Button Content="+ Display" Style="{StaticResource ToolButton}" Click="AddDisplay_Click"
                 ToolTip="Add another program display and select it for preview"/>
         <Button Content="Update Output" Style="{StaticResource ToolButton}" Click="UpdateOutput_Click"
@@ -53,8 +139,8 @@
         <Border Background="#0E1218" CornerRadius="7" Padding="7,4" Margin="0,0,10,0" VerticalAlignment="Center">
           <TextBlock Text="LIVE" FontSize="12" FontWeight="Bold" Foreground="#FF5D5D"/>
         </Border>
-        <TextBlock Text="SCOREPLUS · LIVE SWITCH" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"/>
-        <TextBlock Text="   Multiview · program and preview · layout sources and layers"
+        <TextBlock Text="SCOREPLUS · LIVE SWITCH / VISION" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"/>
+        <TextBlock Text="   Multiview · clips · cameras · audio · broadcast"
                    Foreground="#93A0B2" VerticalAlignment="Center"/>
       </StackPanel>
     </DockPanel>
@@ -99,9 +185,14 @@
       <Border Grid.Column="0" Style="{StaticResource Card}">
         <DockPanel>
           <DockPanel DockPanel.Dock="Top" Margin="1,0,1,6">
-            <Border DockPanel.Dock="Right" Background="#3A1717" CornerRadius="4" Padding="7,3">
-              <TextBlock Text="PROGRAM · ON AIR" FontSize="9" FontWeight="Bold" Foreground="#FF9B9B"/>
-            </Border>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <Button x:Name="ReturnProgramButton" Content="RETURN TO LAYOUT" Style="{StaticResource ToolButton}"
+                      MinHeight="24" Padding="7,2" FontSize="9" Click="ReturnProgram_Click"
+                      ToolTip="Put the layout back on the program monitor"/>
+              <Border Background="#3A1717" CornerRadius="4" Padding="7,3" Margin="6,0,0,0">
+                <TextBlock Text="PROGRAM · ON AIR" FontSize="9" FontWeight="Bold" Foreground="#FF9B9B"/>
+              </Border>
+            </StackPanel>
             <TextBlock x:Name="ProgramLabel" Text="PROGRAM" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
           </DockPanel>
           <Border Background="#070B10" CornerRadius="6" BorderBrush="#7A2B2B" BorderThickness="1" ClipToBounds="True">
@@ -124,33 +215,31 @@
         </DockPanel>
       </Border>
 
+      <!-- The switch box is deliberately not a ScrollViewer: every control an operator needs
+           between takes has to be visible at once, even on a 900px-high window. The live game
+           values are still built for the phone/remote and the smoke checks, but the panel stays
+           out of the operator's way instead of turning the switch box into a scrolling page. -->
       <Border Grid.Column="4" Style="{StaticResource Card}">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel>
-          <TextBlock Text="SWITCH" Style="{StaticResource SectionTitle}" Margin="1,0,1,6"/>
-          <TextBlock Text="Display" FontSize="10" Foreground="#7C8A9C" Margin="0,0,0,2"/>
-          <ComboBox x:Name="DisplayBox" MinHeight="30" Margin="0,0,0,5" SelectionChanged="Display_Changed"/>
-          <TextBlock Text="Transition" FontSize="10" Foreground="#7C8A9C" Margin="0,0,0,2"/>
-          <ComboBox x:Name="TransitionBox" MinHeight="30" Margin="0,0,0,5" SelectionChanged="Transition_Changed"/>
+          <TextBlock Text="SWITCH" Style="{StaticResource SectionTitle}" Margin="1,0,1,4"/>
+          <TextBlock Text="Display" FontSize="9" Foreground="#7C8A9C" Margin="0,0,0,1"/>
+          <ComboBox x:Name="DisplayBox" MinHeight="26" Margin="0,0,0,3" SelectionChanged="Display_Changed"/>
+          <TextBlock Text="Transition" FontSize="9" Foreground="#7C8A9C" Margin="0,0,0,1"/>
+          <ComboBox x:Name="TransitionBox" MinHeight="26" Margin="0,0,0,3" SelectionChanged="Transition_Changed"/>
           <DockPanel>
-            <TextBlock Text="Duration" FontSize="10" Foreground="#7C8A9C" VerticalAlignment="Center"/>
-            <TextBox x:Name="DurationInput" Width="60" MinHeight="28" Text="0.5" Margin="8,0,0,0"
+            <TextBlock Text="Duration" FontSize="9" Foreground="#7C8A9C" VerticalAlignment="Center"/>
+            <TextBox x:Name="DurationInput" Width="52" MinHeight="24" Text="0.5" Margin="8,0,0,0"
                      TextChanged="Duration_Changed" ToolTip="Seconds for a dissolve, slide or zoom"/>
-            <TextBlock Text="s" FontSize="10" Foreground="#7C8A9C" VerticalAlignment="Center" Margin="3,0,0,0"/>
+            <TextBlock Text="s" FontSize="9" Foreground="#7C8A9C" VerticalAlignment="Center" Margin="3,0,0,0"/>
           </DockPanel>
           <Button Content="TAKE" Style="{StaticResource TakeButton}" Click="Take_Click"
                   ToolTip="Publish the previewed layout with its transition"/>
-          <Button Content="CUT" Style="{StaticResource ToolButton}" MinHeight="38" Click="Cut_Click"
+          <Button Content="CUT" Style="{StaticResource ToolButton}" MinHeight="32" Click="Cut_Click"
                   ToolTip="Publish instantly, ignoring the transition"/>
-          <TextBlock x:Name="SwitchStatus" Text="Ready" Foreground="#5C6B7E" FontSize="10" Margin="0,7,0,0" TextWrapping="Wrap"/>
-          <Expander Header="GAME DATA" Foreground="#93A0B2" FontSize="10" Margin="0,10,0,0"
-                    ToolTip="Every live value the current game is tracking">
-            <ScrollViewer MaxHeight="270" Margin="0,5,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-              <StackPanel x:Name="GameDataPanel"/>
-            </ScrollViewer>
-          </Expander>
+          <TextBlock x:Name="SwitchStatus" Text="Ready" Foreground="#5C6B7E" FontSize="9"
+                     Margin="0,5,0,0" TextWrapping="Wrap" MaxHeight="34"/>
+          <StackPanel x:Name="GameDataPanel" Visibility="Collapsed"/>
         </StackPanel>
-        </ScrollViewer>
       </Border>
     </Grid>
 
@@ -165,19 +254,34 @@
             <TextBlock Text="SOURCES" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
           </StackPanel>
         </DockPanel>
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <StackPanel>
-            <WrapPanel x:Name="SourcePanel"/>
-            <DockPanel Margin="0,5,0,0">
-              <TextBlock Text="LAYERS" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" VerticalAlignment="Center"/>
-              <WrapPanel x:Name="LayerPanel"/>
-            </DockPanel>
-          </StackPanel>
-        </ScrollViewer>
+        <StackPanel>
+          <WrapPanel x:Name="SourcePanel"/>
+          <DockPanel Margin="0,2,0,0">
+            <TextBlock Text="LAYERS" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" VerticalAlignment="Center"/>
+            <WrapPanel x:Name="LayerPanel"/>
+          </DockPanel>
+        </StackPanel>
       </DockPanel>
     </Border>
 
-    <Border Grid.Row="4" Background="#171C25" CornerRadius="7" Padding="10,5">
+    <!-- ============ VISION PRODUCTION STRIP ============ -->
+    <Border Grid.Row="4" Background="#171C25" CornerRadius="7" Padding="7,4" Margin="0,0,0,8">
+      <TabControl x:Name="VisionTabs" Background="Transparent" BorderThickness="0"
+                  ItemContainerStyle="{StaticResource VisionTabItem}">
+        <TabControl.Template>
+          <ControlTemplate TargetType="TabControl">
+            <DockPanel>
+              <TabPanel DockPanel.Dock="Top" IsItemsHost="True" Background="Transparent" Margin="0,0,0,3"/>
+              <Border Background="Transparent" Padding="0">
+                <ContentPresenter ContentSource="SelectedContent"/>
+              </Border>
+            </DockPanel>
+          </ControlTemplate>
+        </TabControl.Template>
+      </TabControl>
+    </Border>
+
+    <Border Grid.Row="5" Background="#171C25" CornerRadius="7" Padding="10,5">
       <DockPanel>
         <TextBlock DockPanel.Dock="Right" x:Name="ClockStatus" Text="—" Foreground="#93A0B2" FontSize="10" FontFamily="Consolas"/>
         <TextBlock x:Name="StatusText" Text="LIVE SWITCH READY · choose a layout to preview."

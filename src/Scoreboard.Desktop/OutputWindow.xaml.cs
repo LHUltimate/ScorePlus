@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Runtime.InteropServices;
 using Scoreboard.Core;
@@ -22,6 +23,11 @@ public partial class OutputWindow : Window
     readonly AnnotationBoard _annotationBoard;
     string _broadcastTheme;
     // Annotation tools live above the graphic, so a pen stroke never edits or moves the layout.
+    // Camera Switch can send one camera straight to this display. The picture sits above the
+    // published layout and below the annotation ink, and follows that camera's capture feed.
+    readonly Image _routedCamera = new() { Stretch = Stretch.UniformToFill, Visibility = Visibility.Collapsed, IsHitTestVisible = false };
+    (CameraFeed? Feed, Action<BitmapSource>? Handler) _routedFeed;
+    int _routedCameraIndex = -1;
     Grid? _annotationLayer;
     InkCanvas? _ink;
     // The ink sits in the scorebug's design space inside its own uniform Viewbox, so it lines up
@@ -60,6 +66,10 @@ public partial class OutputWindow : Window
         // The audience only ever sees the layout that was published, never the one being designed.
         _scorebugView=new ScorebugCanvasView(catalog,engine,()=>_displayState,playback,muteVideo:false,layoutProvider:()=>_catalog.PublishedCompositeOf(_displayId),displayId:_displayId,automation:automation);
         ScorebugHost.Children.Add(_scorebugView); _engine.Changed+=Update; _engine.Changed+=_scorebugView.Refresh; _catalog.Changed+=Publish; Update();
+        BuildRoutedCameraLayer();
+        ApplyRoutedCamera();
+        CameraRouting.Changed += ApplyRoutedCamera;
+        Closed += (_, _) => { CameraRouting.Changed -= ApplyRoutedCamera; DetachRoutedCamera(); };
         BuildAnnotationLayer();
         if(annotations)OpenAnnotationTools();
     }
@@ -122,6 +132,50 @@ public partial class OutputWindow : Window
 
     /// <summary>How long ink stays before the quick fade; zero means permanent.</summary>
     public TimeSpan AnnotationFadeDelay => _annotationBoard.Hold;
+
+    /// <summary>Adds the routed-camera picture above the graphic; ink is added after it, on top.</summary>
+    void BuildRoutedCameraLayer()
+    {
+        if (Content is not Grid root) return;
+        Panel.SetZIndex(_routedCamera, 1);
+        if (!root.Children.Contains(_routedCamera)) root.Children.Add(_routedCamera);
+    }
+
+    /// <summary>
+    /// Shows the camera the Camera Switch routed to this display, or returns to the published
+    /// layout when the routing is cleared.
+    /// </summary>
+    void ApplyRoutedCamera()
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(ApplyRoutedCamera); return; }
+        var index = CameraRouting.CameraFor(_displayId);
+        if (index == _routedCameraIndex) return;
+        _routedCameraIndex = index ?? -1;
+        DetachRoutedCamera();
+        if (index is null)
+        {
+            _routedCamera.Source = null;
+            _routedCamera.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var feed = CameraFeed.Get(index.Value);
+        Action<BitmapSource> frame = source =>
+        {
+            if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => _routedCamera.Source = source); return; }
+            _routedCamera.Source = source;
+        };
+        feed.FrameReady += frame;
+        try { feed.Start(); } catch { }
+        _routedFeed = (feed, frame);
+        if (feed.LastFrame is { } last) _routedCamera.Source = last;
+        _routedCamera.Visibility = Visibility.Visible;
+    }
+
+    void DetachRoutedCamera()
+    {
+        if (_routedFeed.Handler is { } handler) _routedFeed.Feed?.FrameReady -= handler;
+        _routedFeed = default;
+    }
 
     void BuildAnnotationLayer()
     {

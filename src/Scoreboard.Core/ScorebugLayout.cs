@@ -796,6 +796,13 @@ public sealed class ScorebugDisplay
     /// the published game state, so a low play clock can recolor a value or switch layouts live.
     /// </summary>
     public List<AutomationRule> Automations { get; set; } = [];
+
+    /// <summary>
+    /// The broadcast channel this display feeds: raster, safe areas and the graphic stacks that
+    /// travel with every layout sent to a router or a stream. The channel belongs to the display,
+    /// not to one layout, so switching artwork never changes the format going out.
+    /// </summary>
+    public BroadcastProfile Broadcast { get; set; } = new();
 }
 
 /// <summary>What is written to scorebug.json: every display, with its layouts and what is on air.</summary>
@@ -1217,6 +1224,18 @@ public sealed class ScorebugCatalog
         File.Move(temp, _path, true);
     }
 
+    /// <summary>Edits one display's channel settings, then saves and notifies every view.</summary>
+    public bool UpdateDisplay(string? displayId, Action<ScorebugDisplay> edit)
+    {
+        var display = FindDisplay(displayId);
+        if (display is null) return false;
+        edit(display);
+        Validate();
+        Save();
+        Changed?.Invoke();
+        return true;
+    }
+
     /// <summary>Edits the layout being designed, then saves and notifies every view.</summary>
     public void Update(Action<ScorebugLayout> edit)
     {
@@ -1291,6 +1310,8 @@ public sealed class ScorebugCatalog
                 .Where(id => display.Layouts.Any(layout => string.Equals(layout.Id, id, StringComparison.OrdinalIgnoreCase)))
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             display.Automations = AutomationRules.Normalize(display.Automations);
+            display.Broadcast ??= new BroadcastProfile();
+            display.Broadcast.Normalize();
             foreach (var layout in display.Layouts)
             {
                 if (string.IsNullOrWhiteSpace(layout.Id) || !seenLayouts.Add(layout.Id))

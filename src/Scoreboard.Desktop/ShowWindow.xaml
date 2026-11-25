@@ -6,7 +6,6 @@
   <Grid Margin="14" Background="#000000">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
@@ -26,22 +25,11 @@
       </StackPanel>
     </DockPanel>
 
-    <Border Grid.Row="1" Background="#000000" BorderBrush="#2A2D33" BorderThickness="1"
-            CornerRadius="7" Padding="9,6" Margin="0,0,0,9">
-      <DockPanel>
-        <TextBlock DockPanel.Dock="Right" Text="OUTPUTS" FontSize="9" FontWeight="Bold"
-                   Foreground="#5C6B7E" VerticalAlignment="Center" Margin="8,0,0,0"/>
-        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-          <StackPanel x:Name="ShowDisplayStrip" Orientation="Horizontal"/>
-        </ScrollViewer>
-      </DockPanel>
-    </Border>
-
-    <Border Grid.Row="2" Background="#000000" BorderBrush="#2A2D33" BorderThickness="1" CornerRadius="7">
+    <Border Grid.Row="1" Background="#000000" BorderBrush="#2A2D33" BorderThickness="1" CornerRadius="7">
       <ContentControl x:Name="ShowHost"/>
     </Border>
 
-    <DockPanel Grid.Row="3" Margin="2,8,2,0">
+    <DockPanel Grid.Row="2" Margin="2,8,2,0">
       <TextBlock x:Name="StatusText" DockPanel.Dock="Left" Text="SHOW READY" Foreground="#93A0B2" FontSize="10"/>
       <TextBlock DockPanel.Dock="Right" Text="Click a macro to run it · F2 edits"
                  Foreground="#5C6B7E" FontSize="10" HorizontalAlignment="Right"/>

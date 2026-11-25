@@ -488,29 +488,41 @@ public sealed class NodeService : IDisposable
 
     public async Task<bool> RefreshHealthAsync(DisplayNode node)
     {
-        try
+        // A node that is busy unpacking a package can miss one 1.2-second health poll. That is not
+        // the same as going offline: retry once before flipping the tally, or a healthy node under
+        // load flickers offline in the Venue page and the smoke suite.
+        for (var attempt = 0; attempt < 2; attempt++)
         {
-            using var response = await SendAsync(node, HttpMethod.Get, "/health", "").ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"Node returned {(int)response.StatusCode}.");
-            var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var report = JsonSerializer.Deserialize<NodeHealthReport>(json, JsonOptions)
-                ?? throw new InvalidOperationException("Node returned no health report.");
-            var age = report.LastSeen == default ? TimeSpan.Zero : DateTimeOffset.UtcNow - report.LastSeen;
-            node.Health = report with
+            try
             {
-                Online = true,
-                Stale = report.Stale || age > TimeSpan.FromSeconds(5),
-                LastSeen = DateTimeOffset.UtcNow,
-                Error = ""
-            };
-            RaiseChanged();
-            return true;
+                using var response = await SendAsync(node, HttpMethod.Get, "/health", "").ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"Node returned {(int)response.StatusCode}.");
+                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var report = JsonSerializer.Deserialize<NodeHealthReport>(json, JsonOptions)
+                    ?? throw new InvalidOperationException("Node returned no health report.");
+                var age = report.LastSeen == default ? TimeSpan.Zero : DateTimeOffset.UtcNow - report.LastSeen;
+                node.Health = report with
+                {
+                    Online = true,
+                    Stale = report.Stale || age > TimeSpan.FromSeconds(5),
+                    LastSeen = DateTimeOffset.UtcNow,
+                    Error = ""
+                };
+                RaiseChanged();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                if (attempt == 0)
+                {
+                    try { await Task.Delay(250).ConfigureAwait(false); } catch { }
+                    continue;
+                }
+                MarkError(node, ex.Message);
+                return false;
+            }
         }
-        catch (Exception ex)
-        {
-            MarkError(node, ex.Message);
-            return false;
-        }
+        return false;
     }
 
     /// <summary>Finds agents on the LAN and on this PC. A venue with no network still works; this

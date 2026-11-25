@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -6,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using Scoreboard.Core;
 
 namespace Scoreboard.Desktop;
 
@@ -78,12 +80,24 @@ public sealed class ReplayBoothWindow : Window
     bool _updatingLayout;
     int _wallColumns = 2;
     readonly Button _playButton = new() { Content = "Play", Width = 78 };
+    readonly Button _markInButton = new() { Content = "Mark IN", MinWidth = 66, Margin = new Thickness(0, 0, 4, 0) };
+    readonly Button _markOutButton = new() { Content = "Mark OUT", MinWidth = 70, Margin = new Thickness(0, 0, 4, 0) };
+    readonly Button _saveReplayButton = new() { Content = "Save replay", MinWidth = 92, Margin = new Thickness(0, 0, 4, 0) };
+    readonly Button _playSavedButton = new() { Content = "Play again", MinWidth = 84, Visibility = Visibility.Collapsed };
+    readonly Slider _ratingSlider = new() { Minimum = 1, Maximum = 5, Value = 3, Width = 94, TickFrequency = 1, IsSnapToTickEnabled = true, VerticalAlignment = VerticalAlignment.Center };
+    readonly TextBlock _ratingText = new() { Text = "★★★☆☆", FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD2, 0x66)), VerticalAlignment = VerticalAlignment.Center, MinWidth = 58 };
+    readonly TextBox _tagsBox = new() { Text = "REPLAY, HIGHLIGHT", MinWidth = 180, VerticalContentAlignment = VerticalAlignment.Center };
+    readonly TextBlock _markStatus = new() { FontSize = 10, Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xA0, 0xB4)), VerticalAlignment = VerticalAlignment.Center };
+    double? _markIn;
+    double? _markOut;
+    string _lastSavedReplay = "";
     readonly Button _backButton = new() { Content = "◀ Wall", MinWidth = 76, Margin = new Thickness(0, 0, 6, 0), Visibility = Visibility.Collapsed };
     readonly CheckBox _labelsCheck = new() { Content = "Show camera names on the bottom corner", IsChecked = true };
     readonly Border _editor = new() { Visibility = Visibility.Collapsed, Padding = new Thickness(10, 7, 10, 7) };
     readonly Border _transportBar = new() { Padding = new Thickness(12, 8, 12, 10) };
     readonly TextBlock _status = new() { FontSize = 11, Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0xA8, 0xB8)), TextWrapping = TextWrapping.Wrap };
-    readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(120) };
+    readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(200) };
+    int _selectedIndex = -2;
     readonly Dictionary<int, Image> _tileImages = [];
     readonly Dictionary<int, Border> _tileBorders = [];
     bool _expanded;
@@ -416,6 +430,29 @@ public sealed class ReplayBoothWindow : Window
         speedRow.Children.Add(_speedText);
         stack.Children.Add(speedRow);
 
+        // Mark, rate and tag a replay range without leaving the transport. The range is measured
+        // in seconds back from the live edge, the same units as the scrubber, and the saved clip is
+        // imported into the media library with its metadata so it can be searched and played again.
+        var markRow = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 5, 0, 0) };
+        _markInButton.Click += (_, _) => MarkIn();
+        _markOutButton.Click += (_, _) => MarkOut();
+        _saveReplayButton.Click += (_, _) => SaveReplay();
+        _playSavedButton.Click += (_, _) => PlaySavedReplay();
+        _ratingSlider.ValueChanged += (_, _) => _ratingText.Text = Stars((int)Math.Round(_ratingSlider.Value));
+        _ratingText.Text = Stars(3);
+        markRow.Children.Add(_markInButton);
+        markRow.Children.Add(_markOutButton);
+        markRow.Children.Add(_saveReplayButton);
+        markRow.Children.Add(_playSavedButton);
+        markRow.Children.Add(new TextBlock { Text = "  RATING", FontSize = 10, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xA0, 0xB4)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) });
+        markRow.Children.Add(_ratingSlider);
+        markRow.Children.Add(_ratingText);
+        markRow.Children.Add(new TextBlock { Text = "  TAGS", FontSize = 10, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(0x8F, 0xA0, 0xB4)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) });
+        markRow.Children.Add(_tagsBox);
+        stack.Children.Add(markRow);
+        _markStatus.Text = "Mark IN and OUT to cut a replay; rating and tags travel with the clip.";
+        stack.Children.Add(_markStatus);
+
         // A compact added-time stopwatch beside the transport. It drives the live game engine, so
         // starting it here is exactly the same as pressing Stoppage on the console.
         _stoppageToggle.Click += (_, _) => { _booth.ToggleStoppage(); RefreshBigView(); };
@@ -445,6 +482,90 @@ public sealed class ReplayBoothWindow : Window
             if (_updatingScrub || _editing) return;
             if (Math.Abs(e.NewValue - _booth.Back) > 0.05) _booth.Seek(e.NewValue);
         };
+    }
+
+    static string Stars(int rating) => new string('★', Math.Clamp(rating, 0, 5)) + new string('☆', 5 - Math.Clamp(rating, 0, 5));
+
+    void MarkIn()
+    {
+        _markIn = Math.Max(0, _booth.Back);
+        _markOut ??= 0;
+        UpdateMarkStatus();
+    }
+
+    void MarkOut()
+    {
+        if (_markIn is null)
+        {
+            _markStatus.Text = "Mark IN first, then scrub to the out-point and mark OUT.";
+            return;
+        }
+        _markOut = Math.Max(0, _booth.Back);
+        if (_markOut > _markIn)
+        {
+            _markIn = _markOut;
+            _markStatus.Text = "OUT is earlier than IN; move back and mark IN again for a longer clip.";
+            return;
+        }
+        UpdateMarkStatus();
+    }
+
+    void UpdateMarkStatus()
+    {
+        if (_markIn is null)
+        {
+            _markStatus.Text = "Mark IN and OUT to cut a replay; rating and tags travel with the clip.";
+            return;
+        }
+        var outBack = _markOut ?? 0;
+        var length = Math.Max(0, _markIn.Value - outBack);
+        _markStatus.Text = $"MARKED IN {_markIn:0.0}s back · OUT {outBack:0.0}s back · {length:0.0}s · {Stars((int)Math.Round(_ratingSlider.Value))}";
+    }
+
+    void SaveReplay()
+    {
+        if (_markIn is null)
+        {
+            _markStatus.Text = "Mark IN first, then Save replay.";
+            return;
+        }
+        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "ScorePlus Replays");
+        try { Directory.CreateDirectory(folder); } catch { }
+        var stem = string.Concat((_booth.SelectedLabel ?? "replay").Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Save marked replay",
+            Filter = "Replay clip (*.avi)|*.avi",
+            DefaultExt = ".avi",
+            InitialDirectory = folder,
+            FileName = $"{stem}-{DateTime.Now:yyyyMMdd-HHmmss}.avi"
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        var selection = new ReplaySelection
+        {
+            CameraIndex = _booth.SelectedCamera?.Index ?? 0,
+            MarkInBack = _markIn.Value,
+            MarkOutBack = _markOut ?? 0,
+            Rating = (int)Math.Round(_ratingSlider.Value)
+        };
+        selection.SetTags(_tagsBox.Text);
+        _markStatus.Text = "SAVING REPLAY · cutting the marked range…";
+        _booth.SaveMarkedReplay(selection, dialog.FileName, (ok, message) =>
+        {
+            _markStatus.Text = message;
+            _status.Text = message;
+            if (!ok) return;
+            _lastSavedReplay = dialog.FileName;
+            _playSavedButton.Visibility = Visibility.Visible;
+        });
+    }
+
+    void PlaySavedReplay()
+    {
+        if (_lastSavedReplay.Length == 0) return;
+        _status.Text = _booth.PlaySavedReplay(_lastSavedReplay)
+            ? "REPLAY · playing the saved clip on the media bus"
+            : "REPLAY · the saved clip is no longer in the library";
     }
 
     void Palette()
@@ -499,6 +620,7 @@ public sealed class ReplayBoothWindow : Window
         var signature = string.Join("|", _booth.Cameras.Select(camera => $"{camera.Index}:{camera.Label}"));
         if (signature == _cameraSignature && _tileImages.Count == _booth.Cameras.Count) return;
         _cameraSignature = signature;
+        _selectedIndex = -2;
         _wallTiles.Children.Clear();
         _tileImages.Clear();
         _tileBorders.Clear();
@@ -587,6 +709,8 @@ public sealed class ReplayBoothWindow : Window
     void UpdateSelection()
     {
         var selected = _booth.SelectedCamera?.Index ?? -1;
+        if (selected == _selectedIndex) return;
+        _selectedIndex = selected;
         foreach (var (index, border) in _tileBorders)
             border.BorderBrush = index == selected
                 ? new SolidColorBrush(Color.FromRgb(0x38, 0xD7, 0xA3))
@@ -831,7 +955,7 @@ public sealed class ReplayBoothWindow : Window
         RefreshStoppage();
         _windowLabel.Text = WindowLabel();
         var frame = _booth.DisplayFrame;
-        _bigImage.Source = frame;
+        if (!ReferenceEquals(_bigImage.Source, frame)) _bigImage.Source = frame;
         _bigHint.Visibility = frame is null ? Visibility.Visible : Visibility.Collapsed;
         if (_booth.HasReplay)
         {

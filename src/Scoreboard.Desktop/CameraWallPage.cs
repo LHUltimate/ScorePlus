@@ -92,17 +92,17 @@ public static class CameraWallPage
           function visualVersion(){return state.tilesVersion||0;}
           function imageFor(item,live){
             if(!item)return '';
-            if(item.kind==='camera')return frame(item.camera,false,live?Date.now():cameraVersion(item.camera));
+            if(item.kind==='camera')return frame(item.camera,false,cameraVersion(item.camera));
             if(item.kind==='replay'){
               var camera=state.selected>=0?state.selected:(item.camera>=0?item.camera:0);
-              var version=live?Date.now():Math.round(Number(state.back||0)*10)+'-'+(state.playing?'1':'0')+'-'+camera;
+              var version=Math.round(Number(state.back||0)*10)+'-'+(state.playing?'1':'0')+'-'+camera;
               return frame(camera,true,version);
             }
             if(item.kind==='preview'){
-              var base='/api/camera-wall/layout?display='+encodeURIComponent(item.display||'')+'&v='+visualVersion();
+              var base='/api/camera-wall/layout?w=640&display='+encodeURIComponent(item.display||'')+'&v='+visualVersion();
               return item.layout?base+'&layout='+encodeURIComponent(item.layout):base;
             }
-            if(item.kind==='audience')return '/watch.png?display='+encodeURIComponent(item.display||'')+'&v='+visualVersion();
+            if(item.kind==='audience')return '/watch.png?w=640&display='+encodeURIComponent(item.display||'')+'&v='+visualVersion();
             return '';
           }
           function renderWall(){
@@ -154,8 +154,8 @@ public static class CameraWallPage
             var item=useTiles()?(state.tiles[tileIndex]||null):null;
             var camera=state.cameras.find(function(x){return x.index===state.selected;})||null;
             bigname.textContent=item?item.label:(camera?camera.label:'No camera');bigname.style.display=labelVisible()?'block':'none';
-            var src=item?imageFor(item,true):(camera?frame(camera.index,supportsReplay,Date.now()):'');
-            if(src){bigimg.src=src;bigimg.style.display='block';bigempty.style.display='none';}else{bigimg.style.display='none';bigempty.style.display='block';}
+            var src=item?imageFor(item,true):(camera?frame(camera.index,supportsReplay,cameraVersion(camera.index)):'');
+            if(src){if(bigimg.getAttribute('src')!==src)bigimg.src=src;bigimg.style.display='block';bigempty.style.display='none';}else{bigimg.style.display='none';bigempty.style.display='block';}
             if(!supportsReplay)return;
             var game=state.gameClock||'--:--',playClock=state.playClock||':--',stoppage=state.stoppage||'0:00';
             meta.textContent='GAME '+game+'   ·   PLAY '+playClock+(state.hasStoppage?'   ·   STOPPAGE '+stoppage:'')+'   ·   '+(state.period||'');
@@ -172,7 +172,7 @@ public static class CameraWallPage
             var count=useTiles()?state.tiles.length:state.cameras.length;
             status.textContent='Connected · '+count+(useTiles()?' tile':' camera')+(count===1?'':'s')+' · click a tile or use the arrow keys';
           }
-          function tick(){fetch(q('/api/camera-wall'),{cache:'no-store'}).then(function(r){return r.ok?r.json():null;}).then(function(s){if(!s)return;state=s;if(!useTiles())selected=s.selected;render();}).catch(function(){status.textContent='Waiting for ScorePlus…';}).then(function(){setTimeout(tick,250);});}
+          function tick(){fetch(q('/api/camera-wall'),{cache:'no-store'}).then(function(r){return r.ok?r.json():null;}).then(function(s){if(!s)return;state=s;if(!useTiles())selected=s.selected;render();}).catch(function(){status.textContent='Waiting for ScorePlus…';}).then(function(){setTimeout(tick,600);});}
           function moveCamera(dx,dy){
             var cameras=state.cameras||[];if(!cameras.length)return;
             var index=Math.max(0,cameras.findIndex(function(c){return c.index===state.selected;}));

@@ -314,6 +314,11 @@ public sealed class SavedMacro
     /// <summary>The board page this macro belongs to. Page 0 is the first page.</summary>
     public int Page { get; set; }
 
+    /// <summary>When set, this macro belongs to one display output's own section (A, B, LIVE or
+    /// PREVIEW) instead of a numbered page. Output sections keep their buttons out of the page
+    /// list, so a director can build a display-specific board without it mixing with the show pages.</summary>
+    public string OutputSlot { get; set; } = "";
+
     /// <summary>How many board columns this tile spans: 1 or 2. A wide tile reads at a glance.</summary>
     public int ColumnSpan { get; set; } = 1;
 
@@ -330,6 +335,7 @@ public sealed class SavedMacro
         Row = Row,
         Column = Column,
         Page = Page,
+        OutputSlot = OutputSlot,
         ColumnSpan = ColumnSpan,
         RowSpan = RowSpan,
         Actions = (Actions ?? []).Select(action => action.Copy()).ToList()
@@ -346,6 +352,8 @@ public sealed class SavedMacro
         Row = Math.Clamp(Row, -1, 999);
         Column = Math.Clamp(Column, -1, 999);
         Page = Math.Clamp(Page, 0, 98);
+        OutputSlot = (OutputSlot ?? "").Trim().ToUpperInvariant();
+        if (OutputSlot.Length > 16) OutputSlot = OutputSlot[..16];
         ColumnSpan = Math.Clamp(ColumnSpan, 1, 2);
         RowSpan = Math.Clamp(RowSpan, 1, 2);
         Actions ??= [];

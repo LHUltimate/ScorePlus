@@ -163,6 +163,9 @@ public sealed class VenueState
 
     /// <summary>Frame-clock groups shared by nodes. A group is optional on one machine.</summary>
     public List<SyncGroup> SyncGroups { get; set; } = [];
+
+    /// <summary>Saved vision outputs: the local stream, fill/key destinations and overlay choices.</summary>
+    public BroadcastSettings Broadcast { get; set; } = new();
 }
 
 /// <summary>Persistence for the venue document, with the same never-crash-a-show policy as the
@@ -203,6 +206,8 @@ public sealed class VenueStore
         State.Proof ??= [];
         State.Nodes ??= [];
         State.SyncGroups ??= [];
+        State.Broadcast ??= new BroadcastSettings();
+        State.Broadcast.Normalize();
         var layoutColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (layoutId, color) in State.LayoutColors ?? [])
         {

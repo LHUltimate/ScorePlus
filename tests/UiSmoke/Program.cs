@@ -880,6 +880,25 @@ internal static class Program
             Pump(TimeSpan.FromMilliseconds(120));
             if (macroEditor.Visibility != Visibility.Collapsed || macroDock.FindName("MacroEditorSplitter") is not GridSplitter { Visibility: Visibility.Collapsed })
                 throw new Exception("FAIL: the macro editor could not be hidden to make room for more buttons");
+            // The show page opens on four monitors: both clip fills, the live programme and the
+            // staged preview. The first press stages a macro; the second sends it live.
+            var showMonitors = macroDock.FindName("ShowMonitors") as UniformGrid;
+            if (showMonitors is null || showMonitors.Visibility != Visibility.Visible || showMonitors.Children.Count != 4)
+                throw new Exception($"FAIL: the show page does not show its four monitors ({showMonitors?.Children.Count ?? 0})");
+            var monitorLabels = FindAll<TextBlock>(showMonitors).Select(text => text.Text).ToList();
+            foreach (var heading in new[] { "CLIPS · FILL A", "CLIPS · FILL B", "LIVE · PROGRAMME", "PREVIEW · NEXT" })
+                if (monitorLabels.All(text => !text.Contains(heading, StringComparison.Ordinal)))
+                    throw new Exception($"FAIL: the show page monitor {heading} is missing");
+            var firstRun = FindAll<Button>(macroCards[0]).FirstOrDefault(button => button.Tag is SavedMacro)
+                ?? throw new Exception("FAIL: the macro card has no run button");
+            firstRun.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (!LiveClipsBus.Shared.PreviewLabel.Contains("First drag", StringComparison.Ordinal))
+                throw new Exception($"FAIL: one press did not stage the macro in preview ({LiveClipsBus.Shared.PreviewLabel})");
+            firstRun.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(250));
+            if (!LiveClipsBus.Shared.LiveLabel.Contains("First drag", StringComparison.Ordinal))
+                throw new Exception($"FAIL: the second press did not send the macro live ({LiveClipsBus.Shared.LiveLabel})");
             // Twelve small boxes fit across the uncluttered live-book board. Every card carries its
             // own 4px right margin, so include that gap when measuring the real column count.
             var macroBoard = (Grid)macroDock.FindName("MacroButtons")!;
@@ -1477,15 +1496,24 @@ internal static class Program
 
             // The multiview is a source picker per tile: program previews, audience outputs, cameras,
             // replay and blank spacers all share one wall.
-            var multiviewClick = typeof(MainWindow).GetMethod("Multiview_Click", BindingFlags.Instance | BindingFlags.NonPublic)
-                ?? throw new Exception("FAIL: Multiview_Click is missing");
+            // The multiview is a Control Room surface now, not a button on the main header.
             var multiviewOwner = new MainWindow(LaunchMode.New) { Width = 1280, Height = 800 };
             ShowForSmoke(multiviewOwner);
             multiviewOwner.UpdateLayout();
-            multiviewClick.Invoke(multiviewOwner, [multiviewOwner, new RoutedEventArgs()]);
+            if (FindAll<Button>(multiviewOwner).Any(button => button.Content as string == "Multiview"))
+                throw new Exception("FAIL: the main window still has a Multiview header button");
+            FindAll<Button>(multiviewOwner).First(button => button.Content as string == "Control Room")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(150));
+            var multiviewRoom = Application.Current.Windows.OfType<ControlRoomWindow>().LastOrDefault()
+                ?? throw new Exception("FAIL: Control Room did not open from the main window");
+            multiviewRoom.UpdateLayout();
+            var multiviewCard = multiviewRoom.FindName("MultiviewCard") as Button
+                ?? throw new Exception("FAIL: Control Room has no Multiview card");
+            multiviewCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Pump(TimeSpan.FromMilliseconds(250));
             var multiview = Application.Current.Windows.OfType<MultiviewWindow>().LastOrDefault()
-                ?? throw new Exception("FAIL: the Multiview button opened no multiview window");
+                ?? throw new Exception("FAIL: Control Room's Multiview card opened no multiview window");
             multiview.UpdateLayout();
             // The default wall is just cameras and an edit glyph; source/remove controls appear only
             // after the operator asks for them.
@@ -1530,6 +1558,26 @@ internal static class Program
 
             // Names and keyboard enlarging work on the same wall: Enter opens the focused tile,
             // Escape restores the wall, and the edit menu owns the label switch.
+            // Tile size is a real grid choice: a source can occupy a quarter of the screen, or a
+            // quarter of a quarter, and the wall keeps that cell size even with fewer sources.
+            var sizeBox = FindAll<ComboBox>(multiview)
+                .FirstOrDefault(box => box.Items.Cast<object>().Any(item => (item.ToString() ?? "").Contains("Quarter of a quarter", StringComparison.Ordinal)))
+                ?? throw new Exception("FAIL: the multiview edit menu has no tile-size picker");
+            var quarterChoice = sizeBox.Items.Cast<object>()
+                .First(item => (item.ToString() ?? "").Contains("Quarter screen", StringComparison.Ordinal));
+            sizeBox.SelectedItem = quarterChoice;
+            Pump(TimeSpan.FromMilliseconds(120));
+            var wallGrid = FindAll<UniformGrid>(multiview).First();
+            if (wallGrid.Columns != 2 || wallGrid.Rows != 2)
+                throw new Exception($"FAIL: quarter-screen tile size did not make a 2×2 wall ({wallGrid.Columns}×{wallGrid.Rows})");
+            var sixteenthChoice = sizeBox.Items.Cast<object>()
+                .First(item => (item.ToString() ?? "").Contains("Quarter of a quarter", StringComparison.Ordinal));
+            sizeBox.SelectedItem = sixteenthChoice;
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (wallGrid.Columns != 4 || wallGrid.Rows != 4)
+                throw new Exception($"FAIL: quarter-of-a-quarter tile size did not make a 4×4 wall ({wallGrid.Columns}×{wallGrid.Rows})");
+            sizeBox.SelectedIndex = 0;
+            Pump(TimeSpan.FromMilliseconds(120));
             var labelsToggle = FindAll<CheckBox>(multiview)
                 .FirstOrDefault(box => (box.Content as string ?? "").Contains("Show source names", StringComparison.Ordinal))
                 ?? throw new Exception("FAIL: the multiview edit menu has no source-name switch");
@@ -1555,6 +1603,7 @@ internal static class Program
                 throw new Exception("FAIL: Escape did not restore the multiview wall");
 
             multiview.Close();
+            multiviewRoom.Close();
             multiviewOwner.Close();
             Pump(TimeSpan.FromMilliseconds(150));
             Console.WriteLine("PASS: the multiview lets every tile choose a preview, audience, camera, replay or blank source");
@@ -1570,9 +1619,14 @@ internal static class Program
             var recordedClock = ReplayBoothHistory.At(DateTimeOffset.UtcNow);
             if (recordedClock is null || recordedClock.GameClock != "12:34" || recordedClock.PlayClockSeconds != 18)
                 throw new Exception($"FAIL: the booth history lost the game/play clock ({recordedClock?.GameClock}, {recordedClock?.PlayClockSeconds})");
-            var boothClick = typeof(MainWindow).GetMethod("ReplayBooth_Click", BindingFlags.Instance | BindingFlags.NonPublic)
-                ?? throw new Exception("FAIL: ReplayBooth_Click is missing");
-            var boothOwner = new MainWindow(LaunchMode.New) { Width = 1100, Height = 760 };
+            // The Replay Booth is a Control Room role now, not a button on the main header.
+            var boothClick = typeof(ControlRoomWindow).GetMethod("ReplayBooth_Click", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("FAIL: ControlRoomWindow.ReplayBooth_Click is missing");
+            var boothPrefs = new UserPreferences();
+            var boothSession = new MediaSession(boothPrefs);
+            var boothController = new ReplayBoothController(boothSession, boothEngine, boothPrefs);
+            var boothOwner = new ControlRoomWindow(new ScorebugCatalog(), boothEngine, booth: boothController)
+                { Width = 1100, Height = 760 };
             ShowForSmoke(boothOwner);
             boothOwner.UpdateLayout();
             boothClick.Invoke(boothOwner, [boothOwner, new RoutedEventArgs()]);
@@ -1581,6 +1635,13 @@ internal static class Program
                 ?? throw new Exception("FAIL: the Replay Booth button opened no window");
             if (!FindAll<TextBlock>(booth).Any(text => text.Text == "REPLAY BOOTH"))
                 throw new Exception("FAIL: the Replay Booth window has no heading");
+            if (!FindAll<Button>(booth).Any(button => (button.Content as string) == "Mark IN")
+                || !FindAll<Button>(booth).Any(button => (button.Content as string) == "Mark OUT")
+                || !FindAll<Button>(booth).Any(button => (button.Content as string) == "Save replay"))
+                throw new Exception("FAIL: the Replay Booth has no mark in/out and save replay controls");
+            if (!FindAll<Slider>(booth).Any(slider => slider.Minimum == 1 && slider.Maximum == 5)
+                || !FindAll<TextBox>(booth).Any(box => box.Text.Contains("REPLAY", StringComparison.OrdinalIgnoreCase)))
+                throw new Exception("FAIL: the Replay Booth has no replay rating or tag editor");
             // The wall page is the booth's main page, and it carries the shared playback scrubber.
             var wallScrub = FindAll<Slider>(booth).FirstOrDefault(slider => slider.Name == "WallScrub")
                 ?? throw new Exception("FAIL: the booth's wall page has no replay scrubber");
@@ -6913,7 +6974,239 @@ internal static class Program
                 throw new Exception("FAIL: Live Switch did not list the new display until it was reopened");
             ((Button)switchSources.Children[0]).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             liveSwitch.UpdateLayout();
+            var visionTabs = liveSwitch.FindName("VisionTabs") as TabControl;
+            if (visionTabs is null || visionTabs.Items.Count != 2)
+                throw new Exception($"FAIL: the Vision production strip should hold audio and broadcast only ({visionTabs?.Items.Count ?? 0} tabs)");
+            var visionHeaders = visionTabs.Items.Cast<TabItem>().Select(item => item.Header as string).ToList();
+            if (visionHeaders.Any(header => header is "CLIPS" or "CAMERAS")
+                || !visionHeaders.Contains("AUDIO") || !visionHeaders.Contains("BROADCAST"))
+                throw new Exception($"FAIL: clips or cameras are still in Vision ({string.Join(",", visionHeaders)})");
+            // The clip launcher is a window of its own, with thumbnail tiles instead of drop-downs.
+            var clipSession = new MediaSession(new UserPreferences());
+            var clipVenueFile = Path.Combine(Path.GetTempPath(), $"smoke-clips-{Guid.NewGuid():N}.json");
+            var liveClips = new LiveClipsWindow(clipSession, null, new VenueStore(clipVenueFile));
+            ShowForSmoke(liveClips);
+            liveClips.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(150));
+            if (liveClips.ChannelA is null || liveClips.ChannelB is null
+                || FindAll<ComboBox>(liveClips).Any())
+                throw new Exception("FAIL: Live Clips is not a two-channel thumbnail launcher");
+            if (!FindAll<TextBlock>(liveClips).Any(text => text.Text.Contains("FILL A", StringComparison.Ordinal))
+                || !FindAll<TextBlock>(liveClips).Any(text => text.Text.Contains("FILL B", StringComparison.Ordinal)))
+                throw new Exception("FAIL: Live Clips has no fill A and fill B channels");
+            liveClips.Close();
+            try { File.Delete(clipVenueFile); } catch { }
+            clipSession.Dispose();
+            Console.WriteLine("PASS: Live Clips is its own window with two fill channels and no clip drop-downs");
+            // The camera-only switcher has its own eight-cell multiview and fill cards. Building it
+            // here also catches a control being given two logical parents, which used to throw
+            // before the window could open.
+            var routeVenueFile = Path.Combine(Path.GetTempPath(), $"smoke-camera-route-{Guid.NewGuid():N}.json");
+            var routeVenue = new VenueStore(routeVenueFile);
+            var routeDisplayA = smokeCatalog.Displays[0];
+            var routeDisplayB = smokeCatalog.Displays.Count > 1 ? smokeCatalog.Displays[1] : null;
+            var routeChannelA = new VenueChannel { Name = "Concourse", DisplayId = routeDisplayA.Id };
+            var routeChannelB = new VenueChannel { Name = "Club", DisplayId = routeDisplayB?.Id ?? routeDisplayA.Id };
+            routeVenue.State.Channels.Add(routeChannelA);
+            routeVenue.State.Channels.Add(routeChannelB);
+            routeVenue.Save();
+            var routePrefs = new UserPreferences();
+            var routeSession = new MediaSession(routePrefs);
+            routeSession.Library.Add(new MediaEntry(MediaLibrary.CameraPath(0), "Camera", Name: "Smoke camera"));
+            routePrefs.CameraRoutes.Add(new CameraRoute
+            {
+                CameraIndex = 0,
+                Displays = [routeDisplayA.Id],
+                Channels = [routeChannelA.Id],
+                Tags = ["Ads", "Highlights"]
+            });
+            var cameraSwitch = new CameraSwitchWindow(routeSession, routeSession.Playback, smokeCatalog, routeVenue, routePrefs);
+            ShowForSmoke(cameraSwitch);
+            cameraSwitch.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(150));
+            if (cameraSwitch.MultiviewTileCount != 8)
+                throw new Exception($"FAIL: Camera Switch has {cameraSwitch.MultiviewTileCount} multiview cells instead of 8");
+            if (cameraSwitch.Background is not SolidColorBrush cameraBackground || cameraBackground.Color != Color.FromRgb(0x05, 0x05, 0x05))
+                throw new Exception("FAIL: Camera Switch is not on its darker background");
+            if (!FindAll<Button>(cameraSwitch).Any(button => (button.ToolTip as string ?? "").StartsWith("Routing ·", StringComparison.Ordinal)))
+                throw new Exception("FAIL: Camera Switch does not offer a routing control on its camera tiles");
+            var smokeTile = FindAll<Button>(cameraSwitch)
+                .FirstOrDefault(button => (button.ToolTip as string ?? "").StartsWith("Smoke camera", StringComparison.Ordinal))
+                ?? throw new Exception("FAIL: the Camera Switch wall has no tile for the smoke camera");
+            smokeTile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            FindAll<Button>(cameraSwitch).First(button => (button.Content as string) == "TAKE A")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(150));
+            if (CameraRouting.CameraFor(routeDisplayA.Id) != 0)
+                throw new Exception("FAIL: a routed camera did not reach its chosen display");
+            if (routeDisplayB is not null && CameraRouting.CameraFor(routeDisplayB.Id) is not null)
+                throw new Exception("FAIL: a routed camera leaked onto a display it was not routed to");
+            if (routeVenue.State.Channels.First(channel => channel.Id == routeChannelA.Id).CameraIndex != 0)
+                throw new Exception("FAIL: a routed camera did not re-point its chosen venue channel");
+            if (routeVenue.State.Channels.First(channel => channel.Id == routeChannelB.Id).CameraIndex == 0)
+                throw new Exception("FAIL: a routed camera leaked onto a channel it was not routed to");
+            if (!routeSession.LiveCameras.Any(camera => camera.Tag.Contains("Ads", StringComparison.Ordinal)
+                && camera.Tag.Contains("Highlights", StringComparison.Ordinal)))
+                throw new Exception("FAIL: a routed camera did not carry its chosen tags");
+            FindAll<Button>(cameraSwitch).First(button => (button.Content as string) == "RETURN TO LIVE")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (CameraRouting.HasAny)
+                throw new Exception("FAIL: returning to live did not release the routed display picture");
+            cameraSwitch.Close();
+            routeSession.Dispose();
+            // The routing editor is multi-select: any number of displays, channels and tags, with an
+            // All choice for each group.
+            var routeDialog = new CameraRouteWindow(
+                new MediaEntry(MediaLibrary.CameraPath(0), "Camera", Name: "Smoke camera"),
+                new CameraRoute { CameraIndex = 0 }, smokeCatalog.Displays.ToList(), routeVenue.State.Channels.ToList());
+            ShowForSmoke(routeDialog);
+            routeDialog.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(120));
+            var displayBoxes = FindAll<CheckBox>(routeDialog)
+                .Where(box => box.Tag is string id && smokeCatalog.Displays.Any(display => display.Id == id)).ToList();
+            if (displayBoxes.Count < 2)
+                throw new Exception("FAIL: the routing editor does not list every display");
+            displayBoxes[0].IsChecked = true;
+            displayBoxes[1].IsChecked = true;
+            foreach (var tag in new[] { "Ads", "Highlights" })
+                FindAll<CheckBox>(routeDialog).First(box => (box.Content as string) == tag).IsChecked = true;
+            var allDisplaysBox = FindAll<CheckBox>(routeDialog).First(box => (box.Content as string) == "All displays");
+            allDisplaysBox.IsChecked = true;
+            allDisplaysBox.IsChecked = false;
+            FindAll<Button>(routeDialog).First(button => (button.Content as string) == "SAVE ROUTING")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            if (routeDialog.Result is not { } savedRoute || savedRoute.Displays.Count != 2
+                || !savedRoute.Tags.Contains("Ads", StringComparer.Ordinal)
+                || !savedRoute.Tags.Contains("Highlights", StringComparer.Ordinal))
+                throw new Exception("FAIL: the routing editor did not keep every chosen display and tag");
+            routeDialog.Close();
+            try { File.Delete(routeVenueFile); } catch { }
+            CameraRouting.Clear();
+            Console.WriteLine("PASS: Camera Switch routes each camera to any displays, channels and tags, and opens on the darker background");
+            if (liveSwitch.FindName("ReturnProgramButton") is not Button)
+                throw new Exception("FAIL: Vision has no return-to-layout control");
             liveSwitch.Close();
+            smokeCatalog.SelectDisplay(0);
+
+            // Stage 6: the same layout renders a programme frame and an alpha-correct fill/key pair.
+            // Hiding the layers must remove every white pixel from the key matte, so a hidden graphic
+            // cannot leak through a transition. The local headend serves the same pair as PNGs.
+            var renderLayout = smokeCatalog.Displays.SelectMany(display => display.Layouts)
+                .FirstOrDefault(layout => layout.Elements.Count > 0)
+                ?? throw new Exception("FAIL: the smoke show has no populated layout to broadcast");
+            var originalVisibility = renderLayout.Elements.ToDictionary(element => element.Id, element => element.Visible);
+            // Earlier probes may have toggled layers off. A broadcast matte is supposed to be empty
+            // only when the artwork itself is hidden, so make the visible case explicit here.
+            smokeCatalog.UpdateLayout(renderLayout.Id, layout => layout.Elements.ForEach(element => element.Visible = true));
+            renderLayout = smokeCatalog.FindLayout(renderLayout.Id)!;
+            var rendered = BroadcastRenderer.Render(smokeCatalog, smokeEngine, null, renderLayout, 1280, 720);
+            if (rendered.Jpeg.Length == 0 || rendered.FillPng.Length == 0 || rendered.KeyPng.Length == 0
+                || rendered.Width != 1280 || rendered.Height != 720)
+                throw new Exception("FAIL: the broadcast renderer did not produce programme, fill and key frames");
+            static BitmapSource DecodeFrame(byte[] bytes)
+            {
+                using var stream = new MemoryStream(bytes);
+                var decoder = new PngBitmapDecoder(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+                return decoder.Frames[0];
+            }
+            static (int Minimum, int Maximum) MatteRange(BitmapSource image)
+            {
+                var stride = image.PixelWidth * 4;
+                var pixels = new byte[stride * image.PixelHeight];
+                image.CopyPixels(pixels, stride, 0);
+                var minimum = 255;
+                var maximum = 0;
+                for (var offset = 0; offset < pixels.Length; offset += 4)
+                {
+                    var value = pixels[offset];
+                    minimum = Math.Min(minimum, value);
+                    maximum = Math.Max(maximum, value);
+                }
+                return (minimum, maximum);
+            }
+            var visibleMatte = MatteRange(DecodeFrame(rendered.KeyPng));
+            if (visibleMatte.Maximum < 40)
+                throw new Exception($"FAIL: the graphics key is empty while layers are visible ({visibleMatte.Minimum}–{visibleMatte.Maximum}; "
+                    + $"{renderLayout.Elements.Count(element => element.Visible)} visible of {renderLayout.Elements.Count}, "
+                    + $"opacity {string.Join(",", renderLayout.Elements.Select(element => element.Opacity).Distinct())})");
+            var fillPixels = new byte[4];
+            DecodeFrame(rendered.FillPng).CopyPixels(new Int32Rect(0, 0, 1, 1), fillPixels, 4, 0);
+            if (fillPixels[3] != 255)
+                throw new Exception("FAIL: the fill plane is not an opaque straight-colour PNG");
+            try
+            {
+                smokeCatalog.UpdateLayout(renderLayout.Id, layout => layout.Elements.ForEach(element => element.Visible = false));
+                var hidden = BroadcastRenderer.Render(smokeCatalog, smokeEngine, null, smokeCatalog.FindLayout(renderLayout.Id)!, 1280, 720);
+                var hiddenMatte = MatteRange(DecodeFrame(hidden.KeyPng));
+                if (hiddenMatte.Maximum != 0)
+                    throw new Exception($"FAIL: a hidden layer still leaked into the key matte ({hiddenMatte.Maximum})");
+            }
+            finally
+            {
+                smokeCatalog.UpdateLayout(renderLayout.Id, layout =>
+                {
+                    foreach (var element in layout.Elements)
+                        if (originalVisibility.TryGetValue(element.Id, out var visible)) element.Visible = visible;
+                });
+            }
+            if (!BroadcastHeadend.Shared.Start(8100))
+                throw new Exception("FAIL: the shared broadcast headend did not start");
+            BroadcastHeadend.Shared.Register("smoke-gfx", "Smoke graphics", BroadcastDestinationKind.FillKey, renderLayout.Name);
+            BroadcastHeadend.Shared.SetFrames("smoke-gfx", rendered);
+            using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+            {
+                using var fillResponse = client.GetAsync(BroadcastHeadend.Shared.FillUrl("smoke-gfx")).GetAwaiter().GetResult();
+                using var keyResponse = client.GetAsync(BroadcastHeadend.Shared.KeyUrl("smoke-gfx")).GetAwaiter().GetResult();
+                if (!fillResponse.IsSuccessStatusCode || fillResponse.Content.Headers.ContentType?.MediaType != "image/png"
+                    || !keyResponse.IsSuccessStatusCode || keyResponse.Content.Headers.ContentType?.MediaType != "image/png")
+                    throw new Exception("FAIL: the broadcast headend did not serve separate fill and key PNGs");
+            }
+            BroadcastHeadend.Shared.Unregister("smoke-gfx");
+            Console.WriteLine("PASS: Stage 6 renders a programme frame and an alpha-correct fill/key pair; hidden layers stay out of the key");
+
+            var graphicsFile = Path.Combine(Path.GetTempPath(), $"smoke-graphics-{Guid.NewGuid():N}.json");
+            var graphicsVenue = new VenueStore(graphicsFile);
+            var graphicsOutput = new GraphicsOutputWindow(smokeCatalog, smokeEngine, null, graphicsVenue, "Dark");
+            ShowForSmoke(graphicsOutput);
+            graphicsOutput.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(220));
+            FindAll<Button>(graphicsOutput).First(button => (button.Content as string) == "Start output")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(850));
+            if (!graphicsOutput.IsOutputRunning || graphicsOutput.RenderedFrames == 0)
+                throw new Exception($"FAIL: graphics output did not render a frame ({graphicsOutput.IsOutputRunning}, {graphicsOutput.RenderedFrames})");
+            using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+            {
+                using var response = client.GetAsync(BroadcastHeadend.Shared.FillUrl(graphicsOutput.OutputId)).GetAwaiter().GetResult();
+                if (!response.IsSuccessStatusCode)
+                    throw new Exception("FAIL: the running graphics output has no fill PNG on the headend");
+            }
+            graphicsOutput.Close();
+            try { File.Delete(graphicsFile); } catch { }
+            Console.WriteLine("PASS: Graphics Output publishes a live fill and key from the same layout renderer");
+
+            var liveBookFile = Path.Combine(Path.GetTempPath(), $"smoke-live-book-{Guid.NewGuid():N}.json");
+            var liveBookVenue = new VenueStore(liveBookFile);
+            var liveBook = new LiveBookWindow(smokeCatalog, smokeEngine, null, null, liveBookVenue, "Dark");
+            ShowForSmoke(liveBook);
+            liveBook.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(300));
+            FindAll<Button>(liveBook).First(button => (button.Content as string) == "Go live")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(900));
+            if (!liveBook.IsLive)
+                throw new Exception("FAIL: Live Book did not go live");
+            using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+            {
+                using var response = client.GetAsync(liveBook.StreamUrl, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+                if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType != "multipart/x-mixed-replace")
+                    throw new Exception("FAIL: Live Book did not publish a local programme MJPEG stream");
+            }
+            liveBook.Close();
+            try { File.Delete(liveBookFile); } catch { }
+            Console.WriteLine("PASS: Live Book composes the published scorebug over a camera and publishes the local stream");
 
             // The Live Channel view-only check needs a layout that is not the one on air.
             if (smokeCatalog.ActiveDisplay.Layouts.Count < 2)
@@ -7042,17 +7335,22 @@ internal static class Program
 
             var showOpened = false;
             var venueOpened = false;
+            var roomMultiviewOpened = false;
             var controlRoom = new ControlRoomWindow(smokeCatalog, smokeEngine, null, null, "Dark",
-                openShow: _ => showOpened = true, openVenue: _ => venueOpened = true);
+                openShow: _ => showOpened = true, openVenue: _ => venueOpened = true,
+                openMultiview: _ => roomMultiviewOpened = true);
             ShowForSmoke(controlRoom);
             controlRoom.UpdateLayout();
             Pump(TimeSpan.FromMilliseconds(120));
             if (controlRoom.FindName("DisplayStudioCard") is not Button || controlRoom.FindName("ContentStudioCard") is not Button
                 || controlRoom.FindName("ShowCard") is not Button showCard
                 || controlRoom.FindName("LiveSwitchCard") is not Button liveSwitchCard
+                || controlRoom.FindName("LiveClipsCard") is not Button liveClipsCard
                 || controlRoom.FindName("LiveChannelCard") is not Button
+                || controlRoom.FindName("ReplayBoothCard") is not Button
+                || controlRoom.FindName("MultiviewCard") is not Button roomMultiviewCard
                 || controlRoom.FindName("VenueCard") is not Button venueCard)
-                throw new Exception("FAIL: the Show Control Map is missing one of its six surface cards");
+                throw new Exception("FAIL: the Show Control Map is missing one of its twelve surface cards");
             var displayStatus = (TextBlock)controlRoom.FindName("DisplayStatus")!;
             var contentStatus = (TextBlock)controlRoom.FindName("ContentStatus")!;
             var showStatus = (TextBlock)controlRoom.FindName("ShowStatus")!;
@@ -7063,8 +7361,14 @@ internal static class Program
                 throw new Exception("FAIL: the Show Control Map did not read the show, content, macro or venue state");
             showCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             venueCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            if (!showOpened || !venueOpened)
-                throw new Exception("FAIL: the Show Control Map did not launch the Show and Venue windows");
+            roomMultiviewCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            if (!showOpened || !venueOpened || !roomMultiviewOpened)
+                throw new Exception("FAIL: the Show Control Map did not launch the Show, Venue and Multiview windows");
+            liveClipsCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(150));
+            if (Application.Current.Windows.OfType<LiveClipsWindow>().LastOrDefault() is not { } roomClips)
+                throw new Exception("FAIL: Control Room did not open Live Clips");
+            roomClips.Close();
             liveSwitchCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Pump(TimeSpan.FromMilliseconds(120));
             var roomSwitch = Application.Current.Windows.OfType<LiveSwitchWindow>().LastOrDefault()
@@ -7078,7 +7382,7 @@ internal static class Program
             if (controlRoom.FindName("RoomTabs") is not null)
                 throw new Exception("FAIL: Control Room still hosts surfaces as tabs");
             controlRoom.Close();
-            Console.WriteLine("PASS: Control Room maps all six surfaces and launches Show and Venue as windows");
+            Console.WriteLine("PASS: Control Room maps the twelve surfaces and launches Show, Live Clips, Multiview and Venue as windows");
 
             // Stage 4: the DATA tab owns a real source editor and viewer, and Control Room's Venue
             // page owns the fleet, rotations, schedules and proof surface.

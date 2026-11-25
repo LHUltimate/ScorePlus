@@ -507,7 +507,7 @@
         </Grid.ColumnDefinitions>
         <TextBlock Text="TAG" Style="{StaticResource DockLabel}"/>
         <ComboBox x:Name="TagBox" Grid.Column="1" Style="{StaticResource DockCombo}" IsEditable="True"
-                  ToolTip="Clips with this tag are the only ones a matching scorebug video element will show"/>
+                  ToolTip="One tag, or several separated by commas (for example: Ads, Highlights). A scorebug video element shows the item when any tag matches."/>
         <Button Grid.Column="2" Content="Set tag" Style="{StaticResource DockAction}" Click="TagApply_Click" ToolTip="Apply this tag to the selected clip"/>
       </Grid>
 

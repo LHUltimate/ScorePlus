@@ -92,10 +92,8 @@
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
           <Button Style="{StaticResource HeaderButton}" Content="Transition Builder" Click="TransitionMaker_Click" ToolTip="Build a keyframed hand-over: how a graphic leaves, how it arrives, and its colors on the way"/>
           <Button Style="{StaticResource HeaderButton}" Content="Animation Maker" Click="AnimationMaker_Click" ToolTip="Key motion a value follows — a loop while it is up, or a flourish when it changes"/>
-          <Button Style="{StaticResource HeaderButton}" Content="Multiview" Click="Multiview_Click" ToolTip="Every camera at once, with the replay preview beside the live picture"/>
-          <Button Style="{StaticResource HeaderButton}" Content="Replay Booth" Click="ReplayBooth_Click" ToolTip="Review the last replay window of every camera with the clocks that were showing"/>
           <Button Style="{StaticResource HeaderButton}" Content="Control Room" Click="ControlRoom_Click"
-                  ToolTip="Control Room — map of display, content, show, live switch, live channel and venue surfaces"/>
+                  ToolTip="Control Room — map of display, content, show, live switch, live clips, replay and venue surfaces"/>
           <Button Style="{StaticResource HeaderButton}" Content="Sport Profiles" Click="SportProfiles_Click"/>
           <Button Style="{StaticResource HeaderButton}" Content="Swap Teams" Click="SwapTeams_Click"
                   ToolTip="Swap the home and visitors identity — names, colours, logos and records — across every layout"/>

@@ -531,6 +531,65 @@ public sealed class ReplayBoothController : IDisposable
         catch { return null; }
     }
 
+    /// <summary>
+    /// Cuts the marked range out of the selected camera's rolling recordings, adds it to the media
+    /// library and keeps its rating, tags and clock metadata. Exporting is asynchronous, but every
+    /// UI callback returns on the booth's dispatcher.
+    /// </summary>
+    public bool SaveMarkedReplay(ReplaySelection selection, string path, Action<bool, string>? completed = null)
+    {
+        Activate();
+        RefreshCameras();
+        var cameraIndex = selection.CameraIndex >= 0 ? selection.CameraIndex : SelectedCamera?.Index ?? -1;
+        var segments = SegmentsFor(cameraIndex);
+        if (segments.Count == 0)
+        {
+            completed?.Invoke(false, "REPLAY SAVE · that camera has no finished recording yet");
+            return false;
+        }
+        var depth = Math.Min(CameraFeed.ReplayWindowSeconds,
+            Math.Max(0, (segments[^1].EndsAt - segments[0].StartedAt).TotalSeconds));
+        selection.CameraIndex = cameraIndex;
+        selection.Normalize(depth);
+        var live = segments[^1].EndsAt;
+        var from = live.AddSeconds(-selection.MarkInBack);
+        var to = live.AddSeconds(-selection.MarkOutBack);
+        if ((to - from).TotalSeconds < 0.1)
+        {
+            completed?.Invoke(false, "REPLAY SAVE · mark an in-point and an out-point first");
+            return false;
+        }
+        var clock = ReplayBoothHistory.At(from) ?? ClockAtPlayhead;
+        selection.GameClock = clock?.GameClock ?? GameEngine.FormatClock(_engine.State.ClockSeconds);
+        selection.Period = clock?.Period ?? PeriodDisplay.Format(_engine.State);
+        selection.Score = $"{_engine.State.AwayAbbreviation} {_engine.State.AwayScore} – {_engine.State.HomeScore} {_engine.State.HomeAbbreviation}";
+        var requested = selection.Copy();
+        var name = Path.GetFileName(path);
+        Task.Run(() =>
+        {
+            var ok = CameraFeed.Export(segments, from, to, path, out var error);
+            _ui.BeginInvoke(() =>
+            {
+                if (ok)
+                {
+                    _session.ImportReplay(path, requested);
+                    completed?.Invoke(true, $"REPLAY SAVED · {name} · {requested.Duration:0.0}s · {requested.RatingStars}");
+                }
+                else completed?.Invoke(false, $"REPLAY NOT SAVED · {error}");
+            });
+        });
+        return true;
+    }
+
+    /// <summary>Plays a saved replay through the main media bus, so it can be seen and heard again.</summary>
+    public bool PlaySavedReplay(string path)
+    {
+        var entry = _session.Library.FirstOrDefault(item => string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (entry is null) return false;
+        _session.Play(entry);
+        return true;
+    }
+
     public string StateJson(string mode)
     {
         Activate();

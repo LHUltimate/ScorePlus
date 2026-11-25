@@ -334,10 +334,7 @@ public partial class VenueDock : UserControl
                 Text = $"ITEM {row + 1} · {item.Kind} · {item.DisplayLabel}", FontSize = 11, FontWeight = FontWeights.SemiBold,
                 Foreground = (Brush)FindResource("VenueText")
             });
-            var remove = ActionButton("×", (_, _) => { playlist.Items.Remove(item); Save(); LoadPlaylistEditor(playlist); });
-            remove.FontSize = 13;
-            remove.MinHeight = 22;
-            remove.Padding = new Thickness(7, 1, 7, 1);
+            var remove = RemoveChip(() => { playlist.Items.Remove(item); Save(); LoadPlaylistEditor(playlist); });
             remove.ToolTip = "Remove this item from the playlist";
             DockPanel.SetDock(remove, Dock.Right);
             head.Children.Add(remove);
@@ -519,10 +516,7 @@ public partial class VenueDock : UserControl
                     + $"{(AutomationRules.IsTextField(condition.Field) ? condition.Text : condition.Value.ToString("0.##"))}",
                 FontSize = 10, Foreground = (Brush)FindResource("VenueMuted"), VerticalAlignment = VerticalAlignment.Center
             });
-            var remove = ActionButton("×", (_, _) => { schedule.Conditions.Remove(condition); Save(); LoadScheduleEditor(schedule); });
-            remove.FontSize = 12;
-            remove.MinHeight = 22;
-            remove.Padding = new Thickness(6, 1, 6, 1);
+            var remove = RemoveChip(() => { schedule.Conditions.Remove(condition); Save(); LoadScheduleEditor(schedule); });
             remove.ToolTip = "Remove this live condition";
             DockPanel.SetDock(remove, Dock.Right);
             rowContent.Children.Add(remove);
@@ -1354,6 +1348,13 @@ public partial class VenueDock : UserControl
     {
         var button = new Button { Content = text, Style = (Style)FindResource("VenueButton") };
         button.Click += click;
+        return button;
+    }
+
+    Button RemoveChip(Action action)
+    {
+        var button = new Button { Content = "×", Style = (Style)FindResource("VenueRemoveChip") };
+        button.Click += (_, _) => action();
         return button;
     }
 }

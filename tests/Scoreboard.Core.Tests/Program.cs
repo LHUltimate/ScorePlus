@@ -1813,3 +1813,43 @@ finally
         foreach(var venuePath in new[]{venueFile,venueCatalogFile}) try{if(File.Exists(venuePath))File.Delete(venuePath);}catch{}
     }
 }
+
+// Stage 6 planning starts with one normalized broadcast profile per layout, safe defaults for a
+// show saved before the profile existed, and replay metadata that survives a round-trip.
+{
+    var profile=new BroadcastProfile{Standard="not-a-standard",SafeActionPercent=120,SafeTitlePercent=10,KeyColor="green"};
+    profile.Normalize();
+    Check(profile.Standard=="1080p60"&&profile.Raster.Width==1920&&profile.Raster.Height==1080,
+        "an unknown broadcast standard falls back to 1080p60");
+    Check(profile.SafeActionPercent==100&&profile.SafeTitlePercent==40,
+        $"safe areas are clamped and the title box cannot exceed the action box ({profile.SafeActionPercent}/{profile.SafeTitlePercent})");
+    Check(profile.KeyColor=="#FF00B140","an invalid chroma key colour falls back to the default green");
+    var oldDisplay=new ScorebugDisplay();
+    oldDisplay.Broadcast.Normalize();
+    Check(oldDisplay.Broadcast.Standard=="1080p60","a display has a normalized broadcast channel before it is edited");
+    var channelCatalog=new ScorebugCatalog();
+    var channelId=channelCatalog.ActiveDisplay.Id;
+    channelCatalog.UpdateDisplay(channelId,display=>{display.Broadcast.Standard="720p50";display.Broadcast.SafeTitlePercent=70;});
+    Check(channelCatalog.FindDisplay(channelId)!.Broadcast.Standard=="720p50",
+        "a broadcast channel is saved on the display, not on one of its layouts");
+    var settings=new BroadcastSettings
+    {
+        Destinations=[
+            new BroadcastDestination{Id="same",Name="Stream",Kind=BroadcastDestinationKind.Stream},
+            new BroadcastDestination{Id="same",Name="Router",Kind=BroadcastDestinationKind.FillKey}
+        ],
+        PreferredPort=80
+    };
+    settings.Normalize();
+    Check(settings.Destinations.Select(destination=>destination.Id).Distinct().Count()==2,
+        "broadcast destination ids are made unique before they are used as URLs");
+    Check(settings.PreferredPort==1024,"a broadcast port below 1024 is raised to the safe range");
+    var selection=new ReplaySelection{CameraIndex=-2,MarkInBack=2,MarkOutBack=8,Rating=9,Tags=[]};
+    selection.Normalize(30);
+    Check(selection.MarkInBack==8&&selection.MarkOutBack==2&&Math.Abs(selection.Duration-6)<0.001,
+        "a replay selection orders its in and out points and keeps the marked duration");
+    Check(selection.Rating==5&&selection.CameraIndex==0&&selection.Tags.SequenceEqual(["REPLAY"]),
+        "replay rating, camera and tags are clamped to usable values");
+    selection.SetTags("Highlight, highlight; Save | ");
+    Check(selection.Tags.SequenceEqual(["Highlight","Save"]),"replay tags are de-duplicated and split consistently");
+}

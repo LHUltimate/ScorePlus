@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Serialization;
 
 namespace Scoreboard.Desktop;
 
@@ -47,10 +48,16 @@ public sealed record MediaEntry(
     /// <summary>Which microphone this item listens to.</summary>
     public int MicrophoneIndex => MicrophoneDevice ?? MediaLibrary.MicrophoneIndex(Path) ?? 0;
     public bool IsVideo => IsCamera || IsScreen || (!IsMicrophone && MediaLibrary.IsVideoFile(Path));
+    /// <summary>An audio file that the clip server can play through its own decoder.</summary>
+    public bool IsAudio => !IsVideo && !IsImage && !IsMicrophone && !IsSpeaker;
     /// <summary>A still picture from a player's media list. It is shown as a tile, not played on the transport.</summary>
     public bool IsImage => !IsCamera && !IsScreen && !IsMicrophone && !IsSpeaker && MediaLibrary.IsImageFile(Path);
     /// <summary>Where this entry came from. "Roster" items are rebuilt from player assignments and are not saved in the media library.</summary>
     public bool IsPlayerMedia => string.Equals(Source, "Roster", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Every tag this item carries. The tag field accepts a comma-separated list, so one
+    /// clip can serve several video boxes at once (for example "Ads, Highlights").</summary>
+    public IReadOnlyList<string> TagList => MediaLibrary.SplitTags(Tag);
     public string KindLabel => IsCamera ? "LIVE" : IsScreen ? "SCREEN" : IsMicrophone ? "MIC" : IsSpeaker ? "SPEAKER" : IsImage ? "IMAGE" : IsVideo ? "VIDEO" : "AUDIO";
     public string FolderLabel => string.IsNullOrWhiteSpace(Folder) ? MediaLibrary.RootFolderLabel : Folder;
     public string TagAndFolder => string.IsNullOrWhiteSpace(Folder) ? Tag : $"{Tag} · {Folder}";
@@ -84,6 +91,30 @@ public sealed record MediaEntry(
 
     /// <summary>0–100, as shown on the dock's knob.</summary>
     public int VolumePercent => (int)Math.Round(Math.Clamp(Volume, 0, 1) * 100);
+
+    /// <summary>The replay desk's rating, 1–5. Zero means this is not a saved replay.</summary>
+    public int ReplayRating { get; init; }
+
+    /// <summary>Searchable replay tags, stored as one comma-separated field so the file stays readable.</summary>
+    public string ReplayTags { get; init; } = "";
+
+    /// <summary>The game clock and period at the marked in-point.</summary>
+    public string ReplayClock { get; init; } = "";
+    public string ReplayPeriod { get; init; } = "";
+    public string ReplayScore { get; init; } = "";
+
+    [JsonIgnore]
+    public string ReplayBadge => ReplayRating <= 0 ? "" : $"★{ReplayRating}";
+
+    [JsonIgnore]
+    public string SearchLabel => string.Join(" · ", new[]
+    {
+        Label,
+        ReplayRating > 0 ? $"{new string('★', Math.Clamp(ReplayRating, 1, 5))}" : "",
+        ReplayTags,
+        ReplayClock,
+        ReplayPeriod
+    }.Where(part => !string.IsNullOrWhiteSpace(part)));
 
     public string AudioLabel => string.IsNullOrWhiteSpace(AudioDevice) ? "Default output" : AudioDevice;
 
@@ -200,9 +231,24 @@ public static class MediaLibrary
 
     public static string NormalizeTag(string? tag)
     {
-        var trimmed = (tag ?? "").Trim();
-        return trimmed.Length == 0 ? DefaultTag : trimmed;
+        // A tag field may hold one tag or a comma/semicolon-separated list. Canonical spacing and
+        // case-insensitive de-duplication keep routing predictable while the field stays readable.
+        var parts = (tag ?? "").Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return parts.Length == 0 ? DefaultTag : string.Join(", ", parts);
     }
+
+    /// <summary>Splits a tag field into individual tags. Comma and semicolon both separate, and a
+    /// blank field is the General tag. Duplicates are removed case-insensitively.</summary>
+    public static IReadOnlyList<string> SplitTags(string? tag)
+    {
+        var parts = (tag ?? "").Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0) return [DefaultTag];
+        return parts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>True when any of the clip's tags is GLOBAL/ANY.</summary>
+    public static bool IsAnyTagList(string? tag) => SplitTags(tag).Any(IsAnyTag);
 
     /// <summary>
     /// The live camera list after cueing another camera. A camera replaces the one already on air
@@ -348,7 +394,11 @@ public static class MediaLibrary
     {
         if (string.IsNullOrWhiteSpace(elementTag)) return true;
         if (IsAnyTag(elementTag)) return true;
-        return string.Equals(NormalizeTag(clipTag), NormalizeTag(elementTag), StringComparison.OrdinalIgnoreCase);
+        // A media item may carry several tags. It matches when any one of them matches the video
+        // box's tag, and a GLOBAL tag on the item matches every box.
+        var wanted = NormalizeTag(elementTag);
+        return SplitTags(clipTag).Any(tag => IsAnyTag(tag)
+            || string.Equals(NormalizeTag(tag), wanted, StringComparison.OrdinalIgnoreCase));
     }
 }
 

@@ -61,6 +61,7 @@ public partial class LiveChannelWindow : Window
         _venue = venueStore ?? VenueStore.Load();
         _displayId = _catalog.ActiveDisplay.Id;
         ThemeManager.Apply(this, theme);
+        WindowOwnerGuard.Attach(this);
         _catalog.Changed += CatalogChanged;
         _engine.Changed += EngineChanged;
         _stream.HealthProvider = BuildStreamHealth;
@@ -121,6 +122,8 @@ public partial class LiveChannelWindow : Window
             var live = channel is null && layout is not null && publishedLayout is not null
                 && string.Equals(layout.Id, publishedLayout.Id, StringComparison.OrdinalIgnoreCase);
             ChannelName.Text = channel is null ? display.Name.ToUpperInvariant() : $"{channel.Name.ToUpperInvariant()} · CHANNEL";
+            ChannelName.ToolTip = ChannelName.Text;
+            ChannelName.MaxWidth = 340;
             NowPlayingText.Text = layout is null
                 ? (channel is null ? "No layout on air" : "No layout assigned to this channel")
                 : $"{layout.Name} · {layout.Width} × {layout.Height}"
@@ -191,7 +194,7 @@ public partial class LiveChannelWindow : Window
             var layout = display.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0, Math.Max(0, display.Layouts.Count - 1)));
             var tile = new Button
             {
-                Width = 158, Height = 110, Padding = new Thickness(3), Margin = new Thickness(0, 0, 6, 0),
+                Width = 168, Height = 126, Padding = new Thickness(3), Margin = new Thickness(0, 0, 6, 0),
                 Background = Brushes.Transparent, Cursor = System.Windows.Input.Cursors.Hand,
                 BorderThickness = new Thickness(selected ? 2 : 1),
                 BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(0x38, 0xD7, 0xA3) : Color.FromRgb(0x2E, 0x3B, 0x4A)),
@@ -199,8 +202,10 @@ public partial class LiveChannelWindow : Window
             };
             ThemeManager.SetSkipTheme(tile, true);
             var stack = new StackPanel();
-            var image = new Image { Source = layout is null ? null : Thumbnail(layout, 146, 58), Height = 58, Stretch = Stretch.UniformToFill };
-            stack.Children.Add(new Border { Height = 58, Background = new SolidColorBrush(Color.FromRgb(5, 8, 12)), Child = image, ClipToBounds = true });
+            // A 16:9 picture box: the monitor tiles were short banners before, which squashed the
+            // layout preview into an unreadable strip.
+            var image = new Image { Source = layout is null ? null : Thumbnail(layout, 160, 90), Width = 160, Height = 90, Stretch = Stretch.Uniform };
+            stack.Children.Add(new Border { Height = 90, Background = new SolidColorBrush(Color.FromRgb(5, 8, 12)), Child = image, ClipToBounds = true });
             stack.Children.Add(new TextBlock
             {
                 Text = $"{index + 1}. {display.Name}", FontSize = 9, Margin = new Thickness(2, 3, 2, 0),
@@ -243,7 +248,7 @@ public partial class LiveChannelWindow : Window
         var selected = string.Equals(_viewChannelId, channel.Id, StringComparison.OrdinalIgnoreCase);
         var tile = new Button
         {
-            Width = 158, Height = 110, Padding = new Thickness(3), Margin = new Thickness(0, 0, 6, 0),
+            Width = 168, Height = 126, Padding = new Thickness(3), Margin = new Thickness(0, 0, 6, 0),
             Background = Brushes.Transparent, Cursor = System.Windows.Input.Cursors.Hand,
             BorderThickness = new Thickness(selected ? 2 : 1),
             BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(0x7F, 0xD1, 0xFF) : Color.FromRgb(0x2E, 0x3B, 0x4A)),
@@ -255,12 +260,12 @@ public partial class LiveChannelWindow : Window
         var stack = new StackPanel();
         var image = new Image
         {
-            Source = layout is null ? null : Thumbnail(layout, 146, 58),
-            Height = 58, Stretch = Stretch.UniformToFill
+            Source = layout is null ? null : Thumbnail(layout, 160, 90),
+            Width = 160, Height = 90, Stretch = Stretch.Uniform
         };
         stack.Children.Add(new Border
         {
-            Height = 58, Background = new SolidColorBrush(Color.FromRgb(5, 8, 12)),
+            Height = 90, Background = new SolidColorBrush(Color.FromRgb(5, 8, 12)),
             Child = image, ClipToBounds = true
         });
         stack.Children.Add(new TextBlock
@@ -271,9 +276,11 @@ public partial class LiveChannelWindow : Window
         });
         stack.Children.Add(new TextBlock
         {
-            Text = $"{display?.Name ?? "No display"} · CAM {channel.CameraIndex} · {(channel.Enabled ? "ENABLED" : "OFF")}",
+            // The channel's current layout belongs on the tile. It used to show only the display
+            // and camera, so a channel following its display looked as if it had no layout at all.
+            Text = $"{layout?.Name ?? "No layout"} · CAM {channel.CameraIndex} · {(channel.Enabled ? "ENABLED" : "OFF")}",
             FontSize = 8, Margin = new Thickness(2, 1, 2, 0), TextTrimming = TextTrimming.CharacterEllipsis,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E))
+            Foreground = new SolidColorBrush(selected ? Color.FromRgb(0x8D, 0xEB, 0xCB) : Color.FromRgb(0x5C, 0x6B, 0x7E))
         });
         tile.Content = stack;
         tile.Click += (_, _) => SelectChannel(channel);
@@ -397,10 +404,20 @@ public partial class LiveChannelWindow : Window
 
     ScorebugLayout? ChannelLayout(VenueChannel channel)
     {
-        var direct = _catalog.FindLayout(channel.LayoutId);
-        if (direct is not null) return direct;
         var display = _catalog.FindDisplay(channel.DisplayId);
-        return display?.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0, Math.Max(0, display.Layouts.Count - 1)));
+        // An explicit overlay only counts when it belongs to the display the channel was pointed
+        // at. A stale layout id from a previous display made "Follow display output" keep showing
+        // the old graphic; following the display is now the reliable default.
+        if (display is not null && !string.IsNullOrWhiteSpace(channel.LayoutId))
+        {
+            var pinned = display.Layouts.FirstOrDefault(layout =>
+                string.Equals(layout.Id, channel.LayoutId, StringComparison.OrdinalIgnoreCase));
+            if (pinned is not null) return pinned;
+        }
+        if (display is not null)
+            return display.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0,
+                Math.Max(0, display.Layouts.Count - 1)));
+        return _catalog.FindLayout(channel.LayoutId);
     }
 
     IReadOnlyList<ChannelHealth> BuildStreamHealth()
@@ -410,7 +427,8 @@ public partial class LiveChannelWindow : Window
         {
             var layout = display.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0, Math.Max(0, display.Layouts.Count - 1)));
             rows.Add(new ChannelHealth(display.Id, display.Name, layout?.Name ?? "no layout",
-                _stream.IsRunning ? "LIVE" : "READY", $"{_stream.BaseUrl}/display/{display.Id}.mjpeg"));
+                _stream.IsRunning ? "LIVE" : "READY", $"{_stream.BaseUrl}/display/{display.Id}.mjpeg",
+                _stream.AudioUrl(display.Id)));
         }
         foreach (var channel in _venue.State.Channels)
         {
@@ -419,7 +437,7 @@ public partial class LiveChannelWindow : Window
             rows.Add(new ChannelHealth(channel.Id, channel.Name,
                 $"{layout?.Name ?? display?.Name ?? "unassigned"} · CAM {Math.Clamp(channel.CameraIndex, 1, 64)}",
                 channel.Enabled ? (_stream.IsRunning ? "LIVE" : "READY") : "OFF",
-                $"{_stream.BaseUrl}/channel/{channel.Id}.mjpeg"));
+                $"{_stream.BaseUrl}/channel/{channel.Id}.mjpeg", _stream.AudioUrl(channel.Id)));
         }
         return rows;
     }
@@ -430,7 +448,8 @@ public partial class LiveChannelWindow : Window
         var health = BuildStreamHealth();
         foreach (var row in health)
         {
-            var line = new DockPanel { Margin = new Thickness(0, 2, 0, 2), ToolTip = row.Url };
+            var entry = new StackPanel { Margin = new Thickness(0, 3, 0, 4) };
+            var line = new DockPanel { ToolTip = row.Url };
             var dot = new Border
             {
                 Width = 7, Height = 7, CornerRadius = new CornerRadius(4), Margin = new Thickness(0, 0, 6, 0),
@@ -443,20 +462,34 @@ public partial class LiveChannelWindow : Window
             line.Children.Add(new TextBlock
             {
                 Text = $"{row.Name} · {row.Layout}", FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0xD2, 0xE1, 0xEE)),
-                TextTrimming = TextTrimming.CharacterEllipsis
+                TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = $"{row.Name}\n{row.Layout}"
             });
             var state = new TextBlock
             {
-                Text = row.Status, FontSize = 8, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 16, 0),
+                Text = row.Status, FontSize = 8, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 4, 0),
                 Foreground = new SolidColorBrush(row.Status == "LIVE" ? Color.FromRgb(0x8D, 0xEB, 0xCB)
                     : Color.FromRgb(0x93, 0xA0, 0xB2))
             };
             DockPanel.SetDock(state, Dock.Right);
             line.Children.Insert(0, state);
-            HealthPanel.Children.Add(line);
+            entry.Children.Add(line);
+            var urlLine = new DockPanel { Margin = new Thickness(13, 2, 0, 0) };
+            var copy = new Button { Content = "COPY", MinHeight = 20, MinWidth = 38, Padding = new Thickness(4, 0, 4, 0), FontSize = 8, VerticalAlignment = VerticalAlignment.Top };
+            var urls = $"VIDEO  {row.Url}" + (string.IsNullOrWhiteSpace(row.AudioUrl) ? "" : $"\nAUDIO  {row.AudioUrl}");
+            copy.ToolTip = urls;
+            copy.Click += (_, _) => { try { Clipboard.SetText(urls); } catch { } };
+            DockPanel.SetDock(copy, Dock.Right);
+            urlLine.Children.Add(copy);
+            urlLine.Children.Add(new TextBlock
+            {
+                Text = urls, FontFamily = new FontFamily("Consolas"), FontSize = 8, TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x7C, 0x8A, 0x9C)), Margin = new Thickness(0, 0, 5, 0)
+            });
+            entry.Children.Add(urlLine);
+            HealthPanel.Children.Add(entry);
         }
         StreamStatusText.Text = _stream.IsRunning
-            ? $"STREAM ON · {_stream.BaseUrl}/health"
+            ? $"STREAM ON · {_stream.BaseUrl}/health · video + system audio"
             : "STREAM OFF · Start stream to publish every display";
     }
 

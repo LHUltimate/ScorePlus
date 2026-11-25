@@ -43,7 +43,7 @@
           <TextBlock Text="CHANNEL" FontSize="10" FontWeight="Bold" Foreground="#7FD1FF"/>
         </Border>
         <TextBlock Text="SCOREPLUS · LIVE CHANNEL" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"/>
-        <TextBlock Text="   Output health · program monitor · event feed · graphics actions"
+        <TextBlock Text="   Output health · program monitor · video + audio URLs · graphics actions"
                    Foreground="#93A0B2" VerticalAlignment="Center"/>
         <TextBlock x:Name="StreamStatusText" Text="" Foreground="#7FD1FF" FontSize="10"
                    VerticalAlignment="Center" Margin="12,0,0,0" TextTrimming="CharacterEllipsis"/>
@@ -109,7 +109,8 @@
             </Border>
             <StackPanel Orientation="Horizontal">
               <Border Width="3" Height="12" CornerRadius="2" Background="{DynamicResource Accent}" Margin="0,0,7,0"/>
-              <TextBlock x:Name="ChannelName" Text="PROGRAM" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="ChannelName" Text="PROGRAM" Style="{StaticResource SectionTitle}"
+                         VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="360"/>
             </StackPanel>
           </DockPanel>
           <Border Background="#070B10" CornerRadius="6" BorderBrush="#2E3B4A" BorderThickness="1" ClipToBounds="True" MinHeight="280">

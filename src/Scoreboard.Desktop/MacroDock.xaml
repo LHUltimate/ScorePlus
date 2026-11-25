@@ -99,6 +99,28 @@
   </UserControl.Resources>
 
   <DockPanel>
+  <!-- The output macro sections are reachable in one press, not only by clicking a monitor. -->
+  <Border x:Name="OutputMacroBar" DockPanel.Dock="Top" Background="{DynamicResource MacroSurfaceBrush}"
+          BorderBrush="{DynamicResource MacroBorderBrush}" BorderThickness="1" CornerRadius="7"
+          Padding="8,4" Margin="0,0,0,6" Visibility="Collapsed">
+    <DockPanel LastChildFill="true">
+      <TextBlock DockPanel.Dock="Left" Text="OUTPUT MACROS" FontSize="9" FontWeight="Bold"
+                 Foreground="{DynamicResource MacroMutedBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button Content="A · FILL" Style="{StaticResource MacroAction}" MinHeight="24" Padding="8,2" Margin="0,0,4,0"
+                Click="OutputMacroA_Click" ToolTip="Open the Fill A output's own macros"/>
+        <Button Content="B · FILL" Style="{StaticResource MacroAction}" MinHeight="24" Padding="8,2" Margin="0,0,4,0"
+                Click="OutputMacroB_Click" ToolTip="Open the Fill B output's own macros"/>
+        <Button Content="LIVE · PROGRAMME" Style="{StaticResource MacroAction}" MinHeight="24" Padding="8,2" Margin="0,0,4,0"
+                Click="OutputMacroLive_Click" ToolTip="Open the live programme output's own macros"/>
+        <Button Content="PREVIEW · NEXT" Style="{StaticResource MacroAction}" MinHeight="24" Padding="8,2"
+                Click="OutputMacroPreview_Click" ToolTip="Open the preview output's own macros"/>
+      </StackPanel>
+    </DockPanel>
+  </Border>
+  <!-- Four monitors, the live-book header: both clip fills, what is on air, and what the next press
+       will put there. They sit above the cue list so the show page opens on the pictures. -->
+  <UniformGrid x:Name="ShowMonitors" DockPanel.Dock="Top" Columns="4" Height="108" Margin="0,0,0,8"/>
   <!-- Show: the ordered cue list and its transport, above the palette of macro buttons that the
        cues run. This is the same tab, not a second one. -->
   <Border x:Name="CuePanel" DockPanel.Dock="Top" Background="{DynamicResource MacroSurfaceBrush}" BorderBrush="{DynamicResource MacroBorderBrush}"
@@ -287,6 +309,11 @@
           <Button x:Name="RemovePageButton" Style="{StaticResource MacroAction}" Content="×"
                   Width="28" MinWidth="28" HorizontalAlignment="Left" Padding="6,3" Margin="6,0,0,0" Click="RemovePage_Click"
                   FontSize="13" ToolTip="Delete this page and the macros on it"/>
+          <!-- Clicking a monitor opens that output's own macro section. This returns to the
+               numbered show pages; it is hidden while the normal pages are showing. -->
+          <Button x:Name="OutputSectionBackButton" Style="{StaticResource MacroAccent}" Content="← Show pages"
+                  Padding="9,3" Margin="10,0,0,0" Click="OutputSectionBack_Click" Visibility="Collapsed"
+                  ToolTip="Leave this display output's macro section and return to the show pages"/>
         </DockPanel>
       </StackPanel>
       <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">

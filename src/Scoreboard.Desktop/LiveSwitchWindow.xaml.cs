@@ -13,16 +13,43 @@ public partial class LiveSwitchWindow : Window
     readonly ScorebugCatalog _catalog;
     readonly GameEngine _engine;
     readonly VenueStore _venue;
+    readonly MediaSession? _session;
+    readonly ReplayBoothController? _booth;
+    readonly MediaPlayback? _playback;
+    readonly BroadcastHeadend _headend = BroadcastHeadend.Shared;
     readonly DispatcherTimer _colourWatch = new() { Interval = TimeSpan.FromSeconds(1) };
+    readonly DispatcherTimer _visionWatch = new() { Interval = TimeSpan.FromMilliseconds(500) };
     readonly List<ScorebugCanvasView> _views = [];
     bool _refreshing;
     int _previewIndex;
     int _multiviewPage;
     string? _displayId;
     string _colourSignature = "";
+    bool _refreshingProfile;
+    TextBlock? _broadcastStats;
+    TextBlock? _profileSummary;
+    TextBlock? _fillUrlText;
+    TextBlock? _keyUrlText;
+    TextBlock? _streamUrlText;
+    ComboBox? _profileDisplayBox;
+    ComboBox? _profileStandardBox;
+    TextBox? _safeActionInput;
+    TextBox? _safeTitleInput;
+    CheckBox? _fillKeyCheck;
+    CheckBox? _lowerThirdCheck;
+    CheckBox? _tickerCheck;
+    Slider? _masterSlider;
+    ProgressBar? _masterMeter;
+    TextBlock? _masterMeterText;
+    LiveBookWindow? _liveBookWindow;
+    CameraSwitchWindow? _cameraSwitchWindow;
+    GraphicsOutputWindow? _graphicsWindow;
 
     sealed record DisplayChoice(string Id, string Label) { public override string ToString() => Label; }
     sealed record TransitionChoice(LayoutTransition Kind, string Label) { public override string ToString() => Label; }
+    sealed record LayoutPick(string Id, string Label) { public override string ToString() => Label; }
+    sealed record StandardPick(string Key, string Label) { public override string ToString() => Label; }
+    sealed record DisplayPick(string Id, string Label) { public override string ToString() => Label; }
 
     static readonly TransitionChoice[] Transitions =
     [
@@ -51,16 +78,25 @@ public partial class LiveSwitchWindow : Window
     ];
 
     public LiveSwitchWindow(ScorebugCatalog catalog, GameEngine engine, string theme = "Dark")
-        : this(catalog, engine, theme, null)
+        : this(catalog, engine, theme, null, null, null)
     {
     }
 
     public LiveSwitchWindow(ScorebugCatalog catalog, GameEngine engine, string theme, VenueStore? venueStore)
+        : this(catalog, engine, theme, venueStore, null, null)
+    {
+    }
+
+    public LiveSwitchWindow(ScorebugCatalog catalog, GameEngine engine, string theme, VenueStore? venueStore,
+        MediaSession? session, ReplayBoothController? booth)
     {
         InitializeComponent();
         _catalog = catalog;
         _engine = engine;
         _venue = venueStore ?? VenueStore.Load();
+        _session = session;
+        _booth = booth;
+        _playback = session?.Playback;
         ThemeManager.Apply(this, theme);
         _displayId = _catalog.ActiveDisplay.Id;
         _previewIndex = _catalog.ActiveDisplay.PublishedIndex;
@@ -70,12 +106,17 @@ public partial class LiveSwitchWindow : Window
         _engine.Changed += EngineChanged;
         _colourWatch.Tick += (_, _) => RefreshColoursIfChanged();
         _colourWatch.Start();
+        _visionWatch.Tick += (_, _) => RefreshProductionStatus();
+        _visionWatch.Start();
+        WindowOwnerGuard.Attach(this);
+        BuildProductionTabs();
         Refresh();
         Closed += (_, _) =>
         {
             _catalog.Changed -= CatalogChanged;
             _engine.Changed -= EngineChanged;
             _colourWatch.Stop();
+            _visionWatch.Stop();
             DisposeViews();
         };
     }
@@ -128,6 +169,8 @@ public partial class LiveSwitchWindow : Window
             BuildMultiview(layouts, publishedIndex);
             BuildSources(layouts, publishedIndex);
             BuildLayers(preview);
+            RefreshProfile();
+            RefreshProductionStatus();
             UpdateClock();
             RefreshGameData();
             SwitchStatus.Text = publishedIndex == _previewIndex
@@ -156,7 +199,7 @@ public partial class LiveSwitchWindow : Window
     {
         host.Content = null;
         var view = new ScorebugCanvasView(_catalog, _engine, stateProvider: () => _engine.State,
-            playback: null, layoutProvider: () => layout, liveValues: true)
+            playback: _playback, layoutProvider: () => layout, liveValues: true)
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
@@ -175,6 +218,314 @@ public partial class LiveSwitchWindow : Window
         PreviewHost.Content = null;
     }
 
+    // ---------- Vision production strip ----------
+
+    void BuildProductionTabs()
+    {
+        VisionTabs.Items.Clear();
+        // Clips and cameras moved to their own Live Clips window. Vision keeps the two surfaces an
+        // operator needs while switching: the audio bus and this display's broadcast channel.
+        var audioItem = new TabItem { Header = "AUDIO", Content = AudioTab() };
+        var broadcastItem = new TabItem { Header = "BROADCAST", Content = BroadcastTab() };
+        foreach (var item in new[] { audioItem, broadcastItem })
+            item.SetResourceReference(StyleProperty, "VisionTabItem");
+        VisionTabs.Items.Add(audioItem);
+        VisionTabs.Items.Add(broadcastItem);
+    }
+
+    UIElement AudioTab()
+    {
+        var panel = new StackPanel { Margin = new Thickness(2) };
+        var meterRow = new DockPanel { Margin = new Thickness(0, 0, 0, 5), LastChildFill = true };
+        var meterLabel = new TextBlock { Text = "MASTER MIX", Width = 68, FontSize = 9, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2)), VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(meterLabel, Dock.Left);
+        meterRow.Children.Add(meterLabel);
+        _masterMeterText = new TextBlock { Text = "—", Width = 74, FontFamily = new FontFamily("Consolas"), FontSize = 9, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD2, 0x66)) };
+        DockPanel.SetDock(_masterMeterText, Dock.Right);
+        meterRow.Children.Add(_masterMeterText);
+        _masterMeter = new ProgressBar { Minimum = 0, Maximum = 100, Height = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0), Foreground = new SolidColorBrush(Color.FromRgb(0x38, 0xD7, 0xA3)) };
+        meterRow.Children.Add(_masterMeter);
+        panel.Children.Add(meterRow);
+        panel.Children.Add(AudioRow("MASTER", _session?.MasterVolume ?? 1, value => _session?.SetMasterVolume(value), null));
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Master drives the programme/cue bus. Clip A and B trims live with their channels in the Live Clips window; the venue mixer keeps its own camera and microphone buses.",
+            FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0x7C, 0x8A, 0x9C)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 3, 0, 0)
+        });
+        // No ScrollViewer: the master fader, its meter and the explanation fit in the strip at
+        // once. Audio used to be the one tab that scrolled, which hid the bottom of the fader.
+        return panel;
+    }
+
+    UIElement AudioRow(string label, double initial, Action<double> setValue, Action<bool>? muteAction)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 2), LastChildFill = true };
+        var name = new TextBlock { Text = label, Width = 68, FontSize = 9, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2)), VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(name, Dock.Left);
+        row.Children.Add(name);
+        // The fader stretches to the row instead of a fixed 260px that could fall outside a
+        // narrow strip and look invisible. Its rail and thumb are drawn by VisionSlider.
+        var slider = new Slider
+        {
+            Minimum = 0, Maximum = 100, Value = Math.Clamp(initial * 100, 0, 100),
+            MinWidth = 180, Height = 26, IsMoveToPointEnabled = true,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = new SolidColorBrush(Color.FromRgb(0x2A, 0x3A, 0x48)),
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8D, 0xEB, 0xCB)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x3D, 0x50, 0x64))
+        };
+        // Use the same proven track as the Replay Booth scrubber. The hand-drawn VisionSlider
+        // template collapsed to nothing under the tab's measured height, which left the master
+        // fader invisible on some DPI scales.
+        slider.SetResourceReference(StyleProperty, "ReplayTransportSlider");
+        slider.MinWidth = 160;
+        slider.Height = 28;
+        slider.ToolTip = "Master programme / cue bus level";
+        var valueText = new TextBlock { Width = 42, FontSize = 9, FontFamily = new FontFamily("Consolas"), Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD2, 0x66)), VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Right };
+        valueText.Text = $"{slider.Value:0}%";
+        slider.ValueChanged += (_, e) => { valueText.Text = $"{e.NewValue:0}%"; setValue(e.NewValue / 100); };
+        DockPanel.SetDock(valueText, Dock.Right);
+        row.Children.Add(valueText);
+        if (muteAction is not null)
+        {
+            var mute = new CheckBox { Content = "MUTE", FontSize = 9, Margin = new Thickness(8, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+            mute.Checked += (_, _) => muteAction(true);
+            mute.Unchecked += (_, _) => muteAction(false);
+            DockPanel.SetDock(mute, Dock.Right);
+            row.Children.Add(mute);
+        }
+        row.Children.Add(slider);
+        if (label == "MASTER") _masterSlider = slider;
+        return row;
+    }
+
+    UIElement BroadcastTab()
+    {
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(360) });
+        var left = new StackPanel { Margin = new Thickness(2) };
+        left.Children.Add(FieldLabel("DISPLAY CHANNEL"));
+        _profileDisplayBox = new ComboBox { MinHeight = 26, Margin = new Thickness(0, 0, 0, 3) };
+        _profileDisplayBox.SelectionChanged += (_, _) => SyncProfile();
+        left.Children.Add(_profileDisplayBox);
+        left.Children.Add(new TextBlock
+        {
+            Text = "The channel follows this display's published layout. Switching artwork never re-points the output.",
+            FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0x7C, 0x8A, 0x9C)),
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 5)
+        });
+        var standardRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 3) };
+        _profileStandardBox = new ComboBox { Width = 188, MinHeight = 26, Margin = new Thickness(0, 0, 8, 0) };
+        _profileStandardBox.ItemsSource = BroadcastStandards.All.Select(item => new StandardPick(item.Key, item.Label)).ToArray();
+        standardRow.Children.Add(_profileStandardBox);
+        _safeActionInput = new TextBox { Width = 52, MinHeight = 26, Text = "90", Margin = new Thickness(0, 0, 4, 0) };
+        _safeTitleInput = new TextBox { Width = 52, MinHeight = 26, Text = "80", Margin = new Thickness(0, 0, 8, 0) };
+        standardRow.Children.Add(new TextBlock { Text = "SAFE", FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Foreground = new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2)), Margin = new Thickness(0, 0, 4, 0) });
+        standardRow.Children.Add(_safeActionInput);
+        standardRow.Children.Add(_safeTitleInput);
+        left.Children.Add(standardRow);
+        var checks = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 3) };
+        _fillKeyCheck = new CheckBox { Content = "Fill + key", IsChecked = true, Margin = new Thickness(0, 0, 12, 0) };
+        _lowerThirdCheck = new CheckBox { Content = "Lower third stack", IsChecked = true, Margin = new Thickness(0, 0, 12, 0) };
+        _tickerCheck = new CheckBox { Content = "Ticker stack", IsChecked = true };
+        checks.Children.Add(_fillKeyCheck);
+        checks.Children.Add(_lowerThirdCheck);
+        checks.Children.Add(_tickerCheck);
+        left.Children.Add(checks);
+        var apply = new Button { Content = "Apply profile", MinHeight = 28, MinWidth = 110, HorizontalAlignment = HorizontalAlignment.Left, ToolTip = "Save this display's standard, safe areas and graphic stacks" };
+        apply.Click += (_, _) => ApplyProfile();
+        var applyRow = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(apply, Dock.Right);
+        applyRow.Children.Add(apply);
+        _profileSummary = new TextBlock
+        {
+            FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0x7C, 0x8A, 0x9C)),
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0),
+            TextWrapping = TextWrapping.Wrap
+        };
+        applyRow.Children.Add(_profileSummary);
+        left.Children.Add(applyRow);
+        grid.Children.Add(left);
+        var right = new StackPanel { Margin = new Thickness(2) };
+        right.Children.Add(FieldLabel("LOCAL OUTPUTS"));
+        _fillUrlText = UrlLine();
+        _keyUrlText = UrlLine();
+        _streamUrlText = UrlLine();
+        right.Children.Add(UrlRow("FILL", _fillUrlText));
+        right.Children.Add(UrlRow("KEY", _keyUrlText));
+        right.Children.Add(UrlRow("STREAM", _streamUrlText));
+        _broadcastStats = new TextBlock { FontSize = 9, FontFamily = new FontFamily("Consolas"), Foreground = new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+        right.Children.Add(_broadcastStats);
+        Grid.SetColumn(right, 2);
+        grid.Children.Add(right);
+        // The profile and every local output URL fit in the strip together. Keeping this out of a
+        // ScrollViewer is what makes the broadcast tab readable without scrolling.
+        return grid;
+    }
+
+    static TextBlock FieldLabel(string text) => new()
+    {
+        Text = text, FontSize = 9, FontWeight = FontWeights.Bold,
+        Foreground = new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2)), Margin = new Thickness(0, 0, 0, 3)
+    };
+
+    static TextBlock UrlLine() => new()
+    {
+        FontFamily = new FontFamily("Consolas"), FontSize = 9, TextWrapping = TextWrapping.Wrap,
+        Foreground = new SolidColorBrush(Color.FromRgb(0x7C, 0x8A, 0x9C)), Margin = new Thickness(0, 0, 0, 2)
+    };
+
+    static UIElement UrlRow(string label, TextBlock text)
+    {
+        var host = new StackPanel { Margin = new Thickness(0, 0, 0, 2) };
+        host.Children.Add(new TextBlock { Text = label, FontSize = 8, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E)) });
+        host.Children.Add(text);
+        return host;
+    }
+
+    void ReturnProgram_Click(object sender, RoutedEventArgs e)
+    {
+        Refresh();
+        StatusText.Text = "PROGRAM · layout returned";
+    }
+
+    void RefreshProfile()
+    {
+        if (_profileDisplayBox is null) return;
+        var displays = _catalog.Displays.Select(display => new DisplayPick(display.Id, display.Name)).ToArray();
+        var current = (_profileDisplayBox.SelectedItem as DisplayPick)?.Id;
+        _refreshingProfile = true;
+        try
+        {
+            _profileDisplayBox.ItemsSource = displays;
+            _profileDisplayBox.SelectedItem = displays.FirstOrDefault(item => item.Id == current)
+                ?? displays.FirstOrDefault(item => item.Id == _displayId)
+                ?? displays.FirstOrDefault();
+        }
+        finally { _refreshingProfile = false; }
+        SyncProfile();
+    }
+
+    void SyncProfile()
+    {
+        if (_refreshingProfile || _profileDisplayBox?.SelectedItem is not DisplayPick pick) return;
+        var display = _catalog.FindDisplay(pick.Id);
+        if (display is null) return;
+        var profile = display.Broadcast ?? new BroadcastProfile();
+        profile.Normalize();
+        _profileStandardBox!.SelectedItem = (_profileStandardBox.ItemsSource as IEnumerable<StandardPick>)?
+            .FirstOrDefault(item => item.Key == profile.Standard);
+        if (_safeActionInput is not null && !_safeActionInput.IsKeyboardFocusWithin) _safeActionInput.Text = profile.SafeActionPercent.ToString("0");
+        if (_safeTitleInput is not null && !_safeTitleInput.IsKeyboardFocusWithin) _safeTitleInput.Text = profile.SafeTitlePercent.ToString("0");
+        if (_fillKeyCheck is not null) _fillKeyCheck.IsChecked = profile.FillKey;
+        if (_lowerThirdCheck is not null) _lowerThirdCheck.IsChecked = profile.LowerThirdStack;
+        if (_tickerCheck is not null) _tickerCheck.IsChecked = profile.TickerStack;
+        if (_profileSummary is not null) _profileSummary.Text = profile.Summary;
+    }
+
+    void ApplyProfile()
+    {
+        if (_profileDisplayBox?.SelectedItem is not DisplayPick pick) return;
+        var display = _catalog.FindDisplay(pick.Id);
+        if (display is null) return;
+        var action = double.TryParse(_safeActionInput?.Text, out var actionValue) ? actionValue : 90;
+        var title = double.TryParse(_safeTitleInput?.Text, out var titleValue) ? titleValue : 80;
+        var standard = (_profileStandardBox?.SelectedItem as StandardPick)?.Key ?? "1080p60";
+        _catalog.UpdateDisplay(pick.Id, edit =>
+        {
+            edit.Broadcast = new BroadcastProfile
+            {
+                Standard = standard,
+                SafeActionPercent = action,
+                SafeTitlePercent = title,
+                FillKey = _fillKeyCheck?.IsChecked != false,
+                LowerThirdStack = _lowerThirdCheck?.IsChecked != false,
+                TickerStack = _tickerCheck?.IsChecked != false
+            };
+            edit.Broadcast.Normalize();
+        });
+        // The destinations are channels of this display, not of whichever layout was on air when
+        // they were created. Linking them here is what makes the display the unit that goes live.
+        var settings = _venue.State.Broadcast;
+        settings.Normalize();
+        foreach (var destination in settings.Destinations) destination.DisplayId = pick.Id;
+        _venue.Save();
+        StatusText.Text = $"BROADCAST CHANNEL · {display.Name} · {standard}";
+        RefreshProfile();
+        RefreshProductionStatus();
+    }
+
+    void RefreshProductionStatus()
+    {
+        var settings = _venue.State.Broadcast;
+        settings.Normalize();
+        var fill = settings.Destinations.FirstOrDefault(item => item.Kind == BroadcastDestinationKind.FillKey);
+        var stream = settings.Destinations.FirstOrDefault(item => item.Kind == BroadcastDestinationKind.Stream);
+        if (_fillUrlText is not null) _fillUrlText.Text = fill is null ? "not configured" : _headend.FillUrl(fill.Id);
+        if (_keyUrlText is not null) _keyUrlText.Text = fill is null ? "not configured" : _headend.KeyUrl(fill.Id);
+        if (_streamUrlText is not null) _streamUrlText.Text = stream is null ? "not configured" : _headend.StreamUrl(stream.Id);
+        if (_masterMeter is not null && VisionTabs.SelectedIndex == 0)
+        {
+            // This is the machine's real output meter, not a synthetic bar driven by the fader.
+            var level = SoundLevelMeter.ReadMaster();
+            _masterMeter.Value = Math.Clamp(level * 100, 0, 100);
+            if (_masterMeterText is not null)
+                _masterMeterText.Text = SoundLevelMeter.Available
+                    ? (level <= 0 ? "−∞ dBFS" : $"{SoundLevelMeter.Decibels(level):0.0} dBFS")
+                    : "NO DEVICE";
+        }
+        if (_broadcastStats is not null)
+        {
+            var display = _catalog.FindDisplay(_displayId) ?? _catalog.ActiveDisplay;
+            var profile = display.Broadcast ?? new BroadcastProfile();
+            profile.Normalize();
+            var channels = string.Join("\n", settings.Destinations.Select(destination =>
+            {
+                _headend.RefreshDestination(destination);
+                var linked = string.IsNullOrWhiteSpace(destination.DisplayId)
+                    ? display.Name
+                    : _catalog.FindDisplay(destination.DisplayId)?.Name ?? "missing display";
+                return $"  {destination.Name} · {linked} · {destination.KindLabel} · {destination.StateLabel}";
+            }));
+            _broadcastStats.Text = $"{profile.Standard} · fill+key {(profile.FillKey ? "on" : "off")} · safe {profile.SafeActionPercent:0}/{profile.SafeTitlePercent:0}%\n"
+                + $"headend {(_headend.IsRunning ? $"online :{_headend.Port}" : "idle — open Live Book")}\n"
+                + $"channel {display.Name} · measured latency {_headend.LastRenderMilliseconds:0.0} ms · genlock {settings.GenlockSource}\n"
+                + (channels.Length == 0 ? "  no destinations configured\n" : channels + "\n")
+                + $"fill viewers {_headend.ViewerCount(fill?.Id ?? "router-fill-key")} · stream viewers {_headend.ViewerCount(stream?.Id ?? "stream-main")}";
+        }
+    }
+
+    void LiveBook_Click(object sender, RoutedEventArgs e)
+    {
+        if (_liveBookWindow is { IsVisible: true }) { _liveBookWindow.Activate(); return; }
+        _liveBookWindow = new LiveBookWindow(_catalog, _engine, _playback, _session, _venue, "Dark", OpenGraphicsWindow) { Owner = this };
+        _liveBookWindow.Closed += (_, _) => _liveBookWindow = null;
+        _liveBookWindow.Show();
+        StatusText.Text = "STREAM STUDIO opened · camera, channels and provider output";
+    }
+
+    void CameraSwitch_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cameraSwitchWindow is { IsVisible: true }) { _cameraSwitchWindow.Activate(); return; }
+        _cameraSwitchWindow = new CameraSwitchWindow(_session, _playback, _catalog, _venue) { Owner = this };
+        _cameraSwitchWindow.Closed += (_, _) => _cameraSwitchWindow = null;
+        _cameraSwitchWindow.Show();
+        StatusText.Text = "CAMERA SWITCH opened · camera-only Fill A / Fill B with take";
+    }
+
+    void GraphicsOutput_Click(object sender, RoutedEventArgs e) => OpenGraphicsWindow();
+
+    void OpenGraphicsWindow()
+    {
+        if (_graphicsWindow is { IsVisible: true }) { _graphicsWindow.Activate(); return; }
+        _graphicsWindow = new GraphicsOutputWindow(_catalog, _engine, _playback, _venue, "Dark") { Owner = this };
+        _graphicsWindow.Closed += (_, _) => _graphicsWindow = null;
+        _graphicsWindow.Show();
+        StatusText.Text = "GRAPHICS OUTPUT opened · fill + key";
+    }
+
     void BuildMultiview(IReadOnlyList<ScorebugLayout> layouts, int programIndex)
     {
         const int pageSize = 8;
@@ -187,20 +538,28 @@ public partial class LiveSwitchWindow : Window
             var index = _multiviewPage * pageSize + offset;
             if (index >= layouts.Count)
             {
-                // The wall keeps its eight cells even when the show has one layout, so it reads as a
-                // multiview instead of a single oversized picture with empty space beside it.
-                var empty = new Border
-                {
-                    Margin = new Thickness(3), Background = new SolidColorBrush(Color.FromRgb(0x0A, 0x0F, 0x15)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(0x24, 0x30, 0x3D)),
-                    BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5)
-                };
-                var label = new TextBlock
+                // A fixed 16:9 cell, scaled into the grid cell. Keeping the tile geometry fixed and
+                // letting the Viewbox do the scaling is what keeps all eight boxes the same shape
+                // when the window grows or shrinks; a stretched outer Border read as a long strip.
+                var emptyGrid = new Grid { Width = 320, Height = 180, Background = new SolidColorBrush(Color.FromRgb(0x0A, 0x0F, 0x15)) };
+                emptyGrid.Children.Add(new TextBlock
                 {
                     Text = $"{index + 1}  ·  NO SOURCE", FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0x3E, 0x4C, 0x5C)),
                     HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+                });
+                var empty = new Border
+                {
+                    Background = Brushes.Transparent, Margin = new Thickness(3),
+                    Child = new Viewbox
+                    {
+                        Stretch = Stretch.Uniform, StretchDirection = StretchDirection.Both,
+                        Child = new Border
+                        {
+                            Width = 320, Height = 180, BorderBrush = new SolidColorBrush(Color.FromRgb(0x24, 0x30, 0x3D)),
+                            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Child = emptyGrid
+                        }
+                    }
                 };
-                empty.Child = label;
                 ThemeManager.SetSkipTheme(empty, true);
                 MultiviewGrid.Children.Add(empty);
                 continue;
@@ -209,37 +568,16 @@ public partial class LiveSwitchWindow : Window
             var palette = PaletteFor(layout, index);
             var onProgram = index == programIndex;
             var onPreview = index == _previewIndex;
-            var tile = new Button
-            {
-                Margin = new Thickness(3),
-                Padding = new Thickness(2),
-                Background = new SolidColorBrush(Color.FromRgb(0x0A, 0x0F, 0x15)),
-                BorderThickness = new Thickness(onProgram || onPreview ? 3 : 1),
-                BorderBrush = new SolidColorBrush(onProgram ? Color.FromRgb(0xE6, 0x3B, 0x3B)
-                    : onPreview ? Color.FromRgb(0x38, 0xD7, 0xA3) : ParseColour(palette.Border)),
-                Cursor = Cursors.Hand,
-                Tag = layout.Id,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                VerticalContentAlignment = VerticalAlignment.Stretch,
-                ToolTip = $"{index + 1}. {layout.Name}{(onProgram ? " · on air" : onPreview ? " · preview" : "")} · right-click for colour"
-            };
-            // The tally border is a real border, so it survives the theme pass and is visible even
-            // when the picture is dark.
-            ThemeManager.SetSkipTheme(tile, true);
-            tile.ContextMenu = BuildLayoutColourMenu(layout);
-            var stack = new StackPanel();
-            var image = new Image
-            {
-                Source = Thumbnail(layout, 720, 270), Height = 150, Stretch = Stretch.UniformToFill,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
+            var picture = new Grid { Width = 320, Height = 180, Background = new SolidColorBrush(Color.FromRgb(5, 8, 12)), ClipToBounds = true };
+            var image = new Image { Source = Thumbnail(layout, 640, 360), Stretch = Stretch.Uniform };
             RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
-            stack.Children.Add(new Border
+            picture.Children.Add(image);
+            var strip = new Border
             {
-                Height = 150, HorizontalAlignment = HorizontalAlignment.Stretch,
-                Background = new SolidColorBrush(Color.FromRgb(5, 8, 12)), Child = image, ClipToBounds = true
-            });
-            var row = new DockPanel { Margin = new Thickness(2, 3, 2, 0) };
+                Background = new SolidColorBrush(Color.FromArgb(0xD8, 0x05, 0x08, 0x0C)),
+                VerticalAlignment = VerticalAlignment.Bottom, Height = 23, Padding = new Thickness(5, 0, 5, 0)
+            };
+            var row = new DockPanel { VerticalAlignment = VerticalAlignment.Center };
             var tally = new TextBlock
             {
                 Text = onProgram ? "PGM" : onPreview ? "PVW" : $"{index + 1}",
@@ -251,8 +589,27 @@ public partial class LiveSwitchWindow : Window
             DockPanel.SetDock(tally, Dock.Left);
             row.Children.Add(tally);
             row.Children.Add(new TextBlock { Text = layout.Name, FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis });
-            stack.Children.Add(row);
-            tile.Content = stack;
+            strip.Child = row;
+            picture.Children.Add(strip);
+            var framed = new Border
+            {
+                Width = 320, Height = 180,
+                Background = new SolidColorBrush(Color.FromRgb(0x0A, 0x0F, 0x15)),
+                BorderThickness = new Thickness(onProgram || onPreview ? 3 : 1),
+                BorderBrush = new SolidColorBrush(onProgram ? Color.FromRgb(0xE6, 0x3B, 0x3B)
+                    : onPreview ? Color.FromRgb(0x38, 0xD7, 0xA3) : ParseColour(palette.Border)),
+                CornerRadius = new CornerRadius(5), ClipToBounds = true, Child = picture
+            };
+            var tile = new Button
+            {
+                Margin = new Thickness(3), Padding = new Thickness(0), Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0), Cursor = Cursors.Hand, Tag = layout.Id,
+                HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+                Content = new Viewbox { Stretch = Stretch.Uniform, StretchDirection = StretchDirection.Both, Child = framed },
+                ToolTip = $"{index + 1}. {layout.Name}{(onProgram ? " · on air" : onPreview ? " · preview" : "")} · right-click for colour"
+            };
+            ThemeManager.SetSkipTheme(tile, true);
+            tile.ContextMenu = BuildLayoutColourMenu(layout);
             var target = index;
             tile.Click += (_, _) => { _previewIndex = target; Refresh(); };
             tile.MouseDoubleClick += (_, _) => Take(target);
@@ -271,7 +628,7 @@ public partial class LiveSwitchWindow : Window
             var onPreview = index == _previewIndex;
             var button = new Button
             {
-                Width = 170, Height = 44, Margin = new Thickness(0, 0, 5, 5), Padding = new Thickness(6, 3, 6, 3),
+                Width = 154, Height = 36, Margin = new Thickness(0, 0, 5, 5), Padding = new Thickness(6, 2, 6, 2),
                 FontSize = 10, FontWeight = FontWeights.SemiBold,
                 Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(palette.Background)),
                 Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(palette.Foreground)),
@@ -375,10 +732,10 @@ public partial class LiveSwitchWindow : Window
             var item = element;
             var button = new Button
             {
-                Content = item.Name, FontSize = 9, MinHeight = 26, Padding = new Thickness(7, 2, 7, 2),
-                Margin = new Thickness(0, 0, 4, 4), Opacity = item.Visible ? 1 : 0.45,
+                Content = item.Name, Opacity = item.Visible ? 1 : 0.45,
                 ToolTip = item.Visible ? $"{item.Name} is visible · click to hide" : $"{item.Name} is hidden · click to show"
             };
+            button.SetResourceReference(StyleProperty, "LayerChip");
             button.Click += (_, _) =>
             {
                 var id = item.Id;

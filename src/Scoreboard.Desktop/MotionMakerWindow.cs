@@ -64,6 +64,15 @@ public sealed class MotionMakerWindow : Window
     readonly TextBox _phaseSeconds = Field("0.3");
     readonly TextBox _keyTime = Field("0");
     readonly TextBox _keyValue = Field("0");
+    readonly TextBox _composeX = Field("0");
+    readonly TextBox _composeY = Field("0");
+    readonly TextBox _composeScale = Field("1");
+    readonly TextBox _composeRotate = Field("0");
+    readonly TextBox _composeOpacity = Field("1");
+    readonly TextBlock _composeReadout = new()
+    {
+        FontSize = 10, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0)
+    };
     readonly TextBox _colorTime = Field("0");
     readonly TextBox _colorValue = Field("#FFFFFFFF");
     readonly CheckBox _phaseOn = new() { Content = "Enabled", IsChecked = true, Margin = new Thickness(6, 0, 0, 0) };
@@ -139,7 +148,7 @@ public sealed class MotionMakerWindow : Window
             _clip.TimelineLayoutId = layoutId;
         }
 
-        Title = kind == MotionKind.Transition ? "ScorePlus — Transition Builder" : "ScorePlus — Animation Maker";
+        Title = kind == MotionKind.Transition ? "ScorePlus — Stage 6.5 Transition Builder" : "ScorePlus — Stage 6.5 Animation Maker";
         // Fit the working area: the window is a working surface, not something to drag around a
         // desktop it does not fit on.
         var work = SystemParameters.WorkArea;
@@ -185,6 +194,7 @@ public sealed class MotionMakerWindow : Window
         foreach (var box in new[]
         {
             _nameBox, _phaseName, _phaseSeconds, _keyTime, _keyValue, _colorTime, _colorValue,
+            _composeX, _composeY, _composeScale, _composeRotate, _composeOpacity,
             _pieceName, _pieceText, _pieceWidth, _pieceHeight, _pieceX, _pieceY, _pieceFill, _pieceTextColor
         })
         {
@@ -576,6 +586,28 @@ public sealed class MotionMakerWindow : Window
         panel.Children.Add(_pieceHint);
         BuildTimelinePieceEditor();
         panel.Children.Add(_pieceEditor);
+
+        panel.Children.Add(Section("TRANSFORM COMPOSER"));
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Key a whole movement in one pass. The editor interpolates every frame between these keys; it never cuts from one value to the next.",
+            FontSize = 10, Opacity = 0.68, TextWrapping = TextWrapping.Wrap
+        });
+        _composeX.Width = 54; _composeY.Width = 54; _composeScale.Width = 54;
+        _composeRotate.Width = 54; _composeOpacity.Width = 54;
+        var composeFields = new WrapPanel { Margin = new Thickness(0, 3, 0, 0) };
+        composeFields.Children.Add(FieldLabel("X")); composeFields.Children.Add(_composeX);
+        composeFields.Children.Add(FieldLabel("  Y")); composeFields.Children.Add(_composeY);
+        composeFields.Children.Add(FieldLabel("  Scale")); composeFields.Children.Add(_composeScale);
+        composeFields.Children.Add(FieldLabel("  Rotate")); composeFields.Children.Add(_composeRotate);
+        composeFields.Children.Add(FieldLabel("  Opacity")); composeFields.Children.Add(_composeOpacity);
+        panel.Children.Add(composeFields);
+        var composeButtons = new WrapPanel { Margin = new Thickness(0, 3, 0, 0) };
+        composeButtons.Children.Add(ActionButton("Read playhead", ReadComposerValues));
+        composeButtons.Children.Add(ActionButton("KEY TRANSFORM", KeyTransformAtPlayhead));
+        composeButtons.Children.Add(ActionButton("Key colour", KeyColorAtPlayhead));
+        panel.Children.Add(composeButtons);
+        panel.Children.Add(_composeReadout);
 
         panel.Children.Add(Section("MOTION KEYS"));
         var trackTools = new WrapPanel();
@@ -1750,6 +1782,7 @@ public sealed class MotionMakerWindow : Window
         RefreshColors();
         DrawTimeline();
         RefreshEasy();
+        RefreshComposerReadout();
     }
 
     void RefreshTracks()
@@ -2249,6 +2282,100 @@ public sealed class MotionMakerWindow : Window
         _keyValue.Text = DesignValue(track.Target).ToString("0.###", CultureInfo.CurrentCulture);
         AddKey();
         _status.Text = $"Added {MotionClip.TargetLabel(track.Target)} on {PieceLabel} at {_scrubTime:0.##}s.";
+    }
+
+    /// <summary>
+    /// Pulls the values the preview is actually showing at the playhead into the transform boxes.
+    /// This is the bridge between an interpolated frame and a new key: an operator can scrub to
+    /// 2.4s, read the in-between pose, change one part of it, and key the whole pose.
+    /// </summary>
+    void ReadComposerValues()
+    {
+        var phase = CurrentPhase;
+        if (phase is null) { _status.Text = "Add a phase before keyframing."; return; }
+        var time = Math.Clamp(_scrubTime, 0, phase.Seconds);
+        _composeX.Text = ComposerValue(MotionTarget.X, time).ToString("0.###", CultureInfo.CurrentCulture);
+        _composeY.Text = ComposerValue(MotionTarget.Y, time).ToString("0.###", CultureInfo.CurrentCulture);
+        _composeScale.Text = ComposerValue(MotionTarget.Scale, time).ToString("0.###", CultureInfo.CurrentCulture);
+        _composeRotate.Text = ComposerValue(MotionTarget.Rotate, time).ToString("0.###", CultureInfo.CurrentCulture);
+        _composeOpacity.Text = ComposerValue(MotionTarget.Opacity, time).ToString("0.###", CultureInfo.CurrentCulture);
+        RefreshComposerReadout();
+        _status.Text = $"Read the interpolated pose at {time:0.##}s into the transform composer.";
+    }
+
+    double ComposerValue(MotionTarget target, double time)
+    {
+        var track = PieceTracks().FirstOrDefault(candidate => candidate.Target == target);
+        return track?.ValueAt(time) ?? DesignValue(target);
+    }
+
+    /// <summary>
+    /// Adds X, Y, scale, rotation and opacity keys together at one time. Each target lives in its
+    /// own track, which is what lets the player interpolate every property independently while the
+    /// composer still behaves like one movement key in the editor.
+    /// </summary>
+    void KeyTransformAtPlayhead()
+    {
+        var phase = CurrentPhase;
+        if (phase is null) { _status.Text = "Add a phase before keyframing."; return; }
+        var time = Math.Clamp(_scrubTime, 0, phase.Seconds);
+        var values = new (MotionTarget Target, TextBox Box, string Label)[]
+        {
+            (MotionTarget.X, _composeX, "X"),
+            (MotionTarget.Y, _composeY, "Y"),
+            (MotionTarget.Scale, _composeScale, "scale"),
+            (MotionTarget.Rotate, _composeRotate, "rotation"),
+            (MotionTarget.Opacity, _composeOpacity, "opacity")
+        };
+        foreach (var (target, box, _) in values)
+        {
+            var value = Number(box.Text, ComposerValue(target, time), -100000, 100000);
+            var track = phase.Track(target, _pieceId);
+            track.Keys.RemoveAll(key => Math.Abs(key.Time - time) < 0.005);
+            track.Keys.Add(new MotionKey(time, value, MotionEase.InOut));
+            track.Normalize(phase.Seconds);
+        }
+        _keyTime.Text = time.ToString("0.##", CultureInfo.CurrentCulture);
+        RefreshAll();
+        BuildStage();
+        PreviewAt(time);
+        _status.Text = $"Keyed the full transform on {PieceLabel} at {time:0.##}s · X {_composeX.Text}, Y {_composeY.Text}, scale {_composeScale.Text}, rotation {_composeRotate.Text}, opacity {_composeOpacity.Text}.";
+    }
+
+    /// <summary>Keys the picked colour role at the playhead with the colour already in the field.</summary>
+    void KeyColorAtPlayhead()
+    {
+        var phase = CurrentPhase;
+        if (phase is null) { _status.Text = "Add a phase before keyframing."; return; }
+        var role = SelectedRole;
+        var time = Math.Clamp(_scrubTime, 0, phase.Seconds);
+        var track = phase.Color(role, _pieceId);
+        track.Keys.RemoveAll(key => Math.Abs(key.Time - time) < 0.005);
+        track.Keys.Add(new ColorKey(time, HexColor(_colorValue.Text)));
+        track.Normalize(phase.Seconds);
+        _colorTime.Text = time.ToString("0.##", CultureInfo.CurrentCulture);
+        RefreshAll();
+        BuildStage();
+        PreviewAt(time);
+        _status.Text = $"Keyed {MotionClip.RoleLabel(role)} on {PieceLabel} at {time:0.##}s · {_colorValue.Text}.";
+    }
+
+    void RefreshComposerReadout()
+    {
+        var phase = CurrentPhase;
+        if (phase is null) { _composeReadout.Text = "Add a phase to interpolate motion."; return; }
+        var time = Math.Clamp(_scrubTime, 0, phase.Seconds);
+        string Pose(MotionTarget target) => ComposerValue(target, time).ToString("0.##", CultureInfo.CurrentCulture);
+        var keys = PieceTracks().SelectMany(track => track.Keys)
+            .OrderBy(key => key.Time).ToList();
+        var previous = keys.LastOrDefault(key => key.Time <= time + 0.0005);
+        var next = keys.FirstOrDefault(key => key.Time > time + 0.0005);
+        var span = previous is not null && next is not null
+            ? $"between keys {previous.Time:0.##}s and {next.Time:0.##}s · every frame is interpolated"
+            : next is not null ? $"before the first key at {next.Time:0.##}s"
+            : previous is not null ? $"after the last key at {previous.Time:0.##}s"
+            : "no keys on this item yet";
+        _composeReadout.Text = $"Playhead {time:0.##}s · X {Pose(MotionTarget.X)} · Y {Pose(MotionTarget.Y)} · scale {Pose(MotionTarget.Scale)} · rotation {Pose(MotionTarget.Rotate)}° · opacity {Pose(MotionTarget.Opacity)}\n{span}";
     }
 
     void AddValueVariant(int amount)
@@ -3449,6 +3576,7 @@ public sealed class MotionMakerWindow : Window
         Canvas.SetTop(_playhead, TimelineHeader - 3);
         _playhead.Y2 = _timeline.Height;
         _keyTime.Text = time.ToString("0.##", CultureInfo.CurrentCulture);
+        RefreshComposerReadout();
         ShowPhaseSurface();
         if (_transitionPreview is { } preview)
         {
@@ -3473,6 +3601,7 @@ public sealed class MotionMakerWindow : Window
         Canvas.SetLeft(_playhead, XForGlobal(PhaseStart + DelayFor(_pieceId) + _scrubTime));
         Canvas.SetTop(_playhead, TimelineHeader - 3);
         _playhead.Y2 = _timeline.Height;
+        RefreshComposerReadout();
     }
 
     /// <summary>While scrubbing, show the surface the selected phase belongs to.</summary>

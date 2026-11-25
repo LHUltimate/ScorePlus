@@ -61,11 +61,11 @@ public sealed class RemoteControlServer : IDisposable
     /// icons; a picture of the actual graphic cannot drift from what the audience sees.
     /// The number is a version the page watches so it only downloads a frame that changed.
     /// </summary>
-    public static Func<string?, (byte[] Png, long Version)?>? WatchImage { get; set; }
+    public static Func<string?, int, (byte[] Png, long Version)?>? WatchImage { get; set; }
 
     /// <summary>A specific multiview layout rendered by the app, so a browser program tile shows
     /// the chosen layout even when it is not the one on air.</summary>
-    public static Func<string?, string?, (byte[] Png, long Version)?>? WatchLayoutImage { get; set; }
+    public static Func<string?, string?, int, (byte[] Png, long Version)?>? WatchLayoutImage { get; set; }
 
     /// <summary>True while the operator has locked the desk; every remote edit is refused until it clears.</summary>
     public static Func<bool>? LockState { get; set; }
@@ -284,7 +284,9 @@ public sealed class RemoteControlServer : IDisposable
         {
             // The picture itself, drawn by the app's own scorebug view. This is what makes the wall
             // board look like the broadcast: real fonts, real palette colours, real logos.
-            var frame = WatchImage?.Invoke(Form(request.Query).GetValueOrDefault("display"));
+            var query = Form(request.Query);
+            var width = int.TryParse(query.GetValueOrDefault("w"), out var requested) ? Math.Clamp(requested, 160, 3840) : 0;
+            var frame = WatchImage?.Invoke(query.GetValueOrDefault("display"), width);
             if (frame is null) { await Write(stream, 404, "text/plain; charset=utf-8", "Nothing is on the program output yet."); return; }
             await WriteBytes(stream, 200, "image/png", frame.Value.Png);
             return;
@@ -293,7 +295,7 @@ public sealed class RemoteControlServer : IDisposable
         {
             // The page polls this, never the picture: a wall screen only downloads a new frame when
             // the graphic actually changed, and never reloads the page between changes.
-            var frame = WatchImage?.Invoke(Form(request.Query).GetValueOrDefault("display"));
+            var frame = WatchImage?.Invoke(Form(request.Query).GetValueOrDefault("display"), 0);
             var version = frame is null ? string.Empty : frame.Value.Version.ToString();
             await Write(stream, 200, "application/json; charset=utf-8", $"{{\"version\":\"{version}\"}}");
             return;
@@ -372,8 +374,9 @@ public sealed class RemoteControlServer : IDisposable
         if (request.Path == "/api/camera-wall/layout" && request.Method == "GET")
         {
             var query = Form(request.Query);
+            var width = int.TryParse(query.GetValueOrDefault("w"), out var requested) ? Math.Clamp(requested, 160, 1920) : 0;
             var frame = _dispatcher.Invoke(() => WatchLayoutImage?.Invoke(
-                query.GetValueOrDefault("display"), query.GetValueOrDefault("layout")));
+                query.GetValueOrDefault("display"), query.GetValueOrDefault("layout"), width));
             if (frame is null || frame.Value.Png.Length == 0)
             {
                 await Write(stream, 404, "text/plain; charset=utf-8", "No layout picture yet.");

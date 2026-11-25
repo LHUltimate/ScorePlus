@@ -26,6 +26,9 @@ public sealed class MultiviewTileBinding
     public int CameraIndex { get; set; } = -1;
     /// <summary>A specific layout to show, even when it is not the one staged or on air. Empty follows the desk.</summary>
     public string LayoutId { get; set; } = "";
+    /// <summary>How many base cells this one tile spans: 0 follows the wall's size, 1 is one cell,
+    /// 2 makes this tile a 2×2 block. Tile size belongs to the tile, not only to the wall.</summary>
+    public int Size { get; set; }
 }
 
 /// <summary>
@@ -42,6 +45,12 @@ public sealed class MultiviewWindow : Window
         public string DisplayId { get; set; } = "";
         public int CameraIndex { get; set; } = -1;
         public string LayoutId { get; set; } = "";
+        public int Size { get; set; }
+    }
+
+    sealed record TileSizeChoice(int Span, string Label)
+    {
+        public override string ToString() => Label;
     }
 
     sealed record SourceChoice(MultiviewSourceKind Kind, string DisplayId, int CameraIndex, string Label, string LayoutId = "")
@@ -61,7 +70,7 @@ public sealed class MultiviewWindow : Window
     readonly WrapPanel _panel = new() { Margin = new Thickness(8) };
     // The wall itself: one UniformGrid stretching every camera to fill the window with no chrome.
     readonly Grid _wall = new() { Background = Brushes.Black, ClipToBounds = true };
-    readonly UniformGrid _wallTiles = new();
+    readonly SpanningUniformGrid _wallTiles = new();
     readonly DockPanel _editorChrome = new() { Visibility = Visibility.Collapsed };
     readonly Button _editButton = new()
     {
@@ -96,6 +105,13 @@ public sealed class MultiviewWindow : Window
         Foreground = Brushes.White,
         VerticalAlignment = VerticalAlignment.Center,
         Margin = new Thickness(0, 0, 10, 0)
+    };
+    readonly ComboBox _sizeBox = new()
+    {
+        Width = 196,
+        MinHeight = 30,
+        Margin = new Thickness(0, 0, 8, 0),
+        ToolTip = "How much of the screen one source uses"
     };
     readonly CheckBox _soundToggle = new()
     {
@@ -180,6 +196,7 @@ public sealed class MultiviewWindow : Window
         _soundToggle.Checked += (_, _) => SetSoundBars(true);
         _soundToggle.Unchecked += (_, _) => SetSoundBars(false);
         Content = BuildChrome();
+        WindowOwnerGuard.Attach(this);
         _wall.SizeChanged += (_, _) => UpdateWallColumns();
         ApplyPalette(preferences.Theme);
         BuildReplayBody();
@@ -265,6 +282,29 @@ public sealed class MultiviewWindow : Window
         importLayout.Click += (_, _) => ImportLayoutFile();
         layoutActions.Children.Add(saveLayout);
         layoutActions.Children.Add(importLayout);
+        var sizeLabel = new TextBlock
+        {
+            Text = "DEFAULT CELL", FontSize = 9, FontWeight = FontWeights.Bold,
+            Foreground = _mutedBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 6, 0)
+        };
+        layoutActions.Children.Add(sizeLabel);
+        _sizeBox.ItemsSource = new[]
+        {
+            new SizeChoice(0, "Automatic · fill the window"),
+            new SizeChoice(2, "Quarter screen · 2 × 2"),
+            new SizeChoice(4, "Quarter of a quarter · 4 × 4")
+        };
+        _sizeBox.SelectedItem = (_sizeBox.ItemsSource as IEnumerable<SizeChoice>)!
+            .FirstOrDefault(choice => choice.Columns == _preferences.MultiviewColumns);
+        if (_sizeBox.SelectedItem is null) _sizeBox.SelectedIndex = 0;
+        _sizeBox.SelectionChanged += (_, _) =>
+        {
+            if (_sizeBox.SelectedItem is not SizeChoice choice) return;
+            _preferences.MultiviewColumns = choice.Columns;
+            PreferencesStore.Save(_preferences);
+            UpdateWallColumns();
+        };
+        layoutActions.Children.Add(_sizeBox);
 
         var top = new StackPanel();
         top.Children.Add(header);
@@ -319,8 +359,25 @@ public sealed class MultiviewWindow : Window
         RenderTiles();
     }
 
+    sealed record SizeChoice(int Columns, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
     void UpdateWallColumns()
     {
+        // An explicit size wins over the automatic best-fit grid. Two columns put one source in a
+        // quarter of the screen; four columns make it a quarter of a quarter, for a full bank.
+        if (!_maximized && _preferences.MultiviewColumns is 2 or 4)
+        {
+            // Rows are fixed to the same count, not left to auto-fit. That is what makes a tile
+            // exactly a quarter of the screen (2 × 2) or a quarter of a quarter (4 × 4) even when
+            // the wall holds fewer sources than the grid has cells.
+            var side = _preferences.MultiviewColumns;
+            _wallTiles.Columns = side;
+            _wallTiles.Rows = side;
+            return;
+        }
         var count = Math.Max(1, _maximized ? 1 : _tiles.Count);
         var width = Math.Max(1, _wall.ActualWidth);
         var height = Math.Max(1, _wall.ActualHeight);
@@ -391,7 +448,8 @@ public sealed class MultiviewWindow : Window
                     ? display?.Id ?? ""
                     : "",
                 CameraIndex = kind == MultiviewSourceKind.Camera ? camera!.Value : -1,
-                LayoutId = kind == MultiviewSourceKind.ProgramPreview ? binding.LayoutId ?? "" : ""
+                LayoutId = kind == MultiviewSourceKind.ProgramPreview ? binding.LayoutId ?? "" : "",
+                Size = Math.Clamp(binding.Size, 0, 2)
             });
         }
         if (_tiles.Count == 0) DefaultTiles();
@@ -407,8 +465,14 @@ public sealed class MultiviewWindow : Window
             _tiles.Add(new TileConfig { Kind = MultiviewSourceKind.AudienceOutput, DisplayId = display.Id });
         }
         _tiles.Add(new TileConfig { Kind = MultiviewSourceKind.Replay });
-        foreach (var index in _session.Library.Where(entry => entry.IsCamera).Select(entry => entry.CameraIndex).Distinct())
-            _tiles.Add(new TileConfig { Kind = MultiviewSourceKind.Camera, CameraIndex = index });
+        // Cameras come from the capture devices themselves. A camera plugged in after the library
+        // was built still needs a tile, without first being imported or put on air.
+        var cameraIndexes = _session.CameraDevices().Select(device => device.Index)
+            .Concat(_session.Library.Where(entry => entry.IsCamera).Select(entry => entry.CameraIndex))
+            .Distinct();
+        foreach (var index in cameraIndexes)
+            if (_tiles.All(tile => tile.Kind != MultiviewSourceKind.Camera || tile.CameraIndex != index))
+                _tiles.Add(new TileConfig { Kind = MultiviewSourceKind.Camera, CameraIndex = index });
         if (_tiles.Count == 0) _tiles.Add(new TileConfig { Kind = MultiviewSourceKind.Blank });
     }
 
@@ -522,7 +586,8 @@ public sealed class MultiviewWindow : Window
                         LayoutId = layout?.Id ?? "",
                         LayoutName = layout?.Name ?? "",
                         CameraIndex = camera?.CameraIndex ?? -1,
-                        CameraName = camera?.Label ?? ""
+                        CameraName = camera?.Label ?? (tile.Kind == MultiviewSourceKind.Camera ? CameraFeed.CameraName(tile.CameraIndex) : ""),
+                        Size = tile.Size
                     };
                 }).ToList()
             };
@@ -575,7 +640,8 @@ public sealed class MultiviewWindow : Window
                 CameraIndex = kind == MultiviewSourceKind.Camera ? camera!.Value : -1,
                 LayoutId = kind == MultiviewSourceKind.ProgramPreview
                     ? ResolveLayoutId(display, source.LayoutId, source.LayoutName)
-                    : ""
+                    : "",
+                Size = Math.Clamp(source.Size, 0, 2)
             });
         }
         if (imported.Count == 0) imported.Add(new TileConfig { Kind = MultiviewSourceKind.Blank });
@@ -610,7 +676,8 @@ public sealed class MultiviewWindow : Window
             Source = SourceName(tile.Kind),
             DisplayId = tile.DisplayId,
             CameraIndex = tile.CameraIndex,
-            LayoutId = tile.LayoutId
+            LayoutId = tile.LayoutId,
+            Size = tile.Size
         }).ToList();
         PreferencesStore.Save(_preferences);
     }
@@ -648,6 +715,7 @@ public sealed class MultiviewWindow : Window
 
     int? ResolveCamera(int index, string? name = null)
     {
+        if (_session.CameraDevices().Any(device => device.Index == index)) return index;
         if (_session.Library.Any(entry => entry.IsCamera && entry.CameraIndex == index)) return index;
         if (!string.IsNullOrWhiteSpace(name))
         {
@@ -662,9 +730,11 @@ public sealed class MultiviewWindow : Window
     {
         var displays = string.Join("|", _catalog.Displays.Select(display =>
             $"{display.Id}:{display.Name}:" + string.Join(",", display.Layouts.Select(layout => $"{layout.Id}={layout.Name}"))));
-        var cameras = string.Join("|", _session.Library.Where(entry => entry.IsCamera)
-            .OrderBy(entry => entry.CameraIndex)
-            .Select(entry => $"{entry.CameraIndex}:{entry.Label}"));
+        var devices = _session.CameraDevices();
+        var cameras = string.Join("|", devices.OrderBy(device => device.Index)
+            .Select(device => $"{device.Index}:{device.Label}")
+            .Concat(_session.Library.Where(entry => entry.IsCamera)
+                .Select(entry => $"L{entry.CameraIndex}:{entry.Label}")));
         // A microphone added to the library has to reach the tile's picker, so the wall is rebuilt
         // when the microphones change too. The link itself is left out: choosing one rebuilds
         // nothing, which is what keeps the picker from closing under the operator's cursor.
@@ -791,6 +861,38 @@ public sealed class MultiviewWindow : Window
         {
             DockPanel.SetDock(head, Dock.Top);
             stack.Children.Add(head);
+            // Tile size belongs to this tile. The wall's default still works, but one source can
+            // be a quarter of the wall while its neighbours stay small.
+            var sizeRow = new DockPanel { Margin = new Thickness(7, 0, 5, 4) };
+            sizeRow.Children.Add(new TextBlock
+            {
+                Text = "SIZE", FontSize = 9, FontWeight = FontWeights.Bold, Foreground = _mutedBrush,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
+            });
+            var sizePicker = new ComboBox
+            {
+                FontSize = 11, MinHeight = 26, VerticalContentAlignment = VerticalAlignment.Center,
+                ItemsSource = new[]
+                {
+                    new TileSizeChoice(0, "Wall default"),
+                    new TileSizeChoice(1, "Small · one cell"),
+                    new TileSizeChoice(2, "Large · 2 × 2 cells")
+                },
+                SelectedIndex = Math.Clamp(tile.Size, 0, 2),
+                ToolTip = "How much of the wall this one tile uses. Other tiles keep their own size."
+            };
+            sizePicker.SelectionChanged += (_, _) =>
+            {
+                if (_rendering || sizePicker.SelectedItem is not TileSizeChoice choice) return;
+                if (tile.Size == choice.Span) return;
+                tile.Size = choice.Span;
+                SaveTiles();
+                // Close the drop-down before the wall is rebuilt underneath it.
+                Dispatcher.BeginInvoke(new Action(RenderTiles));
+            };
+            sizeRow.Children.Add(sizePicker);
+            DockPanel.SetDock(sizeRow, Dock.Top);
+            stack.Children.Add(sizeRow);
             // A camera carries no sound of its own, so its tile is where the director says which
             // microphone that picture listens to — the same link the wall's sound bar reads.
             if (MicrophoneRow(tile) is { } microphoneRow)
@@ -813,6 +915,8 @@ public sealed class MultiviewWindow : Window
             Child = stack,
             Tag = tile
         };
+        // A wall default of zero means one base cell; an explicit 2 makes this tile four cells.
+        SpanningUniformGrid.SetSpan(border, tile.Size == 0 ? 1 : tile.Size);
         if (!editing)
         {
             border.MouseLeftButtonDown += (_, _) => SelectTile(tile, maximize: false);
@@ -1078,9 +1182,10 @@ public sealed class MultiviewWindow : Window
             choices.Add(new SourceChoice(MultiviewSourceKind.AudienceOutput, display.Id, -1, $"AUDIENCE OUTPUT · {display.Name}"));
         if (tile.Kind == MultiviewSourceKind.Replay || !_tiles.Any(other => other.Kind == MultiviewSourceKind.Replay))
             choices.Add(new SourceChoice(MultiviewSourceKind.Replay, "", -1, "REPLAY · live / recorded preview"));
-        foreach (var camera in _session.Library.Where(entry => entry.IsCamera)
-                     .GroupBy(entry => entry.CameraIndex).Select(group => group.First()).OrderBy(entry => entry.CameraIndex))
-            choices.Add(new SourceChoice(MultiviewSourceKind.Camera, "", camera.CameraIndex, $"CAMERA · {camera.Label}"));
+        // Every capture device, whether or not it was added to the media library first. A camera
+        // plugged in mid-show can be put on the wall immediately.
+        foreach (var device in _session.CameraDevices().OrderBy(device => device.Index))
+            choices.Add(new SourceChoice(MultiviewSourceKind.Camera, "", device.Index, $"CAMERA · {device.Label}"));
         choices.Add(new SourceChoice(MultiviewSourceKind.Blank, "", -1, "BLANK · spacer"));
         return choices;
     }
@@ -1145,12 +1250,15 @@ public sealed class MultiviewWindow : Window
     UIElement CameraTile(int cameraIndex)
     {
         var entry = _session.Library.FirstOrDefault(candidate => candidate.IsCamera && candidate.CameraIndex == cameraIndex);
-        if (entry is null) return Hint("CAMERA NOT FOUND", "Add the camera in the media dock, then choose it again.");
+        // A discovered device without a library entry is still a camera; draw it and let the
+        // operator add a tag later instead of showing an empty "not found" card.
+        if (entry is null && !_session.CameraDevices().Any(device => device.Index == cameraIndex))
+            return Hint("CAMERA NOT FOUND", "Plug the camera in, then choose it again.");
         var picture = new Image { Stretch = Stretch.Uniform };
         // Every camera tile carries a level bar while the setting is on. One that names a
         // microphone reads that microphone; the others read the show's master mix, so the wall
         // always shows where the sound is instead of silently drawing nothing.
-        if (_preferences.MultiviewCameraSoundBars)
+        if (_preferences.MultiviewCameraSoundBars && entry is not null)
         {
             var host = new Grid();
             host.Children.Add(picture);

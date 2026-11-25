@@ -41,11 +41,11 @@
           <TextBlock Text="ROOM" FontSize="11" FontWeight="Bold" Foreground="#38D7A3"/>
         </Border>
         <TextBlock Text="SCOREPLUS · CONTROL ROOM" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
-        <TextBlock Text="   six surfaces, one shared show" Foreground="#93A0B2" VerticalAlignment="Center"/>
+        <TextBlock Text="   every surface, one shared show" Foreground="#93A0B2" VerticalAlignment="Center"/>
       </StackPanel>
     </DockPanel>
 
-    <UniformGrid Grid.Row="1" Columns="3" Rows="2" VerticalAlignment="Center">
+    <UniformGrid Grid.Row="1" Columns="4" Rows="3" VerticalAlignment="Center">
       <Button x:Name="DisplayStudioCard" Style="{StaticResource HubCard}" Click="DisplayStudio_Click" Margin="0,0,8,8">
         <Grid>
           <Grid.RowDefinitions>
@@ -90,7 +90,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="ShowCard" Style="{StaticResource HubCard}" Click="Show_Click" Margin="0,0,0,8">
+      <Button x:Name="ShowCard" Style="{StaticResource HubCard}" Click="Show_Click" Margin="0,0,8,8">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -112,7 +112,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="LiveSwitchCard" Style="{StaticResource HubCard}" Click="LiveSwitch_Click" Margin="0,0,8,0">
+      <Button x:Name="LiveSwitchCard" Style="{StaticResource HubCard}" Click="LiveSwitch_Click" Margin="0,0,0,8">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -134,6 +134,28 @@
         </Grid>
       </Button>
 
+      <Button x:Name="LiveClipsCard" Style="{StaticResource HubCard}" Click="LiveClips_Click" Margin="0,0,8,0">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Border Background="#F1A33C" CornerRadius="8,8,0,0"/>
+          <StackPanel Grid.Row="1" Margin="15,12,15,12">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="05" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock Text="LIVE CLIPS" Style="{StaticResource HubTitle}"/>
+            </DockPanel>
+            <TextBlock Text="Two fills from thumbnails" Foreground="#FFD8A3" FontSize="11" Margin="0,2,0,8"/>
+            <TextBlock Text="Clip and camera launcher with fill A and B, independent transport and takes."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
+            <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
+              <TextBlock x:Name="ClipsStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Button>
+
       <Button x:Name="LiveChannelCard" Style="{StaticResource HubCard}" Click="LiveChannel_Click" Margin="0,0,8,0">
         <Grid>
           <Grid.RowDefinitions>
@@ -143,7 +165,7 @@
           <Border Background="#3D8FB8" CornerRadius="8,8,0,0"/>
           <StackPanel Grid.Row="1" Margin="15,12,15,12">
             <DockPanel>
-              <TextBlock DockPanel.Dock="Right" Text="05" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock DockPanel.Dock="Right" Text="06" FontSize="10" Foreground="#5C6B7E"/>
               <TextBlock Text="LIVE CHANNEL" Style="{StaticResource HubTitle}"/>
             </DockPanel>
             <TextBlock Text="Monitor and stream graphics" Foreground="#BFE7FA" FontSize="11" Margin="0,2,0,8"/>
@@ -156,7 +178,29 @@
         </Grid>
       </Button>
 
-      <Button x:Name="VenueCard" Style="{StaticResource HubCard}" Click="Venue_Click">
+      <Button x:Name="ReplayBoothCard" Style="{StaticResource HubCard}" Click="ReplayBooth_Click" Margin="0,0,8,0">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Border Background="#B98CFF" CornerRadius="8,8,0,0"/>
+          <StackPanel Grid.Row="1" Margin="15,12,15,12">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="07" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock Text="REPLAY BOOTH" Style="{StaticResource HubTitle}"/>
+            </DockPanel>
+            <TextBlock Text="Mark, rate and save" Foreground="#D9C9FF" FontSize="11" Margin="0,2,0,8"/>
+            <TextBlock Text="Every camera with its recorded clocks, mark in/out, rating and game tags."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
+            <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
+              <TextBlock x:Name="ReplayStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Button>
+
+      <Button x:Name="VenueCard" Style="{StaticResource HubCard}" Click="Venue_Click" Margin="0,0,8,8">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -165,7 +209,7 @@
           <Border Background="#2ECC71" CornerRadius="8,8,0,0"/>
           <StackPanel Grid.Row="1" Margin="15,12,15,12">
             <DockPanel>
-              <TextBlock DockPanel.Dock="Right" Text="06" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock DockPanel.Dock="Right" Text="08" FontSize="10" Foreground="#5C6B7E"/>
               <TextBlock Text="VENUE" Style="{StaticResource HubTitle}"/>
             </DockPanel>
             <TextBlock Text="Displays and scheduled content" Foreground="#8EF0B5" FontSize="11" Margin="0,2,0,8"/>
@@ -173,6 +217,94 @@
                        Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
             <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
               <TextBlock x:Name="VenueStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Button>
+
+      <Button x:Name="GraphicsCard" Style="{StaticResource HubCard}" Click="GraphicsOutput_Click" Margin="0,0,8,8">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Border Background="#D66BD8" CornerRadius="8,8,0,0"/>
+          <StackPanel Grid.Row="1" Margin="15,12,15,12">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="09" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock Text="GRAPHICS OUTPUT" Style="{StaticResource HubTitle}"/>
+            </DockPanel>
+            <TextBlock Text="Fill + key for the router" Foreground="#F1C2F2" FontSize="11" Margin="0,2,0,8"/>
+            <TextBlock Text="Separate fill and key pictures, key colour, scorebug stack and local URLs."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
+            <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
+              <TextBlock x:Name="GraphicsStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Button>
+
+      <Button x:Name="StreamStudioCard" Style="{StaticResource HubCard}" Click="LiveBook_Click" Margin="0,0,8,8">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Border Background="#38D7A3" CornerRadius="8,8,0,0"/>
+          <StackPanel Grid.Row="1" Margin="15,12,15,12">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="10" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock Text="STREAM STUDIO" Style="{StaticResource HubTitle}"/>
+            </DockPanel>
+            <TextBlock Text="Channels, displays and providers" Foreground="#8DEBCB" FontSize="11" Margin="0,2,0,8"/>
+            <TextBlock Text="Compose the programme, assign a display or venue channel, and push to a 3rd-party RTMP provider."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
+            <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
+              <TextBlock x:Name="StudioStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Button>
+
+      <Button x:Name="CameraSwitchCard" Style="{StaticResource HubCard}" Click="CameraSwitch_Click" Margin="0,0,8,8">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Border Background="#E9863B" CornerRadius="8,8,0,0"/>
+          <StackPanel Grid.Row="1" Margin="15,12,15,12">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="11" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock Text="CAMERA SWITCH" Style="{StaticResource HubTitle}"/>
+            </DockPanel>
+            <TextBlock Text="Cameras only, Fill A / Fill B" Foreground="#FFD0A3" FontSize="11" Margin="0,2,0,8"/>
+            <TextBlock Text="Camera wall with the fill each camera is assigned to, plus take and return to live."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
+            <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
+              <TextBlock x:Name="CameraSwitchStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Button>
+
+      <Button x:Name="MultiviewCard" Style="{StaticResource HubCard}" Click="Multiview_Click" Margin="0,0,0,8">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Border Background="#4C9AFF" CornerRadius="8,8,0,0"/>
+          <StackPanel Grid.Row="1" Margin="15,12,15,12">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="12" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock Text="MULTIVIEW" Style="{StaticResource HubTitle}"/>
+            </DockPanel>
+            <TextBlock Text="Every source on one wall" Foreground="#BFD9FF" FontSize="11" Margin="0,2,0,8"/>
+            <TextBlock Text="Per-tile previews, audience displays, cameras and replay, with tally borders and sound bars."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
+            <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
+              <TextBlock x:Name="MultiviewStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
             </Border>
           </StackPanel>
         </Grid>
