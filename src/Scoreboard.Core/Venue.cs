@@ -153,6 +153,10 @@ public sealed class VenueState
     public List<VenueChannel> Channels { get; set; } = [];
     public List<VenueProof> Proof { get; set; } = [];
 
+    /// <summary>Live Channel button colours keyed by layout id. This is presentation-only; it
+    /// never changes which layout is on air. The store owns it so the choice survives a restart.</summary>
+    public Dictionary<string, string> LayoutColors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Optional playback nodes. An empty list is the normal single-machine setup: this
     /// PC renders every display and no network service is needed.</summary>
     public List<DisplayNode> Nodes { get; set; } = [];
@@ -199,6 +203,15 @@ public sealed class VenueStore
         State.Proof ??= [];
         State.Nodes ??= [];
         State.SyncGroups ??= [];
+        var layoutColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (layoutId, color) in State.LayoutColors ?? [])
+        {
+            var cleanId = (layoutId ?? "").Trim();
+            var cleanColor = (color ?? "").Trim();
+            if (cleanId.Length > 0 && IsHexColor(cleanColor) && layoutColors.Count < 512)
+                layoutColors[cleanId] = cleanColor.ToUpperInvariant();
+        }
+        State.LayoutColors = layoutColors;
         State.Nodes = State.Nodes.Where(node => node is not null).Take(64).ToList();
         foreach (var node in State.Nodes) node.Normalize();
         State.SyncGroups = State.SyncGroups.Where(group => group is not null).Take(32).ToList();
@@ -231,6 +244,9 @@ public sealed class VenueStore
         }
         State.Proof = State.Proof.OrderByDescending(proof => proof.At).Take(10000).ToList();
     }
+
+    static bool IsHexColor(string color) =>
+        color.Length is 7 or 9 && color[0] == '#' && color[1..].All(char.IsAsciiHexDigit);
 
     public void Save()
     {

@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Scoreboard.Core;
 
 namespace Scoreboard.Desktop;
@@ -11,11 +12,14 @@ public partial class LiveSwitchWindow : Window
 {
     readonly ScorebugCatalog _catalog;
     readonly GameEngine _engine;
+    readonly VenueStore _venue;
+    readonly DispatcherTimer _colourWatch = new() { Interval = TimeSpan.FromSeconds(1) };
     readonly List<ScorebugCanvasView> _views = [];
     bool _refreshing;
     int _previewIndex;
     int _multiviewPage;
     string? _displayId;
+    string _colourSignature = "";
 
     sealed record DisplayChoice(string Id, string Label) { public override string ToString() => Label; }
     sealed record TransitionChoice(LayoutTransition Kind, string Label) { public override string ToString() => Label; }
@@ -39,11 +43,24 @@ public partial class LiveSwitchWindow : Window
         ("#3C1B28", "#D45C86", "#FFC1D4"), ("#23313F", "#6E8BA5", "#D2E1EE")
     ];
 
+    static readonly (string Name, string Hex)[] LayoutColourChoices =
+    [
+        ("Red", "#B52B32"), ("Blue", "#2467B3"), ("Purple", "#6842A8"),
+        ("Green", "#24754F"), ("Gold", "#A56B16"), ("Pink", "#A43A68"),
+        ("Slate", "#34495E"), ("Charcoal", "#2B2F36")
+    ];
+
     public LiveSwitchWindow(ScorebugCatalog catalog, GameEngine engine, string theme = "Dark")
+        : this(catalog, engine, theme, null)
+    {
+    }
+
+    public LiveSwitchWindow(ScorebugCatalog catalog, GameEngine engine, string theme, VenueStore? venueStore)
     {
         InitializeComponent();
         _catalog = catalog;
         _engine = engine;
+        _venue = venueStore ?? VenueStore.Load();
         ThemeManager.Apply(this, theme);
         _displayId = _catalog.ActiveDisplay.Id;
         _previewIndex = _catalog.ActiveDisplay.PublishedIndex;
@@ -51,11 +68,14 @@ public partial class LiveSwitchWindow : Window
         TransitionBox.SelectedIndex = 1;
         _catalog.Changed += CatalogChanged;
         _engine.Changed += EngineChanged;
+        _colourWatch.Tick += (_, _) => RefreshColoursIfChanged();
+        _colourWatch.Start();
         Refresh();
         Closed += (_, _) =>
         {
             _catalog.Changed -= CatalogChanged;
             _engine.Changed -= EngineChanged;
+            _colourWatch.Stop();
             DisposeViews();
         };
     }
@@ -89,8 +109,6 @@ public partial class LiveSwitchWindow : Window
         {
             var display = _catalog.FindDisplay(_displayId) ?? _catalog.ActiveDisplay;
             _displayId = display.Id;
-            if (_catalog.FindDisplay(display.Id) is not null && _catalog.ActiveDisplayIndex != _catalog.Displays.IndexOf(display))
-                _catalog.SelectDisplay(_catalog.Displays.IndexOf(display));
             var layouts = display.Layouts;
             if (layouts.Count == 0) return;
             _previewIndex = Math.Clamp(_previewIndex, 0, layouts.Count - 1);
@@ -116,8 +134,22 @@ public partial class LiveSwitchWindow : Window
                 ? $"{program.Name} is on air. Choose another source to preview."
                 : $"Next: {preview.Name}";
             StatusText.Text = $"LIVE SWITCH · {display.Name} · {layouts.Count} layouts · program {publishedIndex + 1} · preview {_previewIndex + 1}";
+            _colourSignature = ColourSignature();
         }
         finally { _refreshing = false; }
+    }
+
+    string ColourSignature() => string.Join("|", _venue.State.LayoutColors
+        .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+        .Select(pair => $"{pair.Key}={pair.Value}"));
+
+    void RefreshColoursIfChanged()
+    {
+        if (_refreshing) return;
+        var signature = ColourSignature();
+        if (string.Equals(signature, _colourSignature, StringComparison.Ordinal)) return;
+        _colourSignature = signature;
+        Refresh();
     }
 
     void SetHost(ContentControl host, ScorebugLayout layout, bool showAllLayers = false)
@@ -174,6 +206,7 @@ public partial class LiveSwitchWindow : Window
                 continue;
             }
             var layout = layouts[index];
+            var palette = PaletteFor(layout, index);
             var onProgram = index == programIndex;
             var onPreview = index == _previewIndex;
             var tile = new Button
@@ -183,15 +216,17 @@ public partial class LiveSwitchWindow : Window
                 Background = new SolidColorBrush(Color.FromRgb(0x0A, 0x0F, 0x15)),
                 BorderThickness = new Thickness(onProgram || onPreview ? 3 : 1),
                 BorderBrush = new SolidColorBrush(onProgram ? Color.FromRgb(0xE6, 0x3B, 0x3B)
-                    : onPreview ? Color.FromRgb(0x38, 0xD7, 0xA3) : Color.FromRgb(0x2E, 0x3B, 0x4A)),
+                    : onPreview ? Color.FromRgb(0x38, 0xD7, 0xA3) : ParseColour(palette.Border)),
                 Cursor = Cursors.Hand,
+                Tag = layout.Id,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 VerticalContentAlignment = VerticalAlignment.Stretch,
-                ToolTip = $"{index + 1}. {layout.Name}{(onProgram ? " · on air" : onPreview ? " · preview" : "")}"
+                ToolTip = $"{index + 1}. {layout.Name}{(onProgram ? " · on air" : onPreview ? " · preview" : "")} · right-click for colour"
             };
             // The tally border is a real border, so it survives the theme pass and is visible even
             // when the picture is dark.
             ThemeManager.SetSkipTheme(tile, true);
+            tile.ContextMenu = BuildLayoutColourMenu(layout);
             var stack = new StackPanel();
             var image = new Image
             {
@@ -231,20 +266,22 @@ public partial class LiveSwitchWindow : Window
         for (var index = 0; index < layouts.Count; index++)
         {
             var layout = layouts[index];
-            var palette = TileColours[index % TileColours.Length];
+            var palette = PaletteFor(layout, index);
             var onProgram = index == programIndex;
             var onPreview = index == _previewIndex;
             var button = new Button
             {
                 Width = 170, Height = 44, Margin = new Thickness(0, 0, 5, 5), Padding = new Thickness(6, 3, 6, 3),
                 FontSize = 10, FontWeight = FontWeights.SemiBold,
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(onProgram ? "#3A1717" : onPreview ? "#163C32" : palette.Background)),
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(onProgram ? "#FF9B9B" : onPreview ? "#8DEBCB" : palette.Foreground)),
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(palette.Background)),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(palette.Foreground)),
                 BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(onProgram ? "#E63B3B" : onPreview ? "#38D7A3" : palette.Border)),
                 BorderThickness = new Thickness(onProgram || onPreview ? 2 : 1),
-                ToolTip = $"{layout.Name}\nClick to preview · double-click to take"
+                Tag = layout.Id,
+                ToolTip = $"{layout.Name}\nClick to preview · double-click to take · right-click for colour"
             };
             ThemeManager.SetSkipTheme(button, true);
+            button.ContextMenu = BuildLayoutColourMenu(layout);
             var stack = new StackPanel();
             stack.Children.Add(new TextBlock { Text = $"{index + 1}  {layout.Name}", TextTrimming = TextTrimming.CharacterEllipsis });
             stack.Children.Add(new TextBlock
@@ -258,6 +295,76 @@ public partial class LiveSwitchWindow : Window
             button.MouseDoubleClick += (_, _) => Take(target);
             SourcePanel.Children.Add(button);
         }
+    }
+
+    (string Background, string Border, string Foreground) PaletteFor(ScorebugLayout layout, int index)
+    {
+        if (_venue.State.LayoutColors.TryGetValue(layout.Id, out var custom) && TryColour(custom, out var colour))
+        {
+            var border = UiPalette.Mix(colour, Colors.White, 0.38);
+            return (Hex(colour), Hex(border), Hex(Readable(colour)));
+        }
+        return TileColours[index % TileColours.Length];
+    }
+
+    static Color ParseColour(string text) => (Color)ColorConverter.ConvertFromString(text);
+
+    static bool TryColour(string? text, out Color colour)
+    {
+        colour = Colors.Transparent;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        try
+        {
+            colour = ParseColour(text);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    static Color Readable(Color background) =>
+        (0.299 * background.R + 0.587 * background.G + 0.114 * background.B) / 255 > 0.6
+            ? Color.FromRgb(24, 32, 43) : Colors.White;
+
+    static string Hex(Color colour) => $"#{colour.R:X2}{colour.G:X2}{colour.B:X2}";
+
+    ContextMenu BuildLayoutColourMenu(ScorebugLayout layout)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(new MenuItem { Header = "BUTTON COLOUR", IsEnabled = false, FontWeight = FontWeights.Bold });
+        var current = _venue.State.LayoutColors.TryGetValue(layout.Id, out var chosen) ? chosen : "";
+        foreach (var (name, hex) in LayoutColourChoices)
+        {
+            var item = new MenuItem
+            {
+                Header = name,
+                IsChecked = string.Equals(current, hex, StringComparison.OrdinalIgnoreCase),
+                Icon = new Border
+                {
+                    Width = 13, Height = 13, CornerRadius = new CornerRadius(2),
+                    Background = new SolidColorBrush(ParseColour(hex)),
+                    BorderBrush = Brushes.Black, BorderThickness = new Thickness(1)
+                }
+            };
+            item.Click += (_, _) => SetLayoutColour(layout.Id, hex);
+            menu.Items.Add(item);
+        }
+        menu.Items.Add(new Separator());
+        var automatic = new MenuItem { Header = "Use automatic colour", IsChecked = current.Length == 0 };
+        automatic.Click += (_, _) => SetLayoutColour(layout.Id, null);
+        menu.Items.Add(automatic);
+        return menu;
+    }
+
+    void SetLayoutColour(string layoutId, string? hex)
+    {
+        if (string.IsNullOrWhiteSpace(hex)) _venue.State.LayoutColors.Remove(layoutId);
+        else _venue.State.LayoutColors[layoutId] = hex;
+        _venue.Save();
+        _colourSignature = "";
+        Refresh();
     }
 
     void BuildLayers(ScorebugLayout layout)
@@ -275,7 +382,7 @@ public partial class LiveSwitchWindow : Window
             button.Click += (_, _) =>
             {
                 var id = item.Id;
-                _catalog.Update(edit =>
+                _catalog.UpdateLayout(layout.Id, edit =>
                 {
                     var target = edit.Elements.FirstOrDefault(candidate => candidate.Id == id);
                     if (target is not null) target.Visible = !target.Visible;
@@ -329,7 +436,7 @@ public partial class LiveSwitchWindow : Window
         var target = _previewIndex + delta;
         if (target < 0 || target >= display.Layouts.Count) return;
         var name = display.Layouts[_previewIndex].Name;
-        if (!_catalog.MoveLayout(_previewIndex, target)) return;
+        if (!_catalog.MoveLayout(_previewIndex, target, display.Id)) return;
         _previewIndex = target;
         StatusText.Text = $"SWITCH ORDER · {name} moved to {target + 1} of {display.Layouts.Count}";
         Refresh();
@@ -409,7 +516,6 @@ public partial class LiveSwitchWindow : Window
         if (_refreshing || DisplayBox.SelectedItem is not DisplayChoice choice) return;
         var index = _catalog.Displays.FindIndex(display => string.Equals(display.Id, choice.Id, StringComparison.OrdinalIgnoreCase));
         if (index < 0) return;
-        _catalog.SelectDisplay(index);
         _displayId = choice.Id;
         _previewIndex = _catalog.Displays[index].PublishedIndex;
         _multiviewPage = 0;

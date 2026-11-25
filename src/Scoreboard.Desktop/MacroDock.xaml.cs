@@ -271,11 +271,21 @@ public partial class MacroDock : UserControl
         RefreshView();
         RefreshPractice();
         RefreshCues(force: true);
-        if (_compact) SetEditorVisible(false);
+        if (_compact)
+        {
+            SetEditorVisible(false);
+            // The Show page is a live book first: a smaller cue strip leaves room for another
+            // two rows of macro buttons while keeping the cue list editable.
+            CueWorkspace.Height = 86;
+        }
     }
 
     /// <summary>True for the small live-book grid used by Control Room.</summary>
     public bool Compact => _compact;
+
+    /// <summary>Show hides the cue editor entirely; the console keeps it on its own tab.</summary>
+    public void SetCuePanelVisible(bool visible) =>
+        CuePanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Keeps the board subscribed while it is hosted, including after a tab rehosts it.</summary>
     void AttachEngine()
@@ -682,6 +692,10 @@ public partial class MacroDock : UserControl
 
     double CardGap => _compact ? 4 : 8;
 
+    // The grid uses fixed cell heights. With auto rows, a tile spanning two rows only grew
+    // its own content box, so the tall and large size choices looked identical to 1 x 1.
+    double MacroCellHeight => _compact ? 36 : 84;
+
     double CardWidth()
     {
         var available = MacroButtons.ActualWidth;
@@ -725,7 +739,24 @@ public partial class MacroDock : UserControl
         var placements = LayoutMacros(columns);
         var rows = placements.Count == 0 ? 0 : placements.Max(placement => placement.Row + Math.Clamp(placement.Macro.RowSpan, 1, 2));
         for (var row = 0; row < rows; row++)
-            MacroButtons.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            MacroButtons.RowDefinitions.Add(new RowDefinition { Height = new GridLength(MacroCellHeight) });
+        // Empty rows in an explicit layout stay real drop targets instead of collapsing to zero
+        // height. A hidden spacer makes the gap visible to hit testing without drawing a card.
+        for (var row = 0; row < rows; row++)
+        {
+            if (placements.Any(placement => placement.Row <= row && row < placement.Row + Math.Clamp(placement.Macro.RowSpan, 1, 2))) continue;
+            var spacer = new Border
+            {
+                Height = MacroCellHeight,
+                Background = Brushes.Transparent,
+                IsHitTestVisible = false,
+                Tag = "spacer"
+            };
+            Grid.SetRow(spacer, row);
+            Grid.SetColumn(spacer, 0);
+            Grid.SetColumnSpan(spacer, columns);
+            MacroButtons.Children.Add(spacer);
+        }
         foreach (var placement in placements)
         {
             var card = BuildMacroCard(placement.Macro);
@@ -1426,27 +1457,18 @@ public partial class MacroDock : UserControl
         var column = Math.Clamp((int)Math.Floor(point.X / columnWidth), 0, columns - 1);
         var placements = LayoutMacros(columns);
         if (placements.Count == 0) return new MacroDropTarget(0, column, true);
-        var rowBounds = new Dictionary<int, Rect>();
-        foreach (var placement in placements)
+        var rows = placements.Max(placement => placement.Row + Math.Clamp(placement.Macro.RowSpan, 1, 2));
+        // Rows are fixed cells, so map the pointer directly to its row. A card spanning two rows
+        // must not make the whole spanned area look like the card's top row.
+        // The row definitions are fixed cells; using the board's ActualHeight here would include
+        // any stretch from its scroll host and make two-row cards look like they start in row 0.
+        var rowHeight = MacroCellHeight;
+        if (point.Y >= rows * rowHeight)
         {
-            var card = MacroButtons.Children.OfType<Border>()
-                .FirstOrDefault(candidate => ReferenceEquals(candidate.Tag, placement.Macro));
-            if (card is null) continue;
-            Rect bounds;
-            try { bounds = card.TransformToAncestor(MacroButtons).TransformBounds(new Rect(card.RenderSize)); }
-            catch { continue; }
-            rowBounds[placement.Row] = rowBounds.TryGetValue(placement.Row, out var current)
-                ? Rect.Union(current, bounds)
-                : bounds;
+            var extra = (int)Math.Floor(Math.Max(0, point.Y - rows * rowHeight) / rowHeight);
+            return new MacroDropTarget(rows + extra, column, true);
         }
-        if (rowBounds.Count == 0)
-            return new MacroDropTarget(placements.Max(placement => placement.Row) + 1, column, true);
-        foreach (var row in rowBounds.Keys.OrderBy(value => value))
-        {
-            if (point.Y <= rowBounds[row].Bottom + 1)
-                return new MacroDropTarget(row, column, false);
-        }
-        return new MacroDropTarget(rowBounds.Keys.Max() + 1, column, true);
+        return new MacroDropTarget(Math.Clamp((int)Math.Floor(point.Y / rowHeight), 0, rows - 1), column, false);
     }
 
     int? MacroDropIndexAt(Point point)
@@ -2290,10 +2312,14 @@ public partial class MacroDock : UserControl
         var placements = LayoutMacros(columns);
         var source = placements.FirstOrDefault(placement => placement.Macro.Id == id);
         if (source is null) return;
-        var rowCount = placements.Count == 0 ? 0 : placements.Max(placement => placement.Row) + 1;
-        var targetRow = target.NewRow || target.Row >= rowCount ? rowCount : Math.Max(0, target.Row);
-        var targetColumn = Math.Clamp(target.Column, 0, columns - 1);
-        if (targetRow == source.Row && targetColumn == source.Column) return;
+        var targetRow = Math.Max(0, target.Row);
+        var columnSpan = Math.Clamp(source.Macro.ColumnSpan, 1, 2);
+        var targetColumn = Math.Clamp(target.Column, 0, Math.Max(0, columns - columnSpan));
+        bool Covers(MacroPlacement placement, int row, int column) =>
+            row >= placement.Row && row < placement.Row + Math.Clamp(placement.Macro.RowSpan, 1, 2)
+            && column >= placement.Column && column < placement.Column + Math.Clamp(placement.Macro.ColumnSpan, 1, 2);
+        // Dropping inside the card's own wide/tall footprint is not a move.
+        if (Covers(source, targetRow, targetColumn)) return;
 
         PushHistory();
         // Materialise the current layout first. Without this, moving one card would make the
@@ -2303,9 +2329,10 @@ public partial class MacroDock : UserControl
             placement.Macro.Row = placement.Row;
             placement.Macro.Column = placement.Column;
         }
-        var occupant = placements.FirstOrDefault(placement =>
-            placement.Row == targetRow && placement.Column == targetColumn);
-        if (occupant is not null)
+        // Find the card whose real footprint contains the target, not only an exact top-left
+        // match. Dropping on the right cell of a 2-wide card must still be a swap.
+        var occupant = placements.FirstOrDefault(placement => Covers(placement, targetRow, targetColumn));
+        if (occupant is not null && !ReferenceEquals(occupant.Macro, source.Macro))
         {
             occupant.Macro.Row = source.Row;
             occupant.Macro.Column = source.Column;

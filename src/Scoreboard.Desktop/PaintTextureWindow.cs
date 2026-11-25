@@ -542,18 +542,13 @@ public sealed class PaintTextureWindow : Window
             BorderBrush = Paint.Border(_draft, state),
             BorderThickness = new Thickness(Math.Max(0, _draft.BorderThickness))
         };
-        // A logo's plate is the area around its artwork. Show the actual logo here rather than the
-        // text sample, otherwise testing a texture on a logo only proves how a text block paints.
-        FrameworkElement sample = _draft.Kind == ScorebugElementKind.Logo
-            ? ScorebugRender.CreateContent(_draft, () => state, showVideoPlaceholder: true)
-            : new ScorebugTextBlock(_draft)
-            {
-                Text = string.IsNullOrWhiteSpace(_draft.Content) || _draft.Content.StartsWith("{{", StringComparison.Ordinal) ? "SCORE 21" : _draft.Content,
-                FontSize = Math.Clamp(_draft.FontSize, 14, 64),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextAlignment = TextAlignment.Center
-            };
+        // Build the same content the canvas builds, so tokens such as {{HOME_SCORE}}, a period
+        // token, a ticker or a logo resolve to their live value in the sample instead of printing
+        // a hard-coded placeholder. A genuinely empty element still gets a readable placeholder.
+        FrameworkElement sample = ScorebugRender.CreateContent(_draft, () => state, null, true,
+            showVideoPlaceholder: true, catalog: _catalog, engine: _engine);
+        if (sample is TextBlock textSample && string.IsNullOrWhiteSpace(textSample.Text))
+            textSample.Text = "SCORE 21";
         sample.HorizontalAlignment = HorizontalAlignment.Stretch;
         sample.VerticalAlignment = VerticalAlignment.Stretch;
         plate.Child = sample;

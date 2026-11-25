@@ -255,6 +255,8 @@
                     ToolTip="Rename the selected clip, camera, microphone, speaker or screen — the new name shows in the multiview and the replay booth"/>
             <Button x:Name="RemoveButton" Content="Remove" Style="{StaticResource DockAction}" Click="Remove_Click" ToolTip="Remove the selected clip from the library"/>
             <Button Content="Import" Style="{StaticResource DockAction}" Click="Import_Click" ToolTip="Import audio or video clips"/>
+            <Button x:Name="SendToNodesButton" Content="Send to nodes" Style="{StaticResource DockAction}" Click="SendToNodes_Click"
+                    Visibility="Collapsed" ToolTip="Send the selected clip plus every referenced layout asset to all enabled nodes"/>
             <Button Content="Clear" Style="{StaticResource ClearAction}" Click="Clear_Click"
                     ToolTip="Stop playback, close the camera and blank every scorebug video box"/>
           </StackPanel>

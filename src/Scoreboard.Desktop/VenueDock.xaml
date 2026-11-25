@@ -94,6 +94,14 @@
       </TabItem>
 
       <TabItem Header="PLAYLISTS">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Style="{StaticResource VenueCard}" Padding="10,8" Margin="0,0,0,8">
+            <StackPanel>
+              <TextBlock Text="ROTATIONS &amp; PLAYLISTS" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
+              <TextBlock Text="Choose a playlist, set its target and playback rules, then add the layouts or clips that should rotate. Each item has its own screen time."
+                         FontSize="10" Foreground="{DynamicResource VenueMuted}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+            </StackPanel>
+          </Border>
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="230"/>
@@ -103,21 +111,40 @@
           <Border Style="{StaticResource VenueCard}">
             <DockPanel>
               <StackPanel DockPanel.Dock="Top">
-                <TextBlock Text="ROTATIONS" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
-                <Button Content="+ Playlist" Style="{StaticResource VenueButton}" Click="AddPlaylist_Click" Margin="0,6,0,6"/>
+                <TextBlock Text="PLAYLISTS" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
+                <TextBlock Text="Select one to edit." FontSize="9" Foreground="{DynamicResource VenueMuted}" Margin="0,2,0,0"/>
+                <Button Content="+ New playlist" Style="{StaticResource VenueButton}" Click="AddPlaylist_Click" Margin="0,6,0,6"/>
               </StackPanel>
-              <ListBox x:Name="PlaylistList" DisplayMemberPath="DisplayName" SelectionChanged="Playlist_Selected"
+              <ListBox x:Name="PlaylistList" SelectionChanged="Playlist_Selected"
                        Background="{DynamicResource VenueSurface}" Foreground="{DynamicResource VenueText}"
-                       BorderBrush="{DynamicResource VenueBorder}"/>
+                       BorderBrush="{DynamicResource VenueBorder}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel Margin="4,4">
+                      <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Text="{Binding Summary}" FontSize="9" Foreground="{DynamicResource VenueMuted}" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
             </DockPanel>
           </Border>
           <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="PlaylistEditor"/>
           </ScrollViewer>
         </Grid>
+        </DockPanel>
       </TabItem>
 
       <TabItem Header="SCHEDULE">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Style="{StaticResource VenueCard}" Padding="10,8" Margin="0,0,0,8">
+            <StackPanel>
+              <TextBlock Text="SCHEDULE ENTRIES" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
+              <TextBlock Text="Pick the playlist that plays, when it starts, and any live conditions that must match. Leave the date and time blank for a condition-only or always-on entry."
+                         FontSize="10" Foreground="{DynamicResource VenueMuted}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+            </StackPanel>
+          </Border>
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="230"/>
@@ -127,18 +154,29 @@
           <Border Style="{StaticResource VenueCard}">
             <DockPanel>
               <StackPanel DockPanel.Dock="Top">
-                <TextBlock Text="SCHEDULE" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
-                <Button Content="+ Entry" Style="{StaticResource VenueButton}" Click="AddSchedule_Click" Margin="0,6,0,6"/>
+                <TextBlock Text="ENTRIES" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource VenueText}"/>
+                <TextBlock Text="Select one to edit." FontSize="9" Foreground="{DynamicResource VenueMuted}" Margin="0,2,0,0"/>
+                <Button Content="+ New entry" Style="{StaticResource VenueButton}" Click="AddSchedule_Click" Margin="0,6,0,6"/>
               </StackPanel>
-              <ListBox x:Name="ScheduleList" DisplayMemberPath="DisplayName" SelectionChanged="Schedule_Selected"
+              <ListBox x:Name="ScheduleList" SelectionChanged="Schedule_Selected"
                        Background="{DynamicResource VenueSurface}" Foreground="{DynamicResource VenueText}"
-                       BorderBrush="{DynamicResource VenueBorder}"/>
+                       BorderBrush="{DynamicResource VenueBorder}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel Margin="4,4">
+                      <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Text="{Binding WhenLabel}" FontSize="9" Foreground="{DynamicResource VenueMuted}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
             </DockPanel>
           </Border>
           <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="ScheduleEditor"/>
           </ScrollViewer>
         </Grid>
+        </DockPanel>
       </TabItem>
 
       <TabItem Header="SPONSORS">

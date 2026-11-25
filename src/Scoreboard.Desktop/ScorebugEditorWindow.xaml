@@ -8,9 +8,9 @@
     <local:IconNameConverter x:Key="IconNameConverter"/>
     <local:MotionNameConverter x:Key="MotionNameConverter"/>
     <Style x:Key="ToolButton" TargetType="Button">
-      <Setter Property="FontSize" Value="9"/>
-      <Setter Property="Padding" Value="3,5"/>
-      <Setter Property="MinHeight" Value="30"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Padding" Value="7,6"/>
+      <Setter Property="MinHeight" Value="34"/>
       <Setter Property="Margin" Value="1,0,0,0"/>
     </Style>
     <Style x:Key="SectionTitle" TargetType="TextBlock">
@@ -89,6 +89,8 @@
         <StackPanel>
           <DockPanel>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <Button x:Name="SendToNodesButton" Content="Send to nodes" Style="{StaticResource LayoutButton}" Click="SendToNodes_Click"
+                      Visibility="Collapsed" ToolTip="Send this display's layouts, venue rotation and every referenced media file to all enabled nodes"/>
               <Button Content="Content Studio…" Style="{StaticResource LayoutButton}" Click="ContentStudio_Click"
                       ToolTip="Open the CONTENT gallery, brand kit, storyboard and sponsor inventory"/>
               <Button Content="New display…" Style="{StaticResource LayoutButton}" Click="DisplayNew_Click" ToolTip="Add another screen, for example a lower-thirds display"/>

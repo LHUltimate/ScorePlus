@@ -1590,9 +1590,9 @@ public sealed class ScorebugCatalog
     }
 
     /// <summary>Reorders the layouts shown to the operator, for a custom switcher order.</summary>
-    public bool MoveLayout(int index, int targetIndex)
+    public bool MoveLayout(int index, int targetIndex, string? displayId = null)
     {
-        var display = ActiveDisplay;
+        var display = string.IsNullOrWhiteSpace(displayId) ? ActiveDisplay : FindDisplay(displayId) ?? ActiveDisplay;
         var layouts = display.Layouts;
         if (index < 0 || index >= layouts.Count || targetIndex < 0 || targetIndex >= layouts.Count || index == targetIndex)
             return false;

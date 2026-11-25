@@ -204,7 +204,10 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _venue.Changed += () => Dispatcher.BeginInvoke(new Action(() => RefreshLayoutIndicators()));
         // Stage 5 is optional infrastructure: with no nodes this service is inert and the console
         // keeps rendering every display in-process. A node only joins when the operator adds one.
-        _nodes = new NodeService(_venue, _engine, _scorebug, Dispatcher);
+        _nodes = new NodeService(_venue, _engine, _scorebug, Dispatcher)
+        {
+            MediaLibrary = () => _session.Library
+        };
         _nodes.Changed += NodesChanged;
         _dataDock = new DataDock(_engine, _preferences.Theme, _leagueCloud)
         {
@@ -277,6 +280,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _macroDock.SetHintVisibility(_preferences.ShowHeadingHints);
         _macroDock.Status += message => StatusText.Text = message;
         MediaControl.Attach(_session);
+        MediaControl.Nodes = _nodes;
         MediaControl.OpenConditionals = () => OpenConditionals(AutomationScope.Media);
         MediaControl.ApplyTheme(_preferences.Theme);
         // The dock now lives in a full-width tab instead of a narrow rail, so its controls are the
@@ -1009,7 +1013,7 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
             return;
         }
         _controlRoom = new ControlRoomWindow(_scorebug, _engine, _playback, _automation, _preferences.Theme,
-            _venue, OpenShowWindow, OpenVenueWindow) { Owner = this };
+            _venue, OpenShowWindow, OpenVenueWindow, _nodes) { Owner = this };
         _controlRoom.Closed += (_, _) => _controlRoom = null;
         _controlRoom.Show();
     }

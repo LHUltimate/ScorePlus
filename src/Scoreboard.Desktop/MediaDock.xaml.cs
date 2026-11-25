@@ -82,6 +82,19 @@ public partial class MediaDock : UserControl
     /// </summary>
     public Action? OpenConditionals { get; set; }
 
+    NodeService? _nodes;
+    /// <summary>Set by the console so the media rail can send its selected clip with a node package.</summary>
+    public NodeService? Nodes
+    {
+        get => _nodes;
+        set
+        {
+            _nodes = value;
+            SendToNodesButton.Visibility = value is null ? Visibility.Collapsed : Visibility.Visible;
+            Refresh();
+        }
+    }
+
     bool _syncingScreens;
 
     public MediaDock()
@@ -300,6 +313,9 @@ public partial class MediaDock : UserControl
             // One Route… control, aimed at whichever source is selected or on air.
             var routeItem = (MediaEntry?)microphoneItem ?? cameraItem ?? speakerItem;
             RouteSelectedButton.IsEnabled = routeItem is not null;
+            var selectedMedia = _session.Selected;
+            SendToNodesButton.IsEnabled = Nodes is not null && selectedMedia is { IsCamera: false, IsMicrophone: false, IsSpeaker: false, IsScreen: false }
+                && !string.IsNullOrWhiteSpace(selectedMedia.Path);
             RouteSelectedButton.ToolTip = routeItem switch
             {
                 { IsCamera: true } item => $"Rename {item.Label} and choose which camera it uses",
@@ -1335,6 +1351,22 @@ public partial class MediaDock : UserControl
         if (string.IsNullOrWhiteSpace(name)) return;
         var playlist = _session.CreatePlaylist(name);
         OpenPlaylist(playlist);
+    }
+
+    async void SendToNodes_Click(object sender, RoutedEventArgs e)
+    {
+        if (Nodes is null || _session?.Selected is not { } selected) return;
+        SendToNodesButton.IsEnabled = false;
+        _session.Report("Building the node package with the selected media…");
+        try
+        {
+            var result = await Nodes.SendToAllAsync($"media:{selected.Label}", [selected.Path]);
+            _session.Report(result.Message);
+        }
+        finally
+        {
+            SendToNodesButton.IsEnabled = true;
+        }
     }
 
     void Import_Click(object sender, RoutedEventArgs e)

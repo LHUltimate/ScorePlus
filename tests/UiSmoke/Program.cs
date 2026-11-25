@@ -485,14 +485,20 @@ internal static class Program
             {
                 var paintCatalog = new ScorebugCatalog(layoutPath);
                 var paintElement = paintCatalog.Layout.Elements.First(element => element.Kind == ScorebugElementKind.Text);
+                paintElement.Content = "{{HOME_SCORE}}";
+                var paintEngine = new GameEngine();
+                paintEngine.NewGame("football");
+                paintEngine.SetScore(true, 21);
                 var paintCtor = typeof(PaintTextureWindow).GetConstructor(
                     System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
                     null,
                     [typeof(ScorebugCatalog), typeof(GameEngine), typeof(ScorebugElement), typeof(string)],
                     null) ?? throw new Exception("FAIL: paint window has no editable constructor");
-                var paintWindow = (Window)paintCtor.Invoke([paintCatalog, new GameEngine(), paintElement, "Dark"]);
+                var paintWindow = (Window)paintCtor.Invoke([paintCatalog, paintEngine, paintElement, "Dark"]);
                 ShowForSmoke(paintWindow);
                 paintWindow.UpdateLayout();
+                if (!FindAll<TextBlock>(paintWindow).Any(text => text.Text == "21"))
+                    throw new Exception("FAIL: paint & texture preview did not resolve the element's live score token");
                 CheckBox Material() => FindAll<CheckBox>(paintWindow)
                     .First(box => (box.Content as string)?.StartsWith("Lay a material", StringComparison.Ordinal) == true && box.IsChecked != true);
                 if (FindAll<CheckBox>(paintWindow).Count(box => (box.Content as string)?.StartsWith("Lay a material", StringComparison.Ordinal) == true) != 2)
@@ -844,6 +850,10 @@ internal static class Program
             showWindow.UpdateLayout();
             if (showWindow.FindName("ShowHost") is not ContentControl { Content: MacroDock })
                 throw new Exception("FAIL: the Show window does not host the macro board");
+            if (showWindow.Background is not SolidColorBrush showBackground || showBackground.Color != Color.FromRgb(0x00, 0x00, 0x00))
+                throw new Exception("FAIL: the Show window is not true black");
+            if (showWindow.ShowBoard.FindName("CuePanel") is not Border { Visibility: Visibility.Collapsed })
+                throw new Exception("FAIL: the Show page still shows the cue editor");
             var macroDock = showWindow.ShowBoard;
             var firstDrag = new SavedMacro { Label = "First drag", Color = "#FF6B6B" };
             var secondDrag = new SavedMacro { Label = "Second drag", Color = "#4C9AFF" };
@@ -884,6 +894,20 @@ internal static class Program
             var emptyDrop = dropIndexAt.Invoke(macroDock, [new Point(macroBoard.ActualWidth - 2, macroBoard.ActualHeight + 40)]);
             if (emptyDrop is not int emptyIndex || emptyIndex != tabShell.Engine.State.Macros.Count)
                 throw new Exception($"FAIL: dropping below the macro rows did not append (index {emptyDrop})");
+            // A card can be placed several empty rows down, not only one row below the last full row.
+            var dropTargetType = typeof(MacroDock).GetNestedType("MacroDropTarget", BindingFlags.NonPublic)
+                ?? throw new Exception("FAIL: macro drop target type is missing");
+            var moveToTarget = typeof(MacroDock).GetMethod("MoveMacroToTarget", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("FAIL: macro target move is missing");
+            var farTarget = Activator.CreateInstance(dropTargetType, [5, 3, true]);
+            moveToTarget.Invoke(macroDock, [firstDrag.Id, farTarget]);
+            Pump(TimeSpan.FromMilliseconds(120));
+            var movedCard = FindAll<Border>(macroDock).FirstOrDefault(border =>
+                border.Tag is SavedMacro macro && string.Equals(macro.Id, firstDrag.Id, StringComparison.OrdinalIgnoreCase));
+            var movedRow = movedCard is null ? -1 : Grid.GetRow(movedCard);
+            var movedColumn = movedCard is null ? -1 : Grid.GetColumn(movedCard);
+            if (movedCard is null || movedRow != 5 || movedColumn != 3)
+                throw new Exception($"FAIL: a macro could not be moved to a distant empty cell (row {movedRow}, column {movedColumn}, model {firstDrag.Row},{firstDrag.Column})");
             editorToggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Pump(TimeSpan.FromMilliseconds(120));
             if (macroEditor.Visibility != Visibility.Visible)
@@ -1010,6 +1034,42 @@ internal static class Program
             if (emptyCellMove.Row != 1 || emptyCellMove.Column != 1)
                 throw new Exception($"FAIL: dropping into an empty cell placed the macro at {emptyCellMove.Row},{emptyCellMove.Column} instead of 1,1");
             Console.WriteLine("PASS: macro cells allow 3 + 1 + 3 columns and dropping into an empty cell");
+
+            // A tile-size choice has to change both the saved spans and the arranged card. Tall and
+            // large tiles need fixed row cells; auto rows let them collapse to a single row.
+            var sizeMacros = new List<SavedMacro>
+            {
+                new() { Label = "Size single", Row = 0, Column = 0 },
+                new() { Label = "Size wide", Row = 0, Column = 1, ColumnSpan = 2 },
+                new() { Label = "Size tall", Row = 1, Column = 0, RowSpan = 2 },
+                new() { Label = "Size large", Row = 1, Column = 1, ColumnSpan = 2, RowSpan = 2 }
+            };
+            tabShell.Engine.StoreMacros(sizeMacros);
+            macroDock.RefreshView(force: true);
+            tabShell.UpdateLayout();
+            var sizeBoard = (Grid)macroDock.FindName("MacroButtons")!;
+            Border SizedCard(string label) => sizeBoard.Children.OfType<Border>()
+                .First(card => card.Tag is SavedMacro macro && macro.Label == label);
+            var singleCard = SizedCard("Size single");
+            var wideCard = SizedCard("Size wide");
+            var tallCard = SizedCard("Size tall");
+            var largeCard = SizedCard("Size large");
+            if (wideCard.ActualWidth < singleCard.ActualWidth * 1.5 || tallCard.ActualHeight < singleCard.ActualHeight * 1.5
+                || largeCard.ActualWidth < singleCard.ActualWidth * 1.5 || largeCard.ActualHeight < singleCard.ActualHeight * 1.5
+                || Grid.GetColumnSpan(wideCard) != 2 || Grid.GetRowSpan(tallCard) != 2
+                || Grid.GetColumnSpan(largeCard) != 2 || Grid.GetRowSpan(largeCard) != 2)
+                throw new Exception($"FAIL: macro tile sizes did not arrange wide/tall/large cards ({singleCard.ActualWidth:0}x{singleCard.ActualHeight:0}, {wideCard.ActualWidth:0}x{wideCard.ActualHeight:0}, {tallCard.ActualWidth:0}x{tallCard.ActualHeight:0}, {largeCard.ActualWidth:0}x{largeCard.ActualHeight:0})");
+            var tileSizeBox = (ComboBox)macroDock.FindName("TileSizeBox")!;
+            var saveMacroButton = (Button)macroDock.FindName("SaveButton")!;
+            tileSizeBox.SelectedIndex = 2;
+            saveMacroButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            tabShell.UpdateLayout();
+            var resizedMacro = tabShell.Engine.State.Macros.First(macro => macro.Label == "Size single");
+            var resizedCard = SizedCard("Size single");
+            if (resizedMacro.ColumnSpan != 1 || resizedMacro.RowSpan != 2
+                || resizedCard.ActualHeight < singleCard.ActualHeight * 1.5)
+                throw new Exception($"FAIL: choosing a tall tile did not resize its card ({resizedMacro.ColumnSpan}x{resizedMacro.RowSpan}, {resizedCard.ActualHeight:0}px)");
+            Console.WriteLine("PASS: macro tile size choices arrange wide, tall and large cards");
             var macroNameBox = (TextBox)macroDock.FindName("NameBox")!;
             macroNameBox.Text = "Saved with the game";
             macroDock.CommitPendingEdits();
@@ -1335,9 +1395,17 @@ internal static class Program
                         throw new Exception($"FAIL: the cue list showed {cueList.Items.Count} cues instead of 2");
                     if (cueDock.FindName("CueGoButton") is not Button cueGo || cueGo.Content?.ToString() != "GO")
                         throw new Exception("FAIL: the run of show has no GO button");
-                    if (cueDock.FindName("TileSizeBox") is not ComboBox || cueDock.FindName("PageNameBox") is not TextBox
+                    if (cueDock.FindName("TileSizeBox") is not ComboBox
                         || cueDock.FindName("PracticeList") is not ListBox || cueDock.FindName("PracticeAddButton") is not Button)
-                        throw new Exception("FAIL: the workspace size, page name or practice controls are missing");
+                        throw new Exception("FAIL: the workspace size or practice controls are missing");
+                    if (cueDock.FindName("PageNameBox") is not TextBox pageName)
+                        throw new Exception("FAIL: the page name field is missing");
+                    if (pageName.Width < 180 || !FindAll<TextBlock>(cueDock).Any(text => text.Text == "PAGE NAME"))
+                        throw new Exception($"FAIL: the page name field is {pageName.Width:0}px or its label is missing");
+                    if (cueDock.FindName("RemovePageButton") is not Button removePage)
+                        throw new Exception("FAIL: the remove-page button is missing");
+                    if (removePage.Content as string != "×" || removePage.ActualWidth > 38)
+                        throw new Exception($"FAIL: the remove-page button is not compact ({removePage.Content}, {removePage.ActualWidth:0}px)");
                     // The phone's cue strip reads the same cue the console is showing.
                     using (var cueJson = System.Text.Json.JsonDocument.Parse(cueDock.CueJson()))
                     {
@@ -5046,6 +5114,34 @@ internal static class Program
                         throw new Exception("FAIL: unticking Both ways left the coming-back link behind");
                     linkStudio.Close();
 
+                    // A Live Switch preview and Display Studio share one catalog, but previewing a
+                    // display must never move the display the studio is editing. This used to snap
+                    // every studio selection back to the Live Switch display, so only display 1
+                    // could be edited until the Control Room was reopened.
+                    displayCatalog.SelectDisplay(0);
+                    var displayLiveSwitch = new LiveSwitchWindow(displayCatalog, displayEngine, "Dark");
+                    ShowForSmoke(displayLiveSwitch);
+                    displayLiveSwitch.UpdateLayout();
+                    var multiDisplayStudio = new ScorebugEditorWindow(displayCatalog, displayEngine);
+                    ShowForSmoke(multiDisplayStudio);
+                    multiDisplayStudio.UpdateLayout();
+                    var studioDisplayPicker = (ComboBox)multiDisplayStudio.FindName("DisplayBox")!;
+                    studioDisplayPicker.SelectedIndex = 1;
+                    Pump(TimeSpan.FromMilliseconds(120));
+                    if (displayCatalog.ActiveDisplayIndex != 1)
+                        throw new Exception("FAIL: Live Switch moved the display being edited back to its preview");
+                    var secondLayout = displayCatalog.Displays[1].Layouts[displayCatalog.Displays[1].ActiveIndex];
+                    var secondBefore = secondLayout.Elements.Count;
+                    displayCatalog.Update(layout => layout.Elements.Add(new ScorebugElement
+                    {
+                        Name = "Second display edit", Content = "EDITABLE", X = 10, Y = 10, Width = 260, Height = 60
+                    }));
+                    if (secondLayout.Elements.Count != secondBefore + 1)
+                        throw new Exception("FAIL: an edit landed on the first display while the second was selected");
+                    displayCatalog.SelectDisplay(0);
+                    multiDisplayStudio.Close();
+                    displayLiveSwitch.Close();
+
                     // A link and a second display survive a reload.
                     var reloaded = new ScorebugCatalog(displayPath);
                     if (reloaded.Displays.Count != 2 || reloaded.LinkTarget(reloaded.Displays[0].Id, 0) is null)
@@ -6812,11 +6908,27 @@ internal static class Program
             liveSwitch.UpdateLayout();
             if (smokeCatalog.Displays.Count != displaysBefore + 1)
                 throw new Exception("FAIL: the Live Switch could not add a display beyond the original set");
+            if (liveSwitch.FindName("DisplayBox") is not ComboBox liveDisplayBox
+                || liveDisplayBox.Items.Count != displaysBefore + 1)
+                throw new Exception("FAIL: Live Switch did not list the new display until it was reopened");
             ((Button)switchSources.Children[0]).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             liveSwitch.UpdateLayout();
             liveSwitch.Close();
 
-            var liveChannel = new LiveChannelWindow(smokeCatalog, smokeEngine, null, null, "Dark");
+            // The Live Channel view-only check needs a layout that is not the one on air.
+            if (smokeCatalog.ActiveDisplay.Layouts.Count < 2)
+                smokeCatalog.ActiveDisplay.Layouts.Add(smokeCatalog.Layout.Copy("Smoke monitor layout"));
+            var channelFile = Path.Combine(Path.GetTempPath(), $"smoke-live-channel-{Guid.NewGuid():N}.json");
+            var channelStore = new VenueStore(channelFile);
+            var smokeChannel = new VenueChannel
+            {
+                Name = "Smoke concourse", DisplayId = smokeCatalog.ActiveDisplay.Id,
+                LayoutId = smokeCatalog.Layout.Id, CameraIndex = 1, Enabled = true
+            };
+            channelStore.State.Channels.Add(smokeChannel);
+            channelStore.Save();
+            var publishedBeforeViewing = smokeCatalog.ActiveDisplay.PublishedIndex;
+            var liveChannel = new LiveChannelWindow(smokeCatalog, smokeEngine, null, null, "Dark", channelStore);
             ShowForSmoke(liveChannel);
             liveChannel.UpdateLayout();
             Pump(TimeSpan.FromMilliseconds(150));
@@ -6826,6 +6938,87 @@ internal static class Program
             var events = (ListBox)liveChannel.FindName("EventList")!;
             if (outputs.Children.Count == 0 || actions.Children.Count == 0)
                 throw new Exception("FAIL: the Live Channel outputs or graphics actions are empty");
+            var layoutPreviewButtons = actions.Children.OfType<Button>()
+                .Where(button => FindAll<Image>(button).Any()).ToList();
+            if (layoutPreviewButtons.Count != smokeCatalog.ActiveDisplay.Layouts.Count
+                || layoutPreviewButtons.Any(button => FindAll<Image>(button).First().Source is not BitmapSource { PixelWidth: > 0 }))
+                throw new Exception($"FAIL: the Live Channel layout menu did not show a preview for every layout ({layoutPreviewButtons.Count} previews, {smokeCatalog.ActiveDisplay.Layouts.Count} layouts)");
+            var channelTile = outputs.Children.OfType<Button>().FirstOrDefault(button => button.Tag is string id && id == smokeChannel.Id)
+                ?? throw new Exception("FAIL: the Live Channel did not show the venue channel in its outputs");
+            channelTile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            liveChannel.UpdateLayout();
+            if (smokeCatalog.ActiveDisplay.PublishedIndex != publishedBeforeViewing)
+                throw new Exception("FAIL: selecting a venue channel changed the layout on air");
+            var channelLayoutButtons = actions.Children.OfType<Button>()
+                .Where(button => button.Tag is string).ToList();
+            var viewedButton = channelLayoutButtons.FirstOrDefault(button =>
+                button.Tag is string layoutId && layoutId != smokeCatalog.ActiveDisplay.Layouts[publishedBeforeViewing].Id)
+                ?? throw new Exception("FAIL: the Live Channel needs a second layout to test view-only selection");
+            viewedButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            liveChannel.UpdateLayout();
+            if (smokeCatalog.ActiveDisplay.PublishedIndex != publishedBeforeViewing
+                || liveChannel.FindName("OnAirText") is not TextBlock { Text: "● MONITOR" }
+                || liveChannel.FindName("NowPlayingText") is not TextBlock { Text: var viewingText }
+                || !viewingText.Contains("MONITOR ONLY", StringComparison.Ordinal))
+                throw new Exception("FAIL: clicking a Live Channel layout took it to air instead of viewing it");
+            var viewedLayoutId = (string)viewedButton.Tag!;
+            var colourMenu = viewedButton.ContextMenu
+                ?? throw new Exception("FAIL: a Live Channel layout has no colour menu");
+            var redChoice = colourMenu.Items.OfType<MenuItem>().FirstOrDefault(item => item.Header as string == "Red")
+                ?? throw new Exception("FAIL: the Live Channel colour menu has no red choice");
+            redChoice.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            if (!channelStore.State.LayoutColors.TryGetValue(viewedLayoutId, out var chosenColour) || chosenColour != "#B52B32")
+                throw new Exception($"FAIL: the Live Channel did not save a layout colour ({chosenColour})");
+            var reloadedChannelStore = VenueStore.Load(channelFile);
+            if (!reloadedChannelStore.State.LayoutColors.TryGetValue(viewedLayoutId, out var savedColour) || savedColour != "#B52B32")
+                throw new Exception("FAIL: the Live Channel layout colour did not persist to the venue store");
+            var colouredSwitch = new LiveSwitchWindow(smokeCatalog, smokeEngine, "Dark", channelStore);
+            ShowForSmoke(colouredSwitch);
+            colouredSwitch.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(120));
+            var colouredSources = (WrapPanel)colouredSwitch.FindName("SourcePanel")!;
+            var colouredSource = colouredSources.Children.OfType<Button>()
+                .FirstOrDefault(button => button.Tag is string id && id == viewedLayoutId)
+                ?? throw new Exception("FAIL: Live Switch did not show the venue-coloured layout");
+            if (colouredSource.Background is not SolidColorBrush { Color: var color } || color != Color.FromRgb(0xB5, 0x2B, 0x32))
+                throw new Exception("FAIL: Live Switch did not use the saved layout colour from the venue store");
+            var switchColourMenu = colouredSource.ContextMenu
+                ?? throw new Exception("FAIL: a Live Switch source has no colour menu");
+            var blueChoice = switchColourMenu.Items.OfType<MenuItem>().FirstOrDefault(item => item.Header as string == "Blue")
+                ?? throw new Exception("FAIL: the Live Switch colour menu has no blue choice");
+            blueChoice.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            if (!channelStore.State.LayoutColors.TryGetValue(viewedLayoutId, out var switchedColour) || switchedColour != "#2467B3")
+                throw new Exception($"FAIL: Live Switch did not save a layout colour ({switchedColour})");
+            colouredSwitch.Close();
+            var currentOutputs = (StackPanel)liveChannel.FindName("OutputStrip")!;
+            var currentChannelTile = currentOutputs.Children.OfType<Button>()
+                .FirstOrDefault(button => button.Tag is string id && id == smokeChannel.Id)
+                ?? throw new Exception("FAIL: the Live Channel lost its venue channel after viewing a display");
+            currentChannelTile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            liveChannel.UpdateLayout();
+            if (liveChannel.FindName("ChannelOverlayPanel") is not StackPanel overlayPanel
+                || overlayPanel.Visibility != Visibility.Visible
+                || overlayPanel.Children.OfType<ComboBox>().FirstOrDefault() is not ComboBox overlayCombo)
+                throw new Exception("FAIL: a selected channel has no overlay picker");
+            var channelTargetLayout = smokeCatalog.ActiveDisplay.Layouts
+                .First(layout => layout.Id != smokeChannel.LayoutId);
+            var targetLabel = $"{smokeCatalog.ActiveDisplay.Name} · {channelTargetLayout.Name}";
+            var targetChoice = overlayCombo.Items.Cast<object>()
+                .FirstOrDefault(item => string.Equals(item.ToString(), targetLabel, StringComparison.Ordinal))
+                ?? throw new Exception($"FAIL: the channel overlay picker does not list {targetLabel}");
+            overlayCombo.SelectedItem = targetChoice;
+            liveChannel.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (smokeChannel.LayoutId != channelTargetLayout.Id
+                || smokeCatalog.ActiveDisplay.PublishedIndex != publishedBeforeViewing)
+                throw new Exception("FAIL: changing the channel overlay changed the display's on-air layout");
+            if (liveChannel.FindName("NowPlayingText") is not TextBlock { Text: var overlayText }
+                || !overlayText.Contains(channelTargetLayout.Name, StringComparison.Ordinal))
+                throw new Exception("FAIL: Live Channel did not switch its monitor to the chosen channel overlay");
+            var overlayReload = VenueStore.Load(channelFile);
+            var reloadedChannel = overlayReload.State.Channels.First(channel => channel.Id == smokeChannel.Id);
+            if (reloadedChannel.LayoutId != channelTargetLayout.Id)
+                throw new Exception("FAIL: the channel overlay choice did not persist");
             if (events.Items.Count == 0)
                 throw new Exception("FAIL: the Live Channel event feed did not show the game's events");
             if (healthPanel.Children.Count == 0)
@@ -6845,6 +7038,7 @@ internal static class Program
             if (corner[2] < 180)
                 throw new Exception($"FAIL: the camera was not rendered behind the scorebug (red={corner[2]})");
             liveChannel.Close();
+            try { if (File.Exists(channelFile)) File.Delete(channelFile); } catch { }
 
             var showOpened = false;
             var venueOpened = false;
@@ -6855,7 +7049,7 @@ internal static class Program
             Pump(TimeSpan.FromMilliseconds(120));
             if (controlRoom.FindName("DisplayStudioCard") is not Button || controlRoom.FindName("ContentStudioCard") is not Button
                 || controlRoom.FindName("ShowCard") is not Button showCard
-                || controlRoom.FindName("LiveSwitchCard") is not Button
+                || controlRoom.FindName("LiveSwitchCard") is not Button liveSwitchCard
                 || controlRoom.FindName("LiveChannelCard") is not Button
                 || controlRoom.FindName("VenueCard") is not Button venueCard)
                 throw new Exception("FAIL: the Show Control Map is missing one of its six surface cards");
@@ -6871,6 +7065,16 @@ internal static class Program
             venueCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             if (!showOpened || !venueOpened)
                 throw new Exception("FAIL: the Show Control Map did not launch the Show and Venue windows");
+            liveSwitchCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            var roomSwitch = Application.Current.Windows.OfType<LiveSwitchWindow>().LastOrDefault()
+                ?? throw new Exception("FAIL: Control Room did not open Live Switch");
+            roomSwitch.Close();
+            liveSwitchCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            var reopenedSwitch = Application.Current.Windows.OfType<LiveSwitchWindow>().LastOrDefault()
+                ?? throw new Exception("FAIL: Live Switch could not be reopened without restarting Control Room");
+            reopenedSwitch.Close();
             if (controlRoom.FindName("RoomTabs") is not null)
                 throw new Exception("FAIL: Control Room still hosts surfaces as tabs");
             controlRoom.Close();
@@ -6916,6 +7120,10 @@ internal static class Program
                     Kind = VenueItemKind.Layout, LayoutId = smokeCatalog.Layout.Id,
                     Label = smokeCatalog.Layout.Name, Seconds = 10, Sponsor = "Smoke sponsor"
                 });
+                var venueSchedule = venueStore.AddSchedule("Smoke schedule");
+                venueSchedule.PlaylistId = venuePlaylist.Id;
+                venueSchedule.Date = "2026-11-25";
+                venueSchedule.AtTime = "18:00";
                 var venueEngine = new VenueEngine(smokeCatalog, smokeEngine, venueStore);
                 venueEngine.BeginPlaylist(venuePlaylist.Id, DateTimeOffset.Now);
                 var venueRoom = new VenueWindow(venueEngine, smokeCatalog, smokeEngine);
@@ -6931,6 +7139,21 @@ internal static class Program
                 Pump(TimeSpan.FromMilliseconds(80));
                 if (venuePage.FindName("PlaylistList") is not ListBox playlists || playlists.Items.Count == 0)
                     throw new Exception("FAIL: the Venue window did not list its playlist");
+                var playlistEditor = (StackPanel)venuePage.FindName("PlaylistEditor")!;
+                var playlistLabels = FindAll<TextBlock>(playlistEditor).Select(text => text.Text).ToHashSet();
+                if (!playlistLabels.Contains("PLAYLIST NAME") || !playlistLabels.Contains("TARGET DISPLAY")
+                    || !playlistLabels.Contains("SECONDS ON SCREEN") || !playlistLabels.Contains("ADD AN ITEM"))
+                    throw new Exception("FAIL: the Venue playlist editor is missing its field labels or add-item guidance");
+                venueTabs.SelectedIndex = 2;
+                venueRoom.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(80));
+                if (venuePage.FindName("ScheduleList") is not ListBox schedules || schedules.Items.Count == 0)
+                    throw new Exception("FAIL: the Venue window did not list its schedule entry");
+                var scheduleEditor = (StackPanel)venuePage.FindName("ScheduleEditor")!;
+                var scheduleLabels = FindAll<TextBlock>(scheduleEditor).Select(text => text.Text).ToHashSet();
+                if (!scheduleLabels.Contains("SCHEDULE NAME") || !scheduleLabels.Contains("DATE · YYYY-MM-DD")
+                    || !scheduleLabels.Contains("GAME VALUE") || !scheduleLabels.Contains("ADD A LIVE CONDITION"))
+                    throw new Exception("FAIL: the Venue schedule editor is missing its timing or condition labels");
                 venueTabs.SelectedIndex = 4;
                 venueRoom.UpdateLayout();
                 Pump(TimeSpan.FromMilliseconds(80));
@@ -6940,6 +7163,48 @@ internal static class Program
             }
             finally { try { if (File.Exists(venueFile)) File.Delete(venueFile); } catch { } }
             Console.WriteLine("PASS: the DATA tab maps a source into the game and the Venue window shows fleet, rotation and proof");
+
+            // The processor geometry is a real mesh, not a 2D scale. A flat red stage must reach the
+            // rendered projection, because a blank mesh would silently black out every node.
+            {
+                var projectionSource = new Grid { Width = 320, Height = 180 };
+                projectionSource.RowDefinitions.Add(new RowDefinition());
+                projectionSource.RowDefinitions.Add(new RowDefinition());
+                var projectionTop = new Border { Background = new SolidColorBrush(Color.FromRgb(220, 40, 40)) };
+                var projectionBottom = new Border { Background = new SolidColorBrush(Color.FromRgb(40, 80, 220)) };
+                Grid.SetRow(projectionBottom, 1);
+                projectionSource.Children.Add(projectionTop);
+                projectionSource.Children.Add(projectionBottom);
+                var projection = new NodeProjection(projectionSource) { Width = 320, Height = 180 };
+                var stage = new Grid { Width = 320, Height = 180 };
+                stage.Children.Add(projectionSource);
+                var host = new Grid { Width = 320, Height = 180 };
+                host.Children.Add(stage);
+                host.Children.Add(projection);
+                var projectionWindow = new Window
+                {
+                    Width = 360, Height = 220, Content = host,
+                    WindowStyle = WindowStyle.None, ShowInTaskbar = false,
+                    WindowStartupLocation = WindowStartupLocation.Manual, Left = -10000, Top = -10000
+                };
+                ShowForSmoke(projectionWindow);
+                projectionWindow.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(100));
+                projection.Configure(new NodeCalibration { ScaleX = 1, ScaleY = 1 }, 320, 180);
+                projection.Refresh();
+                Pump(TimeSpan.FromMilliseconds(160));
+                var photo = new RenderTargetBitmap(320, 180, 96, 96, PixelFormats.Pbgra32);
+                photo.Render(projection);
+                var topPixel = new byte[4];
+                var bottomPixel = new byte[4];
+                photo.CopyPixels(new Int32Rect(160, 36, 1, 1), topPixel, 4, 0);
+                photo.CopyPixels(new Int32Rect(160, 144, 1, 1), bottomPixel, 4, 0);
+                if (topPixel[2] < 40 || topPixel[2] <= topPixel[0] + 40
+                    || bottomPixel[0] < 40 || bottomPixel[0] <= bottomPixel[2] + 40)
+                    throw new Exception($"FAIL: the node projection mesh did not render the stage upright (top {topPixel[2]},{topPixel[1]},{topPixel[0]}; bottom {bottomPixel[2]},{bottomPixel[1]},{bottomPixel[0]})");
+                projectionWindow.Close();
+                Console.WriteLine("PASS: the node processor maps the stage through a real 3D mesh");
+            }
 
             // Stage 5: one console still runs alone, but two ordinary agent processes can join the
             // same show. Both receive one sequence and a shared sync target; package/rollback and
@@ -6951,6 +7216,9 @@ internal static class Program
             NodeAgent? nodeAgentB = null;
             NodeService? nodeService = null;
             VenueWindow? nodeRoom = null;
+            ScorebugElement? nodeImageElement = null;
+            string? nodeImage = null;
+            string? nodeVideo = null;
             try
             {
                 if (!NodeAgent.TryParseLaunch(["--node", "--port", "18097", "--name", "Ribbon A", "--role", "processor", "--headless"], out var nodeOptionsParsed)
@@ -6981,8 +7249,50 @@ internal static class Program
                 nodeB.SyncGroupId = nodeService.SyncGroups[0].Id;
                 nodeService.SaveNode(nodeA);
                 nodeService.SaveNode(nodeB);
+                // A referenced picture must travel inside the package. The agent unpacks it into
+                // its own data folder and rewrites the catalog path before the layout is loaded.
+                nodeImage = Path.Combine(Path.GetTempPath(), $"scoreplus-node-media-{Guid.NewGuid():N}.png");
+                File.WriteAllBytes(nodeImage, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+                // A multi-megabyte clip is the case that broke the old base64 JSON package. Keep
+                // it as raw bytes all the way through the transport and verify the node stores it.
+                nodeVideo = Path.Combine(Path.GetTempPath(), $"scoreplus-node-video-{Guid.NewGuid():N}.mp4");
+                var videoBytes = new byte[8 * 1024 * 1024];
+                videoBytes[0] = 0x00;
+                videoBytes[^1] = 0xFF;
+                File.WriteAllBytes(nodeVideo, videoBytes);
+                var nodeVideoLayout = smokeCatalog.Layout;
+                smokeCatalog.Update(layout => layout.TransitionVideoPath = nodeVideo);
+                nodeImageElement = new ScorebugElement
+                {
+                    Name = "Node package picture", Kind = ScorebugElementKind.Image,
+                    ImagePath = nodeImage, X = 20, Y = 20, Width = 180, Height = 100
+                };
+                smokeCatalog.Update(layout => layout.Elements.Add(nodeImageElement));
+                var preview = nodeService.PreviewPackage();
+                if (preview.AssetCount == 0 || !preview.Assets.Any(asset => string.Equals(asset.SourcePath, nodeImage, StringComparison.OrdinalIgnoreCase))
+                    || !preview.Assets.Any(asset => string.Equals(asset.SourcePath, nodeVideo, StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception("FAIL: the node package preview did not list the referenced media file");
+                if (preview.MissingAssets.Any(asset => asset.Contains(nodeImage, StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception("FAIL: the node package preview treated an existing media file as missing");
                 if (!WaitFor(nodeService.DeployAsync(nodeA)) || !WaitFor(nodeService.DeployAsync(nodeB)))
                     throw new Exception("FAIL: a node did not accept the versioned content package");
+                var unpacked = nodeAgentA.Catalog.Displays.SelectMany(display => display.Layouts)
+                    .SelectMany(layout => layout.Elements).FirstOrDefault(element => element.Id == nodeImageElement.Id);
+                var unpackedPath = unpacked?.ImagePath ?? "<none>";
+                if (unpacked is null || !File.Exists(unpackedPath)
+                    || unpackedPath.StartsWith(nodeImage, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception($"FAIL: the node did not unpack and rewrite the referenced media file (element {unpacked?.Id ?? "<missing>"}, path {unpackedPath}, source {nodeImage}, assets {string.Join(" | ", Directory.Exists(Path.Combine(nodeRootA, "assets")) ? Directory.GetFiles(Path.Combine(nodeRootA, "assets")) : [])}, log {File.ReadAllText(Path.Combine(nodeRootA, "node.log"))})");
+                var unpackedLayout = nodeAgentA.Catalog.Displays.SelectMany(display => display.Layouts)
+                    .FirstOrDefault(layout => layout.Id == nodeVideoLayout.Id);
+                var unpackedVideo = unpackedLayout?.TransitionVideoPath ?? "<none>";
+                if (unpackedLayout is null || !File.Exists(unpackedVideo)
+                    || unpackedVideo.StartsWith(nodeVideo, StringComparison.OrdinalIgnoreCase)
+                    || new FileInfo(unpackedVideo).Length != videoBytes.Length)
+                    throw new Exception($"FAIL: the node did not receive the full show video (path {unpackedVideo}, source {nodeVideo}, layout {nodeVideoLayout.Id})");
+                var logTask = nodeService.GetLogAsync(nodeA);
+                WaitFor(logTask);
+                if (!logTask.Result.Contains("Package", StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("FAIL: the node log endpoint did not return the package install line");
                 if (nodeA.Health.PackageVersion == 0 || nodeB.Health.PackageVersion == 0)
                     throw new Exception("FAIL: node health did not report the deployed package version");
                 WaitFor(nodeService.RefreshHealthAsync(nodeA));
@@ -6999,6 +7309,10 @@ internal static class Program
                     throw new Exception("FAIL: the node test pattern did not turn on");
                 if (!WaitFor(nodeService.SetTestPatternAsync(nodeA, false)) || nodeAgentA.HealthReport().TestPattern)
                     throw new Exception("FAIL: the node test pattern did not turn off");
+                var sendTask = nodeService.SendToAllAsync("smoke", [nodeImage]);
+                WaitFor(sendTask);
+                if (sendTask.Result.Sent != 2 || sendTask.Result.AssetCount == 0 || !sendTask.Result.Ok)
+                    throw new Exception($"FAIL: Send to nodes did not deliver the package to both agents ({sendTask.Result.Message})");
                 if (!WaitFor(nodeService.DeployAsync(nodeA)))
                     throw new Exception("FAIL: the node did not accept the second package");
                 var versionBeforeRollback = nodeA.Health.PackageVersion;
@@ -7049,9 +7363,24 @@ internal static class Program
                 nodeService?.Dispose();
                 nodeAgentA?.Dispose();
                 nodeAgentB?.Dispose();
+                if (nodeImageElement is not null)
+                {
+                    try
+                    {
+                        smokeCatalog.Update(layout => layout.Elements.RemoveAll(element => element.Id == nodeImageElement.Id));
+                    }
+                    catch { }
+                }
+                try
+                {
+                    smokeCatalog.Update(layout => layout.TransitionVideoPath = "");
+                }
+                catch { }
                 try { if (Directory.Exists(nodeRootA)) Directory.Delete(nodeRootA, true); } catch { }
                 try { if (Directory.Exists(nodeRootB)) Directory.Delete(nodeRootB, true); } catch { }
                 try { if (File.Exists(nodeFile)) File.Delete(nodeFile); } catch { }
+                try { if (nodeImage is not null && File.Exists(nodeImage)) File.Delete(nodeImage); } catch { }
+                try { if (nodeVideo is not null && File.Exists(nodeVideo)) File.Delete(nodeVideo); } catch { }
             }
             Console.WriteLine("PASS: Stage 5 adds two playback nodes, one sync sequence, package rollback and the Venue Nodes page; zero nodes stays local");
 

@@ -21,7 +21,9 @@ public sealed class NodeOutputSettings
     public string ColorSpace { get; set; } = "sRGB";
     public bool LowLatency { get; set; } = true;
     public bool TestPattern { get; set; }
-    public string ResolutionLabel => $"{Width} × {Height} · {RefreshHz} Hz" + (Hdr ? " · HDR" : "");
+    // The desktop output path is SDR. HDR is carried as a requested output label until a real
+    // HDR swap chain/display validation is available, so the UI must not imply it was verified.
+    public string ResolutionLabel => $"{Width} × {Height} · {RefreshHz} Hz" + (Hdr ? " · HDR (unvalidated)" : "");
 
     public void Normalize()
     {
@@ -48,7 +50,21 @@ public sealed class NodeCalibration
     public double OffsetY { get; set; }
     public double RotationDegrees { get; set; }
     public double Gamma { get; set; } = 1;
-    public bool PixelMap { get; set; }
+    /// <summary>Horizontal geometric bow, in output pixels, for a curved display.</summary>
+    public double CurveX { get; set; }
+    /// <summary>Vertical geometric bow, in output pixels, for a curved display.</summary>
+    public double CurveY { get; set; }
+    // Corner pinning in output pixels. The four corners are dragged independently to fit a
+    // keystoned, angled or irregular surface; interpolation across each edge keeps the picture
+    // continuous instead of treating the output as four rectangular crops.
+    public double CornerTopLeftX { get; set; }
+    public double CornerTopLeftY { get; set; }
+    public double CornerTopRightX { get; set; }
+    public double CornerTopRightY { get; set; }
+    public double CornerBottomLeftX { get; set; }
+    public double CornerBottomLeftY { get; set; }
+    public double CornerBottomRightX { get; set; }
+    public double CornerBottomRightY { get; set; }
     public string MapNotes { get; set; } = "";
 
     public void Normalize()
@@ -59,13 +75,31 @@ public sealed class NodeCalibration
         OffsetY = double.IsFinite(OffsetY) ? Math.Clamp(OffsetY, -10000, 10000) : 0;
         RotationDegrees = double.IsFinite(RotationDegrees) ? Math.Clamp(RotationDegrees, -180, 180) : 0;
         Gamma = double.IsFinite(Gamma) ? Math.Clamp(Gamma, 0.4, 2.4) : 1;
+        CurveX = double.IsFinite(CurveX) ? Math.Clamp(CurveX, -10000, 10000) : 0;
+        CurveY = double.IsFinite(CurveY) ? Math.Clamp(CurveY, -10000, 10000) : 0;
+        CornerTopLeftX = Finite(CornerTopLeftX);
+        CornerTopLeftY = Finite(CornerTopLeftY);
+        CornerTopRightX = Finite(CornerTopRightX);
+        CornerTopRightY = Finite(CornerTopRightY);
+        CornerBottomLeftX = Finite(CornerBottomLeftX);
+        CornerBottomLeftY = Finite(CornerBottomLeftY);
+        CornerBottomRightX = Finite(CornerBottomRightX);
+        CornerBottomRightY = Finite(CornerBottomRightY);
         MapNotes = (MapNotes ?? "").Trim();
     }
+
+    static double Finite(double value) => double.IsFinite(value) ? Math.Clamp(value, -10000, 10000) : 0;
 
     public NodeCalibration Copy() => new()
     {
         ScaleX = ScaleX, ScaleY = ScaleY, OffsetX = OffsetX, OffsetY = OffsetY,
-        RotationDegrees = RotationDegrees, Gamma = Gamma, PixelMap = PixelMap, MapNotes = MapNotes
+        RotationDegrees = RotationDegrees, Gamma = Gamma,
+        CurveX = CurveX, CurveY = CurveY,
+        CornerTopLeftX = CornerTopLeftX, CornerTopLeftY = CornerTopLeftY,
+        CornerTopRightX = CornerTopRightX, CornerTopRightY = CornerTopRightY,
+        CornerBottomLeftX = CornerBottomLeftX, CornerBottomLeftY = CornerBottomLeftY,
+        CornerBottomRightX = CornerBottomRightX, CornerBottomRightY = CornerBottomRightY,
+        MapNotes = MapNotes
     };
 }
 
@@ -167,7 +201,8 @@ public sealed record NodeStateMessage
 }
 
 /// <summary>A versioned content push: layouts, brand kit, storyboard and sponsor map. The node
-/// stores it locally so it can keep rendering after the controller disappears.</summary>
+/// stores it locally so it can keep rendering after the controller disappears. Asset bytes follow
+/// the manifest as raw data, never as base64 inside this JSON.</summary>
 public sealed record NodePackage
 {
     public string PackageId { get; init; } = Guid.NewGuid().ToString("N");
@@ -178,6 +213,53 @@ public sealed record NodePackage
     public string CatalogJson { get; init; } = "";
     /// <summary>The venue rotation, schedules, sponsors and channels that travel with the layouts.</summary>
     public string VenueJson { get; init; } = "";
+    /// <summary>Image, video and other media files the layouts or venue refer to.</summary>
+    public List<NodePackageAsset> Assets { get; init; } = [];
+    /// <summary>Referenced files that were already gone when the package was built.</summary>
+    public List<string> MissingAssets { get; init; } = [];
+}
+
+/// <summary>One file carried by a node package. The file's bytes follow the package manifest as
+/// raw data; the node verifies the hash before using it.</summary>
+public sealed record NodePackageAsset
+{
+    public string SourcePath { get; init; } = "";
+    public string FileName { get; init; } = "";
+    public long Size { get; init; }
+    public string Sha256 { get; init; } = "";
+}
+
+/// <summary>What the Venue Nodes page shows before an operator sends a package.</summary>
+public sealed record NodePackagePreview
+{
+    public int Version { get; init; }
+    public string Summary { get; init; } = "";
+    public int DisplayCount { get; init; }
+    public int LayoutCount { get; init; }
+    public int AssetCount { get; init; }
+    public long AssetBytes { get; init; }
+    public IReadOnlyList<NodePackageAsset> Assets { get; init; } = [];
+    public IReadOnlyList<string> MissingAssets { get; init; } = [];
+}
+
+/// <summary>The outcome of a send from a layout, media item or content pack.</summary>
+public sealed record NodeSendResult
+{
+    public int PackageVersion { get; init; }
+    public int Sent { get; init; }
+    public int Failed { get; init; }
+    public int AssetCount { get; init; }
+    public long AssetBytes { get; init; }
+    public string Source { get; init; } = "";
+    public string Error { get; init; } = "";
+    public bool Ok => Failed == 0 && string.IsNullOrEmpty(Error);
+    public string Message => !string.IsNullOrEmpty(Error)
+        ? $"NODE PACKAGE · {Error}"
+        : Sent == 0
+            ? "NODE PACKAGE · no enabled nodes; local rendering is unchanged."
+            : $"NODE PACKAGE {PackageVersion} · sent to {Sent} node{(Sent == 1 ? "" : "s")}"
+              + (Failed > 0 ? $" · {Failed} failed" : "")
+              + $" · {AssetCount} asset{(AssetCount == 1 ? "" : "s")} · {AssetBytes / 1024.0 / 1024.0:0.0} MB";
 }
 
 /// <summary>What a node broadcasts in response to a discovery probe.</summary>

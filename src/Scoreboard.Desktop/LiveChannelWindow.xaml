@@ -104,8 +104,8 @@
       <Border Grid.Column="2" Style="{StaticResource Card}">
         <DockPanel>
           <DockPanel DockPanel.Dock="Top" Margin="1,0,1,6">
-            <Border DockPanel.Dock="Right" Background="#3A1717" CornerRadius="4" Padding="8,3">
-              <TextBlock Text="● ON AIR" FontSize="9" FontWeight="Bold" Foreground="#FF9B9B"/>
+            <Border x:Name="OnAirBadge" DockPanel.Dock="Right" Background="#3A1717" CornerRadius="4" Padding="8,3">
+              <TextBlock x:Name="OnAirText" Text="● ON AIR" FontSize="9" FontWeight="Bold" Foreground="#FF9B9B"/>
             </Border>
             <StackPanel Orientation="Horizontal">
               <Border Width="3" Height="12" CornerRadius="2" Background="{DynamicResource Accent}" Margin="0,0,7,0"/>
@@ -136,6 +136,9 @@
             <StackPanel>
               <TextBlock Text="CHANNEL + DISPLAY HEALTH" FontSize="9" FontWeight="Bold" Foreground="#5C6B7E" Margin="1,0,1,5"/>
               <StackPanel x:Name="HealthPanel" Margin="0,0,0,8"/>
+              <StackPanel x:Name="ChannelOverlayPanel" Margin="0,0,0,8"/>
+              <TextBlock x:Name="LayoutMonitorsLabel" Text="LAYOUT MONITORS · CLICK TO VIEW · RIGHT-CLICK FOR COLOUR" FontSize="9" FontWeight="Bold"
+                         Foreground="#5C6B7E" Margin="1,0,1,5"/>
               <StackPanel x:Name="ActionPanel"/>
             </StackPanel>
           </ScrollViewer>

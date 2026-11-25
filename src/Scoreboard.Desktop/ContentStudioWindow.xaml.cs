@@ -17,6 +17,7 @@ public partial class ContentStudioWindow : Window
     readonly ScorebugCatalog _catalog;
     readonly GameEngine _engine;
     readonly string _theme;
+    readonly NodeService? _nodes;
     readonly DispatcherTimer _playback = new() { Interval = TimeSpan.FromMilliseconds(100) };
     ContentSelection _selection = ContentSelection.Template;
     ContentTemplate? _template;
@@ -29,12 +30,13 @@ public partial class ContentStudioWindow : Window
     readonly Dictionary<string, TextBox> _brandFields = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, ComboBox> _brandFonts = new(StringComparer.OrdinalIgnoreCase);
 
-    public ContentStudioWindow(ScorebugCatalog catalog, GameEngine engine, string theme = "Dark")
+    public ContentStudioWindow(ScorebugCatalog catalog, GameEngine engine, string theme = "Dark", NodeService? nodes = null)
     {
         InitializeComponent();
         _catalog = catalog;
         _engine = engine;
         _theme = theme;
+        _nodes = nodes;
         ThemeManager.Apply(this, theme);
         _catalog.Changed += CatalogChanged;
         _engine.Changed += EngineChanged;
@@ -995,8 +997,18 @@ public partial class ContentStudioWindow : Window
         panel.Children.Add(Title("PORTABLE CONTENT"));
         panel.Children.Add(FullButton("EXPORT ACTIVE DISPLAY…", ExportPack_Click));
         panel.Children.Add(FullButton("IMPORT A PACK…", ImportPack_Click));
+        if (_nodes is not null)
+            panel.Children.Add(FullButton("SEND ACTIVE DISPLAY + ASSETS TO NODES", SendToNodes_Click));
         InspectorHost.Children.Clear();
         InspectorHost.Children.Add(panel);
+    }
+
+    async void SendToNodes_Click(object sender, RoutedEventArgs e)
+    {
+        if (_nodes is null) return;
+        SetStatus("Building the node package with every referenced media file…");
+        var result = await _nodes.SendToAllAsync("packs");
+        SetStatus(result.Message);
     }
 
     void ExportPack_Click(object sender, RoutedEventArgs e)

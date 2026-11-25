@@ -9,7 +9,8 @@ namespace Scoreboard.Desktop;
 /// <summary>
 /// The live-book page: a compact macro grid and its output strip in their own window. The board is
 /// owned by the main console and handed in, so the phone remote, detached panels and this window
-/// all stay on the same cue list.
+/// all stay on the same macro list. The cue editor is deliberately hidden here; the console's own
+/// cue tab remains the place for building a run of show.
 /// </summary>
 public partial class ShowWindow : Window
 {
@@ -33,6 +34,11 @@ public partial class ShowWindow : Window
         _engine = engine;
         _theme = theme;
         ShowBoard = showBoard;
+        // The live book has its own fixed palette. Do not run the operator theme pass over it: it
+        // repaints the designed dark panels to the generic window surface and makes the page look
+        // like a different application.
+        showBoard.SetCuePanelVisible(false);
+        showBoard.Background = Frozen(Color.FromRgb(0x00, 0x00, 0x00));
         ShowHost.Content = showBoard;
         Loaded += (_, _) =>
         {
@@ -51,7 +57,7 @@ public partial class ShowWindow : Window
             if (Keyboard.FocusedElement is TextBox or ComboBox) return;
             if (ShowBoard.HandleTransportKey(e.Key)) e.Handled = true;
         };
-        ThemeManager.Apply(this, theme);
+        Background = Frozen(Color.FromRgb(0x00, 0x00, 0x00));
         _catalog.Changed += Changed;
         _engine.Changed += Changed;
         Refresh();
@@ -82,7 +88,6 @@ public partial class ShowWindow : Window
     void Refresh()
     {
         MacroBadge.Text = $"{_engine.State.Macros.Count} MACROS";
-        CueBadge.Text = $"{_engine.State.Cues.Count} CUES";
         StatusText.Text = $"SHOW READY · {_catalog.ActiveDisplay.Name} · {_engine.State.Macros.Count} macros";
         RefreshStrip();
     }

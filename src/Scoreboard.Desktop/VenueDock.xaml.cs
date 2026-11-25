@@ -226,13 +226,13 @@ public partial class VenueDock : UserControl
         var channel = ActionButton("Open channel", (_, _) =>
         {
             _catalog.SelectDisplay(index);
-            new LiveChannelWindow(_catalog, _engine, _playback, _automation, _theme) { Owner = HostWindow }.Show();
+            new LiveChannelWindow(_catalog, _engine, _playback, _automation, _theme, _venue.Store) { Owner = HostWindow }.Show();
         });
         buttons.Children.Add(channel);
         var design = ActionButton("Design", (_, _) =>
         {
             _catalog.SelectDisplay(index);
-            new ScorebugEditorWindow(_catalog, _engine, _playback, _theme, _automation) { Owner = HostWindow }.ShowDialog();
+            new ScorebugEditorWindow(_catalog, _engine, _playback, _theme, _automation, _nodes) { Owner = HostWindow }.ShowDialog();
             RefreshDisplays();
         });
         buttons.Children.Add(design);
@@ -271,32 +271,53 @@ public partial class VenueDock : UserControl
         PlaylistEditor.Children.Clear();
         if (playlist is null)
         {
-            PlaylistEditor.Children.Add(Text("Add a playlist to build a rotation.", 11, true));
+            var empty = Card();
+            var emptyStack = new StackPanel();
+            emptyStack.Children.Add(Text("NO PLAYLIST SELECTED", 12, false, true));
+            emptyStack.Children.Add(Text("Create a playlist with + New playlist, then select it in the list. A playlist is a rotation of layouts or clips for one display or the whole venue.", 10, true));
+            empty.Child = emptyStack;
+            PlaylistEditor.Children.Add(empty);
             return;
         }
         var card = Card();
         var stack = new StackPanel();
-        stack.Children.Add(Text("PLAYLIST", 12, false, true));
-        stack.Children.Add(Label("Name"));
-        stack.Children.Add(Input(playlist.Name, value => { playlist.Name = value; Save(); PlaylistList.Items.Refresh(); UpdateStatus(); }));
-        stack.Children.Add(Label("Target"));
-        stack.Children.Add(Combo(DisplayChoices(all: true), playlist.TargetDisplayId,
-            value => { playlist.TargetDisplayId = value; Save(); }, "All displays"));
+        stack.Children.Add(Text("PLAYLIST SETTINGS", 12, false, true));
+        stack.Children.Add(Text("1 · Name the playlist and choose where it plays.", 9, true));
+        var identity = new Grid();
+        identity.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+        identity.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        identity.Children.Add(Field("PLAYLIST NAME",
+            Input(playlist.Name, value => { playlist.Name = value; Save(); PlaylistList.Items.Refresh(); UpdateStatus(); }), 10));
+        var target = Field("TARGET DISPLAY",
+            Combo(DisplayChoices(all: true), playlist.TargetDisplayId,
+                value => { playlist.TargetDisplayId = value; Save(); }, "All displays"));
+        Grid.SetColumn(target, 1);
+        identity.Children.Add(target);
+        stack.Children.Add(identity);
+        stack.Children.Add(Text("2 · Choose the playback rules.", 9, true));
         var flags = new WrapPanel { Margin = new Thickness(0, 4, 0, 4) };
         flags.Children.Add(Check("Loop", playlist.Loop, value => { playlist.Loop = value; Save(); }));
         flags.Children.Add(Check("Shuffle / weight", playlist.Shuffle, value => { playlist.Shuffle = value; Save(); }));
         flags.Children.Add(Check("Enabled", playlist.Enabled, value => { playlist.Enabled = value; Save(); }));
         stack.Children.Add(flags);
-        stack.Children.Add(Label("Loop count (0 = until stopped)"));
-        stack.Children.Add(Input(playlist.LoopCount.ToString(), value =>
+        var playback = new Grid();
+        playback.ColumnDefinitions.Add(new ColumnDefinition());
+        playback.ColumnDefinitions.Add(new ColumnDefinition());
+        playback.Children.Add(Field("LOOP COUNT · 0 = UNTIL STOPPED", Input(playlist.LoopCount.ToString(), value =>
         {
             if (int.TryParse(value, out var count)) playlist.LoopCount = Math.Clamp(count, 0, 1000);
             Save();
-        }));
-        stack.Children.Add(Label("Expires (optional, e.g. 2026-12-31T23:00:00)"));
-        stack.Children.Add(Input(playlist.ExpiresAt, value => { playlist.ExpiresAt = value; Save(); }));
+        }), 10));
+        var expires = Field("EXPIRES · YYYY-MM-DDTHH:MM",
+            Input(playlist.ExpiresAt, value => { playlist.ExpiresAt = value; Save(); }));
+        Grid.SetColumn(expires, 1);
+        playback.Children.Add(expires);
+        stack.Children.Add(playback);
 
-        stack.Children.Add(Text("ITEMS", 11, false, true));
+        Section(stack, "3 · ITEMS IN THIS ROTATION",
+            "Add layouts or clips below. The playlist plays them in order, unless Shuffle / weight is on.");
+        if (playlist.Items.Count == 0)
+            stack.Children.Add(Text("No items yet. Choose a layout below, or add a clip from this PC.", 10, true));
         foreach (var item in playlist.Items.ToArray())
         {
             var row = playlist.Items.IndexOf(item);
@@ -310,29 +331,33 @@ public partial class VenueDock : UserControl
             var head = new DockPanel();
             head.Children.Add(new TextBlock
             {
-                Text = $"{item.Kind} · {LayoutName(item.LayoutId)}", FontSize = 11, FontWeight = FontWeights.SemiBold,
+                Text = $"ITEM {row + 1} · {item.Kind} · {item.DisplayLabel}", FontSize = 11, FontWeight = FontWeights.SemiBold,
                 Foreground = (Brush)FindResource("VenueText")
             });
             var remove = ActionButton("×", (_, _) => { playlist.Items.Remove(item); Save(); LoadPlaylistEditor(playlist); });
+            remove.FontSize = 13;
+            remove.MinHeight = 22;
+            remove.Padding = new Thickness(7, 1, 7, 1);
+            remove.ToolTip = "Remove this item from the playlist";
             DockPanel.SetDock(remove, Dock.Right);
             head.Children.Add(remove);
             itemStack.Children.Add(head);
             var fields = new Grid { Margin = new Thickness(0, 4, 0, 0) };
             for (var column = 0; column < 3; column++)
                 fields.ColumnDefinitions.Add(new ColumnDefinition());
-            fields.Children.Add(Input(item.Seconds.ToString("0.#"), value =>
+            fields.Children.Add(Field("SECONDS ON SCREEN", Input(item.Seconds.ToString("0.#"), value =>
             {
                 if (double.TryParse(value, out var seconds)) item.Seconds = Math.Clamp(seconds, 1, 3600);
                 Save();
-            }, "Seconds", 0));
-            var sponsor = Input(item.Sponsor, value => { item.Sponsor = value; Save(); }, "Sponsor (optional)", 1);
+            }, "How long this item stays on screen", 0), 8));
+            var sponsor = Field("SPONSOR · OPTIONAL", Input(item.Sponsor, value => { item.Sponsor = value; Save(); }, "The sponsor credited for this play", 1), 8);
             Grid.SetColumn(sponsor, 1);
             fields.Children.Add(sponsor);
-            var weight = Input(item.Weight.ToString(), value =>
+            var weight = Field("ROTATION WEIGHT", Input(item.Weight.ToString(), value =>
             {
                 if (int.TryParse(value, out var count)) item.Weight = Math.Clamp(count, 1, 100);
                 Save();
-            }, "Rotation weight", 2);
+            }, "Higher weights appear more often when Shuffle / weight is on", 2));
             Grid.SetColumn(weight, 2);
             fields.Children.Add(weight);
             itemStack.Children.Add(fields);
@@ -340,10 +365,11 @@ public partial class VenueDock : UserControl
             stack.Children.Add(itemCard);
         }
 
+        Section(stack, "ADD AN ITEM", "Choose a layout, then add it to the rotation. A clip can be picked from this PC.");
         var layoutPicker = new ComboBox { ItemsSource = LayoutChoices(), SelectedIndex = -1, MinHeight = 28, Margin = new Thickness(0, 4, 0, 4) };
-        stack.Children.Add(layoutPicker);
+        stack.Children.Add(Field("LAYOUT TO ADD", layoutPicker));
         var addRow = new WrapPanel();
-        addRow.Children.Add(ActionButton("+ Add layout item", (_, _) =>
+        addRow.Children.Add(ActionButton("+ Add layout", (_, _) =>
         {
             if (layoutPicker.SelectedItem is not LayoutChoice picked) return;
             playlist.Items.Add(new VenuePlaylistItem
@@ -368,13 +394,16 @@ public partial class VenueDock : UserControl
             Save();
             LoadPlaylistEditor(playlist);
         }));
-        addRow.Children.Add(ActionButton("Run now", (_, _) =>
+        stack.Children.Add(addRow);
+        Section(stack, "PLAYBACK", "Run now starts this playlist immediately. Stop ends the current rotation; editing a playlist does not publish it.");
+        var playRow = new WrapPanel();
+        playRow.Children.Add(ActionButton("Run now", (_, _) =>
         {
             _venue.BeginPlaylist(playlist.Id, DateTimeOffset.Now);
             UpdateStatus();
         }));
-        addRow.Children.Add(ActionButton("Stop", (_, _) => { _venue.StopPlaylist(); UpdateStatus(); }));
-        stack.Children.Add(addRow);
+        playRow.Children.Add(ActionButton("Stop", (_, _) => { _venue.StopPlaylist(); UpdateStatus(); }));
+        stack.Children.Add(playRow);
         card.Child = stack;
         PlaylistEditor.Children.Add(card);
     }
@@ -410,30 +439,46 @@ public partial class VenueDock : UserControl
         ScheduleEditor.Children.Clear();
         if (schedule is null)
         {
-            ScheduleEditor.Children.Add(Text("Add a schedule entry for pre-game, halftime or a sponsor rotation.", 11, true));
+            var empty = Card();
+            var emptyStack = new StackPanel();
+            emptyStack.Children.Add(Text("NO SCHEDULE ENTRY SELECTED", 12, false, true));
+            emptyStack.Children.Add(Text("Create an entry with + New entry, then select it. Use a schedule for pre-game, halftime, sponsor rotations or a recurring concourse loop.", 10, true));
+            empty.Child = emptyStack;
+            ScheduleEditor.Children.Add(empty);
             return;
         }
         var card = Card();
         var stack = new StackPanel();
         stack.Children.Add(Text("SCHEDULE ENTRY", 12, false, true));
-        stack.Children.Add(Label("Name"));
-        stack.Children.Add(Input(schedule.Name, value => { schedule.Name = value; Save(); ScheduleList.Items.Refresh(); }));
-        stack.Children.Add(Label("Playlist"));
-        stack.Children.Add(Combo(_venue.State.Playlists.Select(playlist => new Choice(playlist.Id, playlist.Name)), schedule.PlaylistId,
-            value => { schedule.PlaylistId = value; Save(); }));
-        stack.Children.Add(Label("Display"));
-        stack.Children.Add(Combo(DisplayChoices(all: false), schedule.DisplayId,
-            value => { schedule.DisplayId = value; Save(); }, "All displays"));
+        stack.Children.Add(Text("1 · Choose what plays and where.", 9, true));
+        stack.Children.Add(Field("SCHEDULE NAME",
+            Input(schedule.Name, value => { schedule.Name = value; Save(); ScheduleList.Items.Refresh(); })));
+        var targets = new Grid();
+        targets.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+        targets.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        targets.Children.Add(Field("PLAYLIST",
+            Combo(_venue.State.Playlists.Select(playlist => new Choice(playlist.Id, playlist.Name)), schedule.PlaylistId,
+                value => { schedule.PlaylistId = value; Save(); }), 10));
+        var scheduleDisplay = Field("DISPLAY",
+            Combo(DisplayChoices(all: true), schedule.DisplayId,
+                value => { schedule.DisplayId = value; Save(); }, "All displays"));
+        Grid.SetColumn(scheduleDisplay, 1);
+        targets.Children.Add(scheduleDisplay);
+        stack.Children.Add(targets);
+        if (_venue.State.Playlists.Count == 0)
+            stack.Children.Add(Text("There are no playlists yet. Create one on the PLAYLISTS tab before running this entry.", 9, true));
+        stack.Children.Add(Text("2 · Set when it starts and how often it repeats.", 9, true));
         var dates = new Grid();
-        dates.ColumnDefinitions.Add(new ColumnDefinition());
-        dates.ColumnDefinitions.Add(new ColumnDefinition());
-        dates.Children.Add(Input(schedule.Date, value => { schedule.Date = value; Save(); }, "Date yyyy-MM-dd"));
-        var at = Input(schedule.AtTime, value => { schedule.AtTime = value; Save(); }, "Start HH:mm");
+        for (var column = 0; column < 3; column++)
+            dates.ColumnDefinitions.Add(new ColumnDefinition());
+        dates.Children.Add(Field("DATE · YYYY-MM-DD", Input(schedule.Date, value => { schedule.Date = value; Save(); }, "Leave blank for always / condition-only"), 8));
+        var at = Field("START · HH:MM", Input(schedule.AtTime, value => { schedule.AtTime = value; Save(); }, "Leave blank for always / condition-only"), 8);
         Grid.SetColumn(at, 1);
         dates.Children.Add(at);
-        stack.Children.Add(Label("Date and start time (blank = always / live condition)"));
+        var ends = Field("END · HH:MM", Input(schedule.EndsAt, value => { schedule.EndsAt = value; Save(); }, "Optional time to stop the rotation"));
+        Grid.SetColumn(ends, 2);
+        dates.Children.Add(ends);
         stack.Children.Add(dates);
-        stack.Children.Add(Input(schedule.EndsAt, value => { schedule.EndsAt = value; Save(); }, "End HH:mm (optional)"));
         var days = new WrapPanel();
         foreach (var day in Enum.GetValues<DayOfWeek>())
         {
@@ -445,32 +490,47 @@ public partial class VenueDock : UserControl
             });
             days.Children.Add(box);
         }
-        stack.Children.Add(Label("Days (none = every day)"));
+        stack.Children.Add(Label("REPEAT ON THESE DAYS · NONE = EVERY DAY"));
         stack.Children.Add(days);
-        stack.Children.Add(Label("Repeat every N minutes (0 = one start)"));
-        stack.Children.Add(Input(schedule.EveryMinutes.ToString(), value =>
+        stack.Children.Add(Field("REPEAT EVERY N MINUTES · 0 = ONE START", Input(schedule.EveryMinutes.ToString(), value =>
         {
             if (int.TryParse(value, out var minutes)) schedule.EveryMinutes = Math.Clamp(minutes, 0, 1440);
             Save();
-        }));
+        })));
         stack.Children.Add(Check("Enabled", schedule.Enabled, value => { schedule.Enabled = value; Save(); }));
-        stack.Children.Add(Check("Match any condition", schedule.MatchAny, value => { schedule.MatchAny = value; Save(); }));
+        stack.Children.Add(Check("Match any live condition (OR) instead of all of them (AND)", schedule.MatchAny, value => { schedule.MatchAny = value; Save(); }));
 
-        stack.Children.Add(Text("LIVE CONDITIONS", 11, false, true));
+        Section(stack, "3 · LIVE CONDITIONS · OPTIONAL",
+            "Add game values that must match for this entry to run. With no conditions, the date and time alone decide when it starts.");
+        if (schedule.Conditions.Count == 0)
+            stack.Children.Add(Text("No live condition. This entry runs on its schedule alone.", 9, true));
         foreach (var condition in schedule.Conditions.ToArray())
         {
-            var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-            row.Children.Add(new TextBlock
+            var row = new Border
+            {
+                Background = (Brush)FindResource("VenueSurface"), BorderBrush = (Brush)FindResource("VenueBorder"),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(7, 4, 7, 4), Margin = new Thickness(0, 0, 0, 4)
+            };
+            var rowContent = new DockPanel();
+            rowContent.Children.Add(new TextBlock
             {
                 Text = $"{AutomationRules.FieldLabel(condition.Field)} {AutomationRules.OperatorLabel(condition.Operator)} "
                     + $"{(AutomationRules.IsTextField(condition.Field) ? condition.Text : condition.Value.ToString("0.##"))}",
                 FontSize = 10, Foreground = (Brush)FindResource("VenueMuted"), VerticalAlignment = VerticalAlignment.Center
             });
             var remove = ActionButton("×", (_, _) => { schedule.Conditions.Remove(condition); Save(); LoadScheduleEditor(schedule); });
+            remove.FontSize = 12;
+            remove.MinHeight = 22;
+            remove.Padding = new Thickness(6, 1, 6, 1);
+            remove.ToolTip = "Remove this live condition";
             DockPanel.SetDock(remove, Dock.Right);
-            row.Children.Add(remove);
+            rowContent.Children.Add(remove);
+            row.Child = rowContent;
             stack.Children.Add(row);
         }
+        stack.Children.Add(Text("ADD A LIVE CONDITION", 10, true));
+        stack.Children.Add(Text("Choose a game value, how to compare it, and the value to match.", 9, true));
         var field = new ComboBox
         {
             ItemsSource = AutomationRules.Fields.Select(option => new FieldChoice(option.Field, option.Label)).ToArray(),
@@ -482,7 +542,11 @@ public partial class VenueDock : UserControl
                 .Select(option => new OperatorChoice(option.Operator, option.Label)).ToArray(),
             SelectedIndex = 0, MinHeight = 28, Margin = new Thickness(0, 0, 0, 4)
         };
-        var value = new TextBox { MinHeight = 28, Margin = new Thickness(0, 0, 0, 4), Text = "0" };
+        var value = new TextBox
+        {
+            Style = (Style)FindResource("VenueField"), Text = "0", MinHeight = 28,
+            ToolTip = "The live value this condition compares against"
+        };
         field.SelectionChanged += (_, _) =>
         {
             if (field.SelectedItem is not FieldChoice choice) return;
@@ -490,9 +554,9 @@ public partial class VenueDock : UserControl
                 .Select(option => new OperatorChoice(option.Operator, option.Label)).ToArray();
             op.SelectedIndex = 0;
         };
-        stack.Children.Add(field);
-        stack.Children.Add(op);
-        stack.Children.Add(value);
+        stack.Children.Add(Field("GAME VALUE", field));
+        stack.Children.Add(Field("CONDITION", op));
+        stack.Children.Add(Field("VALUE", value));
         stack.Children.Add(ActionButton("+ Add condition", (_, _) =>
         {
             if (field.SelectedItem is not FieldChoice fieldChoice || op.SelectedItem is not OperatorChoice operatorChoice) return;
@@ -503,7 +567,9 @@ public partial class VenueDock : UserControl
             Save();
             LoadScheduleEditor(schedule);
         }));
-        var actions = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        Section(stack, "4 · TEST & MANAGE",
+            "Run now starts the selected playlist immediately, outside the schedule. The entry stays saved for its normal times.");
+        var actions = new WrapPanel { Margin = new Thickness(0, 2, 0, 0) };
         actions.Children.Add(ActionButton("Run now", (_, _) =>
         {
             _venue.BeginPlaylist(schedule.PlaylistId, DateTimeOffset.Now, "manual", schedule.DisplayId);
@@ -676,7 +742,10 @@ public partial class VenueDock : UserControl
         stack.Children.Add(Combo(DisplayChoices(all: false), channel.DisplayId,
             value => { channel.DisplayId = value; Save(); }));
         stack.Children.Add(Label("Layout"));
-        stack.Children.Add(LayoutCombo(LayoutChoices(), channel.LayoutId, value => { channel.LayoutId = value; Save(); }));
+        var overlayChoices = LayoutChoices().ToList();
+        overlayChoices.Insert(0, new LayoutChoice("", "", "Follow display output"));
+        stack.Children.Add(LayoutCombo(overlayChoices, channel.LayoutId,
+            value => { channel.LayoutId = value; Save(); }));
         stack.Children.Add(Label("Camera input"));
         stack.Children.Add(Input(channel.CameraIndex.ToString(), value =>
         {
@@ -686,18 +755,14 @@ public partial class VenueDock : UserControl
         stack.Children.Add(Check("Enabled", channel.Enabled, value => { channel.Enabled = value; Save(); }));
         stack.Children.Add(ActionButton("Open channel", (_, _) =>
         {
-            var displayIndex = _catalog.Displays.FindIndex(display =>
-                string.Equals(display.Id, channel.DisplayId, StringComparison.OrdinalIgnoreCase));
-            if (displayIndex >= 0)
-            {
-                _catalog.SelectDisplay(displayIndex);
-                var layoutIndex = _catalog.Layouts.ToList().FindIndex(layout =>
-                    string.Equals(layout.Id, channel.LayoutId, StringComparison.OrdinalIgnoreCase));
-                if (layoutIndex >= 0) _catalog.SelectLayout(layoutIndex, publish: true);
-            }
-            new LiveChannelWindow(_catalog, _engine, _playback, _automation, _theme) { Owner = HostWindow }.Show();
+            // Opening a channel is a monitoring action. It must never take the channel's overlay
+            // to air on the operator's active display.
+            var window = new LiveChannelWindow(_catalog, _engine, _playback, _automation, _theme, _venue.Store)
+                { Owner = HostWindow };
+            window.ShowChannel(channel.Id);
+            window.Show();
         }));
-        stack.Children.Add(Text("The channel uses the selected display's live scorebug overlay. Open it and press Start stream to publish an MJPEG feed for players, OBS or a concourse encoder; camera capture stays local to this machine.", 10, true));
+        stack.Children.Add(Text("Choose an overlay, or follow the display's on-air layout. In Live Channel you can switch this channel's overlay without changing any display. Open it and press Start stream to publish an MJPEG feed for players, OBS or a concourse encoder; camera capture stays local to this machine.", 10, true));
         card.Child = stack;
         ChannelEditor.Children.Add(card);
     }
@@ -709,6 +774,9 @@ public partial class VenueDock : UserControl
             Name = $"Channel {_venue.State.Channels.Count + 1}",
             DisplayId = _catalog.Displays.FirstOrDefault()?.Id ?? ""
         };
+        var display = _catalog.Displays.FirstOrDefault();
+        channel.LayoutId = display?.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0,
+            Math.Max(0, display.Layouts.Count - 1)))?.Id ?? "";
         _venue.State.Channels.Add(channel);
         Save();
         RefreshChannels();
@@ -827,6 +895,8 @@ public partial class VenueDock : UserControl
             StatusText.Text = ok ? $"NODE · package {node.Health.PackageVersion} sent to {node.Name}." : $"NODE · {node.Name} did not accept the package.";
             RefreshNodes(refreshEditor: false);
         }));
+        buttons.Children.Add(ActionButton("Preview package", (_, _) => ShowPackagePreview(node)));
+        buttons.Children.Add(ActionButton("Log", async (_, _) => await ShowNodeLogAsync(node)));
         buttons.Children.Add(ActionButton(health.TestPattern ? "Hide test" : "Test pattern", async (_, _) =>
         {
             var ok = await _nodes.SetTestPatternAsync(node, !health.TestPattern);
@@ -909,9 +979,10 @@ public partial class VenueDock : UserControl
                 if (int.TryParse(value, out var hz)) node.Output.RefreshHz = Math.Clamp(hz, 24, 240);
                 PersistNode(node);
             }));
-            output.Children.Add(Check("HDR", node.Output.Hdr, value => { node.Output.Hdr = value; PersistNode(node); }));
+            output.Children.Add(Check("HDR · unvalidated", node.Output.Hdr, value => { node.Output.Hdr = value; PersistNode(node); }));
             output.Children.Add(Check("Low latency", node.Output.LowLatency, value => { node.Output.LowLatency = value; PersistNode(node); }));
             NodeEditor.Children.Add(output);
+            NodeEditor.Children.Add(Text("HDR is carried as a requested output label only. The node window is an SDR surface until an HDR display and swap chain have been validated on that machine; test it before relying on it.", 9, true));
             NodeEditor.Children.Add(Text("Processor calibration", 11, false, true));
             var calibration = new WrapPanel();
             calibration.Children.Add(NumberField("Scale X", node.Calibration.ScaleX.ToString("0.###"), value =>
@@ -939,8 +1010,58 @@ public partial class VenueDock : UserControl
                 if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var rotation)) node.Calibration.RotationDegrees = rotation;
                 PersistNode(node);
             }));
-            calibration.Children.Add(Check("Pixel map", node.Calibration.PixelMap, value => { node.Calibration.PixelMap = value; PersistNode(node); }));
+            calibration.Children.Add(NumberField("Curve X", node.Calibration.CurveX.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var curve)) node.Calibration.CurveX = curve;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("Curve Y", node.Calibration.CurveY.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var curve)) node.Calibration.CurveY = curve;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("TL X", node.Calibration.CornerTopLeftX.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var corner)) node.Calibration.CornerTopLeftX = corner;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("TL Y", node.Calibration.CornerTopLeftY.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var corner)) node.Calibration.CornerTopLeftY = corner;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("TR X", node.Calibration.CornerTopRightX.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var corner)) node.Calibration.CornerTopRightX = corner;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("TR Y", node.Calibration.CornerTopRightY.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var corner)) node.Calibration.CornerTopRightY = corner;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("BL X", node.Calibration.CornerBottomLeftX.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var corner)) node.Calibration.CornerBottomLeftX = corner;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("BL Y", node.Calibration.CornerBottomLeftY.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var corner)) node.Calibration.CornerBottomLeftY = corner;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("BR X", node.Calibration.CornerBottomRightX.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var corner)) node.Calibration.CornerBottomRightX = corner;
+                PersistNode(node);
+            }));
+            calibration.Children.Add(NumberField("BR Y", node.Calibration.CornerBottomRightY.ToString("0.#"), value =>
+            {
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var corner)) node.Calibration.CornerBottomRightY = corner;
+                PersistNode(node);
+            }));
             NodeEditor.Children.Add(calibration);
+            NodeEditor.Children.Add(Text("Curve and corner values are output pixels. The same mesh maps the test pattern and the programme picture, so the test pattern shows the true processor geometry.", 9, true));
             var actions = new WrapPanel { Margin = new Thickness(0, 5, 0, 0) };
             actions.Children.Add(ActionButton("Save node", (_, _) =>
             {
@@ -961,6 +1082,8 @@ public partial class VenueDock : UserControl
                 StatusText.Text = ok ? $"NODE · package {node.Health.PackageVersion} sent to {node.Name}." : $"NODE · {node.Name} did not accept the package.";
                 RefreshNodes(refreshEditor: false);
             }));
+            actions.Children.Add(ActionButton("Preview package", (_, _) => ShowPackagePreview(node)));
+            actions.Children.Add(ActionButton("Node log", async (_, _) => await ShowNodeLogAsync(node)));
             actions.Children.Add(ActionButton("Rollback", async (_, _) =>
             {
                 var ok = await _nodes.RollbackAsync(node);
@@ -977,6 +1100,27 @@ public partial class VenueDock : UserControl
             NodeEditor.Children.Add(Text("A node keeps its last received state and playlist when the controller disappears. The console marks it stale rather than pretending the last frame is live.", 10, true));
         }
         finally { _refreshing = wasRefreshing; }
+    }
+
+    void ShowPackagePreview(DisplayNode node)
+    {
+        try
+        {
+            var preview = _nodes.PreviewPackage();
+            new NodePackagePreviewWindow(node, preview, _theme) { Owner = HostWindow }.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"NODE · package preview failed: {ex.Message}";
+        }
+    }
+
+    async Task ShowNodeLogAsync(DisplayNode node)
+    {
+        StatusText.Text = $"NODE · reading the log from {node.Name}…";
+        var log = await _nodes.GetLogAsync(node);
+        StatusText.Text = $"NODE · log from {node.Name}.";
+        new NodeLogWindow(node, log, _theme) { Owner = HostWindow }.ShowDialog();
     }
 
     void AddNodeField(Grid grid, int column, string label, FrameworkElement field)
@@ -1138,6 +1282,22 @@ public partial class VenueDock : UserControl
     };
 
     TextBlock Label(string text) => Text(text, 10, true);
+
+    // A visible label above every field, rather than a tooltip, so a new operator can read the
+    // playlist and schedule forms from top to bottom without guessing what each box does.
+    FrameworkElement Field(string label, FrameworkElement control, double rightMargin = 0)
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 0, rightMargin, 0) };
+        panel.Children.Add(Label(label));
+        panel.Children.Add(control);
+        return panel;
+    }
+
+    void Section(StackPanel stack, string title, string help = "")
+    {
+        stack.Children.Add(Text(title, 11, false, true));
+        if (help.Length > 0) stack.Children.Add(Text(help, 9, true));
+    }
 
     TextBox Input(string value, Action<string> changed, string? tooltip = null, int column = -1)
     {

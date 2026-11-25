@@ -17,7 +17,9 @@ public sealed class NodeWindow : Window
 {
     readonly NodeAgent _agent;
     readonly Grid _root = new() { Background = Brushes.Black };
+    readonly Grid _stage = new();
     readonly ContentControl _host = new();
+    readonly NodeProjection _projection;
     readonly Border _testPattern;
     readonly Border _monitorBadge;
     readonly TextBlock _monitorText = new()
@@ -26,6 +28,7 @@ public sealed class NodeWindow : Window
         FontFamily = new FontFamily("Consolas")
     };
     readonly Stopwatch _frameClock = Stopwatch.StartNew();
+    readonly Stopwatch _projectionClock = Stopwatch.StartNew();
     ScorebugCanvasView? _view;
     ScorebugCatalog? _viewCatalog;
     long _frameCount;
@@ -44,9 +47,15 @@ public sealed class NodeWindow : Window
 
         _host.HorizontalAlignment = HorizontalAlignment.Stretch;
         _host.VerticalAlignment = VerticalAlignment.Stretch;
-        _root.Children.Add(_host);
+        _stage.IsHitTestVisible = false;
+        _stage.Children.Add(_host);
         _testPattern = BuildTestPattern();
-        _root.Children.Add(_testPattern);
+        _stage.Children.Add(_testPattern);
+        _root.Children.Add(_stage);
+        // The stage stays in the visual tree so the render target can capture its live animations;
+        // the opaque projection sits over it and is the only thing the audience sees.
+        _projection = new NodeProjection(_stage);
+        _root.Children.Add(_projection);
         _monitorBadge = new Border
         {
             Background = new SolidColorBrush(Color.FromArgb(0xD8, 0x08, 0x0A, 0x0D)),
@@ -127,18 +136,11 @@ public sealed class NodeWindow : Window
                 + $"{health.LastFrameMs:0.0} ms · drift {health.DriftMs:0.0} ms · pkg {health.PackageVersion}";
         }
         if (_view is null) return;
-        var calibration = _agent.Calibration;
-        var transform = new TransformGroup();
-        transform.Children.Add(new ScaleTransform(calibration.ScaleX, calibration.ScaleY));
-        transform.Children.Add(new RotateTransform(calibration.RotationDegrees));
-        transform.Children.Add(new TranslateTransform(calibration.OffsetX, calibration.OffsetY));
-        _view.RenderTransformOrigin = new Point(0.5, 0.5);
-        _view.RenderTransform = transform;
-        // The test pattern is the calibration target, so it must go through the same transform
-        // as the programme picture.
-        _testPattern.RenderTransformOrigin = new Point(0.5, 0.5);
-        _testPattern.RenderTransform = transform;
         var output = _agent.Output;
+        // The projector maps the entire stage, so the programme and the test pattern share exactly
+        // the same curved/keystoned geometry. Scale, rotation and offset live in the same mesh.
+        _projection.Configure(_agent.Calibration, output.Width, output.Height);
+        _projection.Refresh();
         if (output.Hdr) _root.Background = new SolidColorBrush(Color.FromRgb(0x05, 0x07, 0x0A));
         if (!output.LowLatency) _view.Opacity = 0.999;
         if (_agent.Options.Role == NodeRole.Monitor)
@@ -148,6 +150,13 @@ public sealed class NodeWindow : Window
     void Rendering(object? sender, EventArgs e)
     {
         _frameCount++;
+        // 30 fps is enough for the processor texture while keeping the render-target copy off the
+        // UI thread's critical path. The test pattern is captured by the same refresh.
+        if (_projectionClock.Elapsed.TotalMilliseconds >= 33)
+        {
+            _projection.Refresh();
+            _projectionClock.Restart();
+        }
         if (_frameClock.Elapsed.TotalMilliseconds < 120) return;
         _agent.NoteFrame(_frameClock.Elapsed.TotalMilliseconds);
         _frameClock.Restart();

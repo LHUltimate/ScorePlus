@@ -19,6 +19,7 @@ public partial class ControlRoomWindow : Window
     readonly string _theme;
     readonly Action<Window>? _openShow;
     readonly Action<Window>? _openVenue;
+    readonly NodeService? _nodes;
     ScorebugEditorWindow? _displayStudio;
     ContentStudioWindow? _contentStudio;
     LiveSwitchWindow? _liveSwitch;
@@ -28,7 +29,7 @@ public partial class ControlRoomWindow : Window
 
     public ControlRoomWindow(ScorebugCatalog catalog, GameEngine engine, MediaPlayback? playback = null,
         AutomationRuntime? automation = null, string theme = "Dark", VenueEngine? venue = null,
-        Action<Window>? openShow = null, Action<Window>? openVenue = null)
+        Action<Window>? openShow = null, Action<Window>? openVenue = null, NodeService? nodes = null)
     {
         InitializeComponent();
         _catalog = catalog;
@@ -39,6 +40,7 @@ public partial class ControlRoomWindow : Window
         _venue = venue ?? new VenueEngine(catalog, engine);
         _openShow = openShow;
         _openVenue = openVenue;
+        _nodes = nodes;
 
         Loaded += (_, _) =>
         {
@@ -98,7 +100,7 @@ public partial class ControlRoomWindow : Window
     void DisplayStudio_Click(object sender, RoutedEventArgs e)
     {
         if (_displayStudio is { IsVisible: true }) { _displayStudio.Activate(); return; }
-        _displayStudio = new ScorebugEditorWindow(_catalog, _engine, _playback, _theme, _automation) { Owner = this };
+        _displayStudio = new ScorebugEditorWindow(_catalog, _engine, _playback, _theme, _automation, _nodes) { Owner = this };
         _displayStudio.Closed += (_, _) => { _displayStudio = null; Refresh(); };
         _displayStudio.Show();
         StatusText.Text = "DISPLAY STUDIO opened in its own window.";
@@ -107,7 +109,7 @@ public partial class ControlRoomWindow : Window
     void ContentStudio_Click(object sender, RoutedEventArgs e)
     {
         if (_contentStudio is { IsVisible: true }) { _contentStudio.Activate(); return; }
-        _contentStudio = new ContentStudioWindow(_catalog, _engine, _theme) { Owner = this };
+        _contentStudio = new ContentStudioWindow(_catalog, _engine, _theme, _nodes) { Owner = this };
         _contentStudio.Closed += (_, _) => { _contentStudio = null; Refresh(); };
         _contentStudio.Show();
         StatusText.Text = "CONTENT STUDIO opened in its own window.";
@@ -123,7 +125,7 @@ public partial class ControlRoomWindow : Window
     void LiveSwitch_Click(object sender, RoutedEventArgs e)
     {
         if (_liveSwitch is { IsVisible: true }) { _liveSwitch.Activate(); return; }
-        _liveSwitch = new LiveSwitchWindow(_catalog, _engine, _theme) { Owner = this };
+        _liveSwitch = new LiveSwitchWindow(_catalog, _engine, _theme, _venue.Store) { Owner = this };
         _liveSwitch.Closed += (_, _) => { _liveSwitch = null; Refresh(); };
         _liveSwitch.Show();
         StatusText.Text = "LIVE SWITCH opened in its own window.";
@@ -132,7 +134,7 @@ public partial class ControlRoomWindow : Window
     void LiveChannel_Click(object sender, RoutedEventArgs e)
     {
         if (_liveChannel is { IsVisible: true }) { _liveChannel.Activate(); return; }
-        _liveChannel = new LiveChannelWindow(_catalog, _engine, _playback, _automation, _theme) { Owner = this };
+        _liveChannel = new LiveChannelWindow(_catalog, _engine, _playback, _automation, _theme, _venue.Store) { Owner = this };
         _liveChannel.Closed += (_, _) => { _liveChannel = null; Refresh(); };
         _liveChannel.Show();
         StatusText.Text = "LIVE CHANNEL opened in its own window.";

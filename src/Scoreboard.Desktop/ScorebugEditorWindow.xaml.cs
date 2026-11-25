@@ -22,6 +22,7 @@ public partial class ScorebugEditorWindow : Window
     readonly MediaPlayback? _playback;
     readonly string _theme;
     readonly AutomationRuntime? _automation;
+    readonly NodeService? _nodes;
     AutomationWindow? _conditionals;
     string? _conditionalsDisplayId;
     string? _conditionalsLayoutId;
@@ -599,9 +600,10 @@ public partial class ScorebugEditorWindow : Window
         "360° up to down"
     ];
 
-    public ScorebugEditorWindow(ScorebugCatalog catalog, GameEngine engine, MediaPlayback? playback=null, string theme="Dark", AutomationRuntime? automation=null)
+    public ScorebugEditorWindow(ScorebugCatalog catalog, GameEngine engine, MediaPlayback? playback=null, string theme="Dark", AutomationRuntime? automation=null, NodeService? nodes=null)
     {
-        InitializeComponent(); _catalog=catalog; _engine=engine; _playback=playback; _theme=theme; _automation=automation;
+        InitializeComponent(); _catalog=catalog; _engine=engine; _playback=playback; _theme=theme; _automation=automation; _nodes=nodes;
+        SendToNodesButton.Visibility = nodes is null ? Visibility.Collapsed : Visibility.Visible;
         GroupResizeHandle.PreviewMouseLeftButtonDown+=Resize_MouseDown;
         GroupResizeHandle.PreviewMouseMove+=Resize_MouseMove;
         GroupResizeHandle.PreviewMouseLeftButtonUp+=Resize_MouseUp;
@@ -1108,9 +1110,25 @@ public partial class ScorebugEditorWindow : Window
         }
     }
 
+    async void SendToNodes_Click(object sender, RoutedEventArgs e)
+    {
+        if (_nodes is null) return;
+        SendToNodesButton.IsEnabled = false;
+        HeaderHint.Text = "   Building the node package with every referenced media file…";
+        try
+        {
+            var result = await _nodes.SendToAllAsync("layouts");
+            HeaderHint.Text = "   " + result.Message;
+        }
+        finally
+        {
+            SendToNodesButton.IsEnabled = true;
+        }
+    }
+
     void ContentStudio_Click(object sender, RoutedEventArgs e)
     {
-        var studio = new ContentStudioWindow(_catalog, _engine, _theme) { Owner = this };
+        var studio = new ContentStudioWindow(_catalog, _engine, _theme, _nodes) { Owner = this };
         studio.ShowDialog();
         Render();
     }
