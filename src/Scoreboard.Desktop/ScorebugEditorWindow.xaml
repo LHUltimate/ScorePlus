@@ -360,15 +360,15 @@
                        never hit-test or become part of the exported layout. -->
                   <Canvas x:Name="GridCanvas" Width="1280" Height="720" IsHitTestVisible="False"
                           Visibility="Collapsed"/>
-                  <!-- One frame around a multi-selection. Its corner handle scales the whole group;
-                       individual elements keep their own handle only when selected alone. -->
+                  <!-- One frame around whatever is selected, on its own overlay so the artwork keeps
+                       its layer order. Its corner handle resizes one item or scales the whole group. -->
                   <Canvas x:Name="SelectionCanvas" Width="1280" Height="720">
                     <Border x:Name="GroupSelectionBox" BorderBrush="#FF00BFFF" BorderThickness="2"
                             CornerRadius="2" IsHitTestVisible="False"
                             Visibility="Collapsed"/>
                     <Border x:Name="GroupResizeHandle" Width="18" Height="18" Background="#FF00BFFF"
                             BorderBrush="White" BorderThickness="1" Cursor="SizeNWSE" Focusable="False"
-                            Visibility="Collapsed" ToolTip="Drag to resize the whole selection"/>
+                            Visibility="Collapsed" ToolTip="Drag to resize the selection"/>
                   </Canvas>
                 </Grid>
               </Viewbox>
@@ -644,9 +644,14 @@
           <TextBlock Text="SHAPE" Style="{StaticResource SectionTitle}"/>
           <TextBlock Text="Shape type" Style="{StaticResource FieldLabel}"/>
           <ComboBox x:Name="ShapeInput" Margin="10,0,10,4" SelectionChanged="Property_Changed"/>
-          <TextBlock x:Name="CornerRadiusLabel" Text="Corner radius (px, rectangles)" Style="{StaticResource FieldLabel}"/>
+          <CheckBox x:Name="RoundedCornersInput" Content="Rounded corners" Margin="10,4,10,2"
+                    Checked="Property_Changed" Unchecked="Property_Changed"
+                    ToolTip="On: the rectangle's border and fill curve. Off: square corners with a hard edge."/>
+          <TextBlock x:Name="CornerRadiusLabel" Text="Corner radius (px)" Style="{StaticResource FieldLabel}"/>
           <TextBox x:Name="CornerRadiusInput" Style="{StaticResource FieldBox}" TextChanged="Property_Changed"
-                   ToolTip="Round a rectangle's corners. 0 gives square corners; 8 is the original soft corner."/>
+                   ToolTip="How round a rectangle's corners are. 0 gives square corners; 8 is the original soft corner."/>
+          <TextBlock Text="Tip: a line turns from horizontal to vertical as you make its box taller than it is wide."
+                     Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap" Margin="10,0,10,8"/>
         </StackPanel>
 
         <StackPanel x:Name="IconSection">
@@ -751,9 +756,12 @@
             <TextBlock Text="Timeout bar size (0.25–3)" Style="{StaticResource FieldLabel}"/>
             <TextBox x:Name="IconScaleInput" Style="{StaticResource FieldBox}" TextChanged="Property_Changed"
                      ToolTip="Make the timeout bars smaller or larger; 1 is the natural size"/>
-            <CheckBox x:Name="IconVerticalInput" Content="Stack the timeout bars vertically" Margin="10,2,10,8"
+            <CheckBox x:Name="IconVerticalInput" Content="Stack the timeout bars vertically" Margin="10,2,10,4"
                       Checked="Property_Changed" Unchecked="Property_Changed"
                       ToolTip="Keep each bar horizontal but stack them down the box instead of across it"/>
+            <CheckBox x:Name="IconRoundedInput" Content="Round the bar ends" Margin="10,2,10,8"
+                      Checked="Property_Changed" Unchecked="Property_Changed"
+                      ToolTip="On: round-ended timeout bars. Off: square-edged bars."/>
           </StackPanel>
           <!-- Baseball's bases: the inside can be its own color, separate from the outline. -->
           <StackPanel x:Name="BaseFillPanel">

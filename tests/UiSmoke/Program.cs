@@ -1883,6 +1883,186 @@ internal static class Program
             editor.Close();
             Console.WriteLine("PASS: Display Studio loads");
 
+            // ---------- studio artwork polish: lines, timeout bars, shape paint and rotation ----------
+            {
+                var polishEngine = new GameEngine();
+                polishEngine.NewGame("football");
+                // A long team name stays on one line and gives up point size instead of wrapping
+                // below its plate and under the score tile.
+                var longNameItem = new ScorebugElement
+                {
+                    Name = "Home team", Content = "{{HOME_TEAM}}", Width = 300, Height = 54, FontSize = 36
+                };
+                var longName = new ScorebugTextBlock(longNameItem) { Text = "New England Patriots" };
+                longName.Measure(new Size(300, double.PositiveInfinity));
+                if (longName.TextWrapping != TextWrapping.NoWrap)
+                    throw new Exception("FAIL: a team name still wraps instead of staying on one line");
+                if (longName.FontSize >= 35.9)
+                    throw new Exception($"FAIL: a long team name kept its full {longName.FontSize:0.#} pt size");
+                if (longName.DesiredSize.Width > 300.5 || longName.DesiredSize.Height > 54.5)
+                    throw new Exception($"FAIL: a long team name measured {longName.DesiredSize.Width:0.#}×{longName.DesiredSize.Height:0.#} inside a 300×54 plate");
+                var shortName = new ScorebugTextBlock(longNameItem) { Text = "Seattle" };
+                shortName.Measure(new Size(300, double.PositiveInfinity));
+                if (Math.Abs(shortName.FontSize - 36) > 0.1)
+                    throw new Exception($"FAIL: a short team name changed from 36 to {shortName.FontSize:0.#} pt");
+                // The renderer is internal to the desktop assembly; the smoke suite drives it by
+                // reflection the same way it checks the makers' private helpers.
+                var renderType = typeof(ScorebugEditorWindow).Assembly.GetType("Scoreboard.Desktop.ScorebugRender")!;
+                var createShape = renderType.GetMethod("CreateShape", BindingFlags.Static | BindingFlags.Public)!;
+                var applyContent = renderType.GetMethod("ApplyToContent", BindingFlags.Static | BindingFlags.Public)!;
+                var hostBackground = renderType.GetMethod("HostBackground", BindingFlags.Static | BindingFlags.Public)!;
+                var lineElement = new ScorebugElement
+                {
+                    Name = "Divider", Kind = ScorebugElementKind.Shape, Shape = ScorebugShape.Line,
+                    Width = 240, Height = 24, BorderThickness = 4, TransparentBackground = true
+                };
+                var lineShape = (System.Windows.Shapes.Line)createShape.Invoke(null, [lineElement, polishEngine.State])!;
+                if (Math.Abs(lineShape.Y1 - 0.5) > 0.001 || Math.Abs(lineShape.Y2 - 0.5) > 0.001)
+                    throw new Exception("FAIL: a line is not drawn horizontally in a wide box");
+                lineElement.Width = 24; lineElement.Height = 240;
+                applyContent.Invoke(null, [lineShape, lineElement, polishEngine.State, null]);
+                if (Math.Abs(lineShape.X1 - 0.5) > 0.001 || Math.Abs(lineShape.X2 - 0.5) > 0.001
+                    || Math.Abs(lineShape.Y1) > 0.001 || Math.Abs(lineShape.Y2 - 1) > 0.001)
+                    throw new Exception("FAIL: a line did not turn vertical when its box became tall");
+
+                // Paint and texture belong to the shape's own silhouette, not the rectangular host
+                // behind it, which is what made the sliders look like they did nothing.
+                var paintedElement = new ScorebugElement
+                {
+                    Name = "Painted circle", Kind = ScorebugElementKind.Shape, Shape = ScorebugShape.Circle,
+                    Width = 120, Height = 120, TransparentBackground = true
+                };
+                paintedElement.BackgroundGradientPaint = ScorebugGradient.TwoStop("#FFFF0000", "#FF0000FF");
+                var paintedShape = (System.Windows.Shapes.Shape)createShape.Invoke(null, [paintedElement, polishEngine.State])!;
+                if (paintedShape.Fill is not System.Windows.Media.GradientBrush)
+                    throw new Exception($"FAIL: a gradient did not fill the shape ({paintedShape.Fill?.GetType().Name ?? "null"})");
+                if (!ReferenceEquals(hostBackground.Invoke(null, [paintedElement, polishEngine.State]), Brushes.Transparent))
+                    throw new Exception("FAIL: a painted shape still paints the square host behind it");
+                paintedElement.BackgroundTexture = ScorebugTexture.ForKind("Metal");
+                applyContent.Invoke(null, [paintedShape, paintedElement, polishEngine.State, null]);
+                if (paintedShape.Fill is not System.Windows.Media.DrawingBrush)
+                    throw new Exception($"FAIL: a texture did not reach the shape ({paintedShape.Fill?.GetType().Name ?? "null"})");
+
+                polishEngine.SetTimeoutCount(true, 3);
+                var polishBarsItem = new ScorebugElement
+                {
+                    Name = "Timeouts", Kind = ScorebugElementKind.Text, Content = "",
+                    Icon = ScorebugIcon.TimeoutBars, Width = 180, Height = 40, IconRounded = true
+                };
+                var barsView = new ScorebugIconView(polishBarsItem, () => polishEngine.State);
+                var barsPanel = FindAll<StackPanel>(barsView).First(panel => panel.Children.OfType<System.Windows.Shapes.Rectangle>().Any());
+                if (barsPanel.Children.Count != 3) throw new Exception($"FAIL: {barsPanel.Children.Count} timeout bars drawn for 3 left");
+                var firstBar = (System.Windows.Shapes.Rectangle)barsPanel.Children[0];
+                if (firstBar.RadiusX <= 0.01) throw new Exception("FAIL: timeout bars are not rounded by default");
+                polishBarsItem.IconRounded = false; barsView.Update();
+                if (Math.Abs(firstBar.RadiusX) > 0.01) throw new Exception("FAIL: turning round ends off left rounded bars");
+                polishEngine.SetTimeoutCount(true, 1); barsView.Update();
+                if (barsPanel.Children.Count != 1)
+                    throw new Exception($"FAIL: {barsPanel.Children.Count} timeout bars remain after two were used");
+                if (barsPanel.HorizontalAlignment != HorizontalAlignment.Right)
+                    throw new Exception("FAIL: the remaining timeout bars are not anchored right, so they do not disappear left to right");
+
+                // A logo can be rotated from the property panel; its section used to be hidden for
+                // every kind except text.
+                var polishPath = Path.Combine(appDataPath, $"studio-polish-{Guid.NewGuid():N}.json");
+                ScorebugEditorWindow? polishEditor = null;
+                try
+                {
+                    var polishCatalog = new ScorebugCatalog(polishPath);
+                    polishEditor = new ScorebugEditorWindow(polishCatalog, polishEngine);
+                    ShowForSmoke(polishEditor);
+                    polishEditor.UpdateLayout();
+                    polishCatalog.Update(layout =>
+                    {
+                        layout.Elements.Clear();
+                        layout.Elements.Add(new ScorebugElement
+                        {
+                            Name = "Club crest", Kind = ScorebugElementKind.Logo, Content = "",
+                            X = 40, Y = 40, Width = 140, Height = 140
+                        });
+                    });
+                    polishEditor.UpdateLayout();
+                    var polishLayers = (ListBox)polishEditor.FindName("Layers")!;
+                    polishLayers.SelectedIndex = 0;
+                    polishEditor.UpdateLayout();
+                    var transformSection = (StackPanel)polishEditor.FindName("TransformSection")!;
+                    if (transformSection.Visibility != Visibility.Visible)
+                        throw new Exception("FAIL: a selected logo has no transform/rotation panel");
+                    var rotationBox = (TextBox)polishEditor.FindName("RotationInput")!;
+                    rotationBox.Text = "30";
+                    Pump(TimeSpan.FromMilliseconds(700));
+                    if (Math.Abs(polishCatalog.Layout.Elements[0].Rotation - 30) > 0.01)
+                        throw new Exception($"FAIL: a logo rotation of 30 saved as {polishCatalog.Layout.Elements[0].Rotation:0.##}");
+
+                    // A rectangle can have square corners without losing the ability to round them.
+                    polishCatalog.Update(layout =>
+                    {
+                        layout.Elements.Clear();
+                        layout.Elements.Add(new ScorebugElement
+                        {
+                            Name = "Plate", Kind = ScorebugElementKind.Shape, Shape = ScorebugShape.Rectangle,
+                            X = 30, Y = 30, Width = 220, Height = 100, CornerRadius = 8, BorderThickness = 3
+                        });
+                    });
+                    polishEditor.UpdateLayout();
+                    polishLayers.SelectedIndex = 0;
+                    polishEditor.UpdateLayout();
+                    var rounded = (CheckBox)polishEditor.FindName("RoundedCornersInput")!;
+                    if (rounded.Visibility != Visibility.Visible || rounded.IsChecked != true)
+                        throw new Exception("FAIL: a rounded rectangle does not offer its rounded-corner switch");
+                    rounded.IsChecked = false;
+                    Pump(TimeSpan.FromMilliseconds(700));
+                    polishEditor.UpdateLayout();
+                    var plate = polishCatalog.Layout.Elements[0];
+                    if (Math.Abs(plate.CornerRadius) > 0.001)
+                        throw new Exception($"FAIL: square corners kept radius {plate.CornerRadius:0.##}");
+                    var plateHost = ((Canvas)polishEditor.FindName("DesignCanvas")!).Children.OfType<Border>()
+                        .First(border => (border.Tag as ScorebugElement)?.Id == plate.Id);
+                    var plateShape = FindAll<System.Windows.Shapes.Rectangle>(plateHost).First();
+                    if (Math.Abs(plateShape.RadiusX) > 0.001)
+                        throw new Exception($"FAIL: the rectangle still draws rounded corners ({plateShape.RadiusX:0.##})");
+                    rounded.IsChecked = true;
+                    Pump(TimeSpan.FromMilliseconds(700));
+                    if (Math.Abs(polishCatalog.Layout.Elements[0].CornerRadius - 8) > 0.01)
+                        throw new Exception("FAIL: turning rounded corners back on did not restore the soft edge");
+
+                    // Renaming a layer repaints its row immediately.
+                    var polishName = (TextBox)polishEditor.FindName("NameInput")!;
+                    polishName.Text = "Renamed plate";
+                    Pump(TimeSpan.FromMilliseconds(700));
+                    polishEditor.UpdateLayout();
+                    var renamedRow = (ListBoxItem)polishLayers.ItemContainerGenerator.ContainerFromIndex(0)!;
+                    if (!FindAll<TextBlock>(renamedRow).Any(text => text.Text == "Renamed plate"))
+                        throw new Exception("FAIL: renaming an element did not update its layer row");
+
+                    // Clicking a lower layer selects it without lifting it over the element in front.
+                    polishCatalog.Update(layout =>
+                    {
+                        layout.Elements.Clear();
+                        layout.Elements.Add(new ScorebugElement { Name = "Back", Content = "BACK", X = 0, Y = 0, Width = 300, Height = 200 });
+                        layout.Elements.Add(new ScorebugElement { Name = "Front", Content = "FRONT", X = 40, Y = 40, Width = 160, Height = 90 });
+                    });
+                    polishEditor.UpdateLayout();
+                    polishLayers.SelectedIndex = 1;
+                    polishEditor.UpdateLayout();
+                    var back = polishCatalog.Layout.Elements[0];
+                    var backHost = ((Canvas)polishEditor.FindName("DesignCanvas")!).Children.OfType<Border>()
+                        .First(border => (border.Tag as ScorebugElement)?.Id == back.Id);
+                    if (Panel.GetZIndex(backHost) != 0)
+                        throw new Exception($"FAIL: selecting the lower layer lifted it to z {Panel.GetZIndex(backHost)}");
+                    var selectionBox = (Border)polishEditor.FindName("GroupSelectionBox")!;
+                    if (selectionBox.Visibility != Visibility.Visible)
+                        throw new Exception("FAIL: a single selection has no overlay frame");
+
+                    Console.WriteLine("PASS: lines, square timeout bars, shape paint, logo rotation, rounded corners, layer rename and stable selection z-order all work");
+                }
+                finally
+                {
+                    polishEditor?.Close();
+                    if (File.Exists(polishPath)) File.Delete(polishPath);
+                }
+            }
+
             // ---------- Display Studio: another layout is a live, resizeable feed ----------
             {
                 var nestedPath = Path.Combine(Path.GetTempPath(), $"smoke-live-layout-{Guid.NewGuid():N}.json");
@@ -1938,9 +2118,9 @@ internal static class Program
                     var pickedId = nestedPicker.SelectedItem?.GetType().GetProperty("Id")?.GetValue(nestedPicker.SelectedItem) as string;
                     if (nestedAspect.IsChecked != true || pickedId != liveSourceId)
                         throw new Exception("FAIL: the live layout panel does not show its source and fit mode");
-                    var resizeHandle = FindAll<Border>(feedHost)
-                        .FirstOrDefault(border => border.Cursor == Cursors.SizeNWSE && border.Visibility == Visibility.Visible)
-                        ?? throw new Exception("FAIL: a selected live layout has no resize handle");
+                    var resizeHandle = (Border)nestedEditor.FindName("GroupResizeHandle")!;
+                    if (resizeHandle.Visibility != Visibility.Visible)
+                        throw new Exception("FAIL: a selected live layout has no resize handle");
                     var nestedWidth = (TextBox)nestedEditor.FindName("WidthInput")!;
                     nestedWidth.Text = "360";
                     Pump(TimeSpan.FromMilliseconds(650));
@@ -1977,13 +2157,19 @@ internal static class Program
                     multiEditor.UpdateLayout();
                     if (multiLayers.SelectedItems.Count != 2)
                         throw new Exception("FAIL: the layer list dropped part of the selection");
-                    // The canvas highlights every selected object, not just the primary one.
+                    // The canvas marks the selection on its overlay; the artwork never changes z-order
+                    // just because it was clicked.
                     var selectedIds = multiCatalog.Layout.Elements.TakeLast(2).Select(element => element.Id).ToArray();
-                    var highlighted = FindAll<Border>((Canvas)multiEditor.FindName("DesignCanvas")!)
-                        .Count(border => border.Tag is ScorebugElement element && selectedIds.Contains(element.Id)
-                            && Equals(border.BorderBrush, System.Windows.Media.Brushes.DeepSkyBlue));
-                    if (highlighted != 2)
-                        throw new Exception($"FAIL: {highlighted} of 2 selected objects were highlighted in the studio");
+                    var designCanvas = (Canvas)multiEditor.FindName("DesignCanvas")!;
+                    foreach (var selected in multiCatalog.Layout.Elements.Where(element => selectedIds.Contains(element.Id)))
+                    {
+                        var host = designCanvas.Children.OfType<Border>()
+                            .FirstOrDefault(border => (border.Tag as ScorebugElement)?.Id == selected.Id)
+                            ?? throw new Exception("FAIL: a selected object has no studio host");
+                        var layer = multiCatalog.Layout.Elements.IndexOf(selected);
+                        if (Panel.GetZIndex(host) != layer)
+                            throw new Exception($"FAIL: selecting an object lifted it from layer {layer} to {Panel.GetZIndex(host)}");
+                    }
                     // Multiple selected objects share one outer frame and one resize handle. Their own
                     // handles are hidden so the drag scales the group, not one item at a time.
                     var groupBox = (Border)multiEditor.FindName("GroupSelectionBox")!;
@@ -3024,11 +3210,17 @@ internal static class Program
                 throw new Exception("FAIL: timeout lines are not in a row");
             iconEngine.Timeout(true);
             iconsView.Update();
-            if (FindAll<System.Windows.Shapes.Rectangle>(iconsView).Count() != iconEngine.State.HomeTimeoutLimit)
-                throw new Exception("FAIL: a used timeout should keep its bar, greyed out, for the full allotment");
-            var usedBar = FindAll<System.Windows.Shapes.Rectangle>(iconsView).Last();
-            if (usedBar.Fill is not SolidColorBrush usedBrush || usedBrush.Color != Color.FromRgb(0x9A, 0xA5, 0xB2))
-                throw new Exception("FAIL: a used timeout bar did not switch to the light-grey out colour");
+            if (FindAll<System.Windows.Shapes.Rectangle>(iconsView).Count() != iconEngine.State.HomeTimeouts)
+                throw new Exception($"FAIL: a used timeout should leave {iconEngine.State.HomeTimeouts} bars, not keep the full allotment");
+            if (barStack.HorizontalAlignment != HorizontalAlignment.Right)
+                throw new Exception("FAIL: the remaining timeout bars are not anchored right, so they disappear left to right");
+            if (FindAll<System.Windows.Shapes.Rectangle>(iconsView).Any(bar => bar.RadiusX <= 0.01))
+                throw new Exception("FAIL: timeout bars are not rounded by default");
+            barsItem.IconRounded = false;
+            iconsView.Update();
+            if (FindAll<System.Windows.Shapes.Rectangle>(iconsView).Any(bar => Math.Abs(bar.RadiusX) > 0.01 || Math.Abs(bar.RadiusY) > 0.01))
+                throw new Exception("FAIL: turning round ends off left a rounded timeout bar");
+            barsItem.IconRounded = true;
             barsItem.IconVertical = true;
             iconsView.Update();
             var verticalStack = FindAll<StackPanel>(iconsView).FirstOrDefault();
@@ -3325,6 +3517,22 @@ internal static class Program
                 var contentSite = madeChoice.Template.FindName("ContentSite", madeChoice) as ContentPresenter;
                 if (contentSite?.Content?.ToString() != made.Name)
                     throw new Exception("FAIL: the Made icon picker does not show the chosen icon's name");
+                // Resizing an element that draws a made icon must resize the icon's plate with it.
+                var iconHost = ((Canvas)madeStudio.FindName("DesignCanvas")!).Children.OfType<Border>()
+                    .First(border => (border.Tag as ScorebugElement)?.Id == target.Id);
+                var iconView = FindAll<ScorebugIconView>(iconHost).Single();
+                var iconPlate = FindAll<Border>(iconView).First(border => border.Child is Grid && FindAll<TextBlock>(border).Any());
+                if (((Border)madeStudio.FindName("GroupResizeHandle")!).Visibility != Visibility.Visible)
+                    throw new Exception("FAIL: a selected made icon has no resize handle");
+                var iconWidth = (TextBox)madeStudio.FindName("WidthInput")!;
+                var iconHeight = (TextBox)madeStudio.FindName("HeightInput")!;
+                iconWidth.Text = "320"; iconHeight.Text = "180";
+                Pump(TimeSpan.FromMilliseconds(800));
+                madeStudio.UpdateLayout();
+                if (Math.Abs(target.Width - 320) > 0.5 || Math.Abs(target.Height - 180) > 0.5)
+                    throw new Exception($"FAIL: a made-icon element resized to {target.Width:0}×{target.Height:0}");
+                if (Math.Abs(iconPlate.Width - 320) > 0.5 || Math.Abs(iconPlate.Height - 180) > 0.5)
+                    throw new Exception($"FAIL: a made icon's plate stayed {iconPlate.Width:0}×{iconPlate.Height:0} while its element became 320×180");
                 var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120)
                 {
                     RoutedEvent = UIElement.PreviewMouseWheelEvent
@@ -6282,11 +6490,13 @@ internal static class Program
                     backdropStudio.UpdateLayout();
                     if (((StackPanel)backdropStudio.FindName("PlayerDataSection")!).Visibility != Visibility.Collapsed)
                         throw new Exception("FAIL: a shape still shows the player-data pickers");
-                    // A shape prints nothing, so the type, rotation and value-transition blocks are
-                    // gone; its own shape picker and the shared background/outline stay.
-                    foreach (var section in new[] { "FontSection", "TransformSection", "TransitionSection" })
+                    // A shape prints nothing, so the type and value-transition blocks are gone; its
+                    // own shape picker, its rotation and the shared background/outline stay.
+                    foreach (var section in new[] { "FontSection", "TransitionSection" })
                         if (((StackPanel)backdropStudio.FindName(section)!).Visibility != Visibility.Collapsed)
                             throw new Exception($"FAIL: a shape still shows {section}");
+                    if (((StackPanel)backdropStudio.FindName("TransformSection")!).Visibility != Visibility.Visible)
+                        throw new Exception("FAIL: a shape cannot be rotated in the studio");
                     if (((StackPanel)backdropStudio.FindName("BackgroundSection")!).Visibility != Visibility.Visible ||
                         ((StackPanel)backdropStudio.FindName("BorderSection")!).Visibility != Visibility.Visible)
                         throw new Exception("FAIL: a shape lost its background or outline controls");
@@ -6810,19 +7020,20 @@ internal static class Program
                     var barsView = FindAll<ScorebugIconView>(artCanvas).FirstOrDefault();
                     if (barsView is null)
                         throw new Exception("FAIL: switching an element to timeout bars draws no live artwork in the studio");
-                    if (FindAll<System.Windows.Shapes.Rectangle>(barsView).Count() != artEngine.State.HomeTimeoutLimit)
-                        throw new Exception($"FAIL: timeout bars show {FindAll<System.Windows.Shapes.Rectangle>(barsView).Count()} bars for {artEngine.State.HomeTimeoutLimit} timeouts");
+                    if (FindAll<System.Windows.Shapes.Rectangle>(barsView).Count() != artEngine.State.HomeTimeouts)
+                        throw new Exception($"FAIL: timeout bars show {FindAll<System.Windows.Shapes.Rectangle>(barsView).Count()} bars for {artEngine.State.HomeTimeouts} timeouts");
                     if (FindAll<ScorebugTextBlock>(artCanvas).Any(t => t.Text.Contains("POSSESSION", StringComparison.Ordinal)))
                         throw new Exception("FAIL: the old text is still drawn under the artwork");
-                    // Live: taking another timeout greys more bars without shrinking the allotment.
+                    // Live: taking another timeout removes its bar from the left, leaving the rest
+                    // anchored to the right.
                     artEngine.SetTimeoutCount(true, 1);
                     Pump(TimeSpan.FromMilliseconds(200));
                     var artBars = FindAll<System.Windows.Shapes.Rectangle>(barsView);
-                    if (artBars.Count() != artEngine.State.HomeTimeoutLimit)
-                        throw new Exception("FAIL: a used timeout removed a bar from the allotment");
-                    var expectedUsed = Math.Max(0, artEngine.State.HomeTimeoutLimit - artEngine.State.HomeTimeouts);
-                    if (artBars.Count(bar => bar.Fill is SolidColorBrush brush && brush.Color == Color.FromRgb(0x9A, 0xA5, 0xB2)) != expectedUsed)
-                        throw new Exception($"FAIL: expected {expectedUsed} greyed timeout bars, got {artBars.Count(bar => bar.Fill is SolidColorBrush brush && brush.Color == Color.FromRgb(0x9A, 0xA5, 0xB2))}");
+                    if (artBars.Count() != artEngine.State.HomeTimeouts)
+                        throw new Exception($"FAIL: {artBars.Count()} timeout bars remain for {artEngine.State.HomeTimeouts} timeouts");
+                    var artBarStack = FindAll<StackPanel>(barsView).First(panel => panel.Children.OfType<System.Windows.Shapes.Rectangle>().Any());
+                    if (artBarStack.HorizontalAlignment != HorizontalAlignment.Right)
+                        throw new Exception("FAIL: the used timeout bars did not disappear from the left");
                     // Switching to a different icon builds that artwork instead of keeping the bars.
                     ((ComboBox)artStudio.FindName("IconInput")!).SelectedItem = ScorebugIcon.PossessionDot;
                     Pump(TimeSpan.FromMilliseconds(250));

@@ -73,10 +73,12 @@ public sealed class PaintTextureWindow : Window
         columns.ColumnDefinitions.Add(new ColumnDefinition());
         Grid.SetRow(columns, 1);
         root.Children.Add(columns);
-        columns.Children.Add(BuildPaintColumn(true));
+        var textColumn = BuildPaintColumn(true);
+        columns.Children.Add(textColumn);
         var plate = BuildPaintColumn(false);
         Grid.SetColumn(plate, 1);
         columns.Children.Add(plate);
+        LayoutPaintColumns(columns, textColumn, plate);
 
         var footer = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
         var done = new Button { Content = "Done", IsDefault = true, MinHeight = 34, Padding = new Thickness(16, 6, 16, 6), Margin = new Thickness(6, 0, 0, 0) };
@@ -305,6 +307,19 @@ public sealed class PaintTextureWindow : Window
         return scroll;
     }
 
+    /// <summary>
+    /// A shape, image, video or live layout has no text fill: the TEXT PAINT column could only
+    /// move sliders that never reach its artwork. Those elements get the plate column on its own.
+    /// Text and logo elements keep both, because a logo's finish follows its own transparent areas.
+    /// </summary>
+    void LayoutPaintColumns(Grid columns, UIElement textColumn, UIElement plateColumn)
+    {
+        var textPaint = _draft.Kind is ScorebugElementKind.Text or ScorebugElementKind.Logo;
+        textColumn.Visibility = textPaint ? Visibility.Visible : Visibility.Collapsed;
+        Grid.SetColumn(plateColumn, textPaint ? 1 : 0);
+        Grid.SetColumnSpan(plateColumn, textPaint ? 1 : 2);
+    }
+
     static Button Action(string text, Action click, bool _ = false)
     {
         var button = new Button { Content = text, MinHeight = 26, Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(0, 2, 4, 2), FontSize = 11 };
@@ -462,6 +477,7 @@ public sealed class PaintTextureWindow : Window
             columns.Children.Add(textColumn);
             Grid.SetColumn(plateColumn, 1);
             columns.Children.Add(plateColumn);
+            LayoutPaintColumns(columns, textColumn, plateColumn);
             RefreshStops(true);
             RefreshStops(false);
         }

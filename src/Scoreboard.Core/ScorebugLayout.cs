@@ -111,7 +111,7 @@ public sealed class ScoreVideoRule
     }
 }
 
-public enum ScorebugShape { Rectangle, Circle, Triangle, Parallelogram }
+public enum ScorebugShape { Rectangle, Circle, Triangle, Parallelogram, Line }
 
 /// <summary>Where an element's colour comes from: a fixed colour, or one of the team palette slots.</summary>
 public enum ScorebugColorSource
@@ -464,6 +464,9 @@ public sealed class ScorebugElement
 
     /// <summary>For timeout bars: stack the bars downward instead of in one row.</summary>
     public bool IconVertical { get; set; }
+
+    /// <summary>For timeout bars: round the ends of each bar. Off draws square-ended bars.</summary>
+    public bool IconRounded { get; set; } = true;
 
     /// <summary>
     /// Turns the icon artwork in degrees. 90 lays a possession arrow on its side pointing down,

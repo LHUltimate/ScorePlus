@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.ComponentModel;
+using System.Globalization;
 using System.Reflection;
 using System.Windows;
 using System.IO;
@@ -764,12 +765,15 @@ public partial class ScorebugEditorWindow : Window
     void UpdateGroupSelectionAdorners()
     {
         if(GroupSelectionBox is null||GroupResizeHandle is null||_catalog?.Layout is null)return;
-        var group=_selectedIds.Count>1;
-        GroupSelectionBox.Visibility=group?Visibility.Visible:Visibility.Collapsed;
-        GroupResizeHandle.Visibility=group?Visibility.Visible:Visibility.Collapsed;
-        foreach(var (id,visual) in _visuals)
-            visual.Handle.Visibility=!group&&id==_selectedId&&IsSelected(id)?Visibility.Visible:Visibility.Collapsed;
-        if(!group)return;
+        // One frame for the whole selection, whether it is one object or many. It lives on the
+        // overlay above the artwork, so selecting something never lifts it over its neighbours and
+        // the resize handle is never buried under a layer that happens to sit in front.
+        var any=_selectedIds.Count>0;
+        GroupSelectionBox.Visibility=any?Visibility.Visible:Visibility.Collapsed;
+        GroupResizeHandle.Visibility=any?Visibility.Visible:Visibility.Collapsed;
+        foreach(var visual in _visuals.Values)
+            visual.Handle.Visibility=Visibility.Collapsed;
+        if(!any)return;
         var bounds=SelectionBounds();
         if(bounds.IsEmpty)return;
         GroupSelectionBox.Width=bounds.Width;
@@ -1016,7 +1020,7 @@ public partial class ScorebugEditorWindow : Window
             +$"{item.Foreground}:{item.ForegroundSource}:{item.Background}:{item.BackgroundSource}:"
             +$"{item.BackgroundColor2}:{item.BackgroundSource2}:{item.BackgroundGradient}:{item.TransparentBackground}:"
             +$"{item.Opacity}:{item.TextOpacity}:{item.BackgroundOpacity}:{item.BorderOpacity}:"
-            +$"{item.BorderThickness}:{item.BorderColor}:{item.BorderSource}:{item.Icon}:{item.IconScale}:{item.IconVertical}:{item.IconRotation}:"
+            +$"{item.BorderThickness}:{item.BorderColor}:{item.BorderSource}:{item.Icon}:{item.IconScale}:{item.IconVertical}:{item.IconRounded}:{item.IconRotation}:"
             +$"{item.IconFillColor}:{item.IconFillSource}:{item.IconBorderThickness}:{item.IconBorderColor}:{item.IconBackground}:{item.IconOpacity}:{item.IconUsedColor}:{item.GameClockLeadingZero}:{item.ClockDecimals}:"
             +$"{item.Animation}:{item.MotionAnimation?.Id}:{item.MotionTransition?.Id}:{item.TransitionShrink}:{item.TransitionJumpHeight}:{item.TransitionJumpDirection}:"
             +$"{item.Shape}:{item.CornerRadius}:{item.Visible}:{item.LogoSide}:{item.ImagePath}:"
@@ -1262,7 +1266,7 @@ public partial class ScorebugEditorWindow : Window
             BorderThickness=new Thickness(1), Cursor=Cursors.SizeNWSE, Tag=item,
             HorizontalAlignment=HorizontalAlignment.Right, VerticalAlignment=VerticalAlignment.Bottom,
             Margin=new Thickness(0,0,1,1),
-            Visibility=_selectedIds.Count==1&&IsSelected(item.Id)&&item.Id==_selectedId?Visibility.Visible:Visibility.Collapsed,
+            Visibility=Visibility.Collapsed,
             ToolTip="Drag to resize"
         };
         handle.PreviewMouseLeftButtonDown+=Resize_MouseDown;
@@ -1276,19 +1280,24 @@ public partial class ScorebugEditorWindow : Window
         var stack=new Grid();
         stack.Children.Add(clipped);
         stack.Children.Add(handle);
+        var shapeHost=item.Kind==ScorebugElementKind.Shape;
         var host=new Border
         {
             Width=item.Width, Height=item.Height, Background=ScorebugRender.HostBackground(item,_engine.State),
             ClipToBounds=clipContent,
             Opacity=item.Opacity, Cursor=Cursors.SizeAll, Tag=item, Child=stack,
-            BorderBrush=IsSelected(item.Id)?Brushes.DeepSkyBlue:ScorebugRender.HostBorder(item,_engine.State),
-            BorderThickness=new Thickness(IsSelected(item.Id)?2:Math.Max(1,item.BorderThickness))
+            // A shape draws its own outline; a square host border around a rounded rectangle was
+            // what made the corner setting look like it did nothing.
+            BorderBrush=shapeHost?Brushes.Transparent:ScorebugRender.HostBorder(item,_engine.State),
+            BorderThickness=new Thickness(shapeHost?0:Math.Max(1,item.BorderThickness)),
+            CornerRadius=item.Kind==ScorebugElementKind.Shape&&item.Shape==ScorebugShape.Rectangle
+                ?new CornerRadius(Math.Max(0,item.CornerRadius)):new CornerRadius(0)
         };
         Canvas.SetLeft(host,item.X); Canvas.SetTop(host,item.Y);
         var layer=_catalog.Layout.Elements.IndexOf(item);
-        // The selected element is lifted over its neighbours so its resize handle is never buried
-        // under a larger plate that happens to sit later in the layer list.
-        Panel.SetZIndex(host,IsSelected(item.Id)?10000+layer:layer);
+        // Selection lives on its own overlay: the artwork keeps the exact layer order it had before
+        // the click, so picking an item never brings it temporarily to the front.
+        Panel.SetZIndex(host,layer);
         host.MouseLeftButtonDown+=Element_MouseDown; host.MouseMove+=Element_MouseMove; host.MouseLeftButtonUp+=Element_MouseUp;
         MotionPlayback.SetDesignRotation(host,content is ScorebugTextBlock?0:item.Rotation);
         _visuals[item.Id]=(host,content,handle,item.Kind);
@@ -1351,10 +1360,13 @@ public partial class ScorebugEditorWindow : Window
             if(item.Animation!=ScorebugAnimation.Pulse)visual.Host.Opacity=item.Opacity;
             Canvas.SetLeft(visual.Host,item.X); Canvas.SetTop(visual.Host,item.Y);
             var layer=_catalog.Layout.Elements.IndexOf(item);
-            Panel.SetZIndex(visual.Host,IsSelected(item.Id)?10000+layer:layer);
-            visual.Handle.Visibility=_selectedIds.Count==1&&item.Id==_selectedId&&IsSelected(item.Id)?Visibility.Visible:Visibility.Collapsed;
-            visual.Host.BorderBrush=IsSelected(item.Id)?Brushes.DeepSkyBlue:ScorebugRender.HostBorder(item,_engine.State);
-            visual.Host.BorderThickness=new Thickness(IsSelected(item.Id)?2:Math.Max(1,item.BorderThickness));
+            Panel.SetZIndex(visual.Host,layer);
+            visual.Handle.Visibility=Visibility.Collapsed;
+            var shapeHost=item.Kind==ScorebugElementKind.Shape;
+            visual.Host.BorderBrush=shapeHost?Brushes.Transparent:ScorebugRender.HostBorder(item,_engine.State);
+            visual.Host.BorderThickness=new Thickness(shapeHost?0:Math.Max(1,item.BorderThickness));
+            visual.Host.CornerRadius=item.Kind==ScorebugElementKind.Shape&&item.Shape==ScorebugShape.Rectangle
+                ?new CornerRadius(Math.Max(0,item.CornerRadius)):new CornerRadius(0);
             ApplyAnimation(item,visual.Host);
         }
         // The property panel's colour previews follow the typed colours in place, since an edit no
@@ -1597,7 +1609,7 @@ public partial class ScorebugEditorWindow : Window
     {
         _loading=true;
         var e=Selected; var has=e is not null;
-        foreach(var control in new Control[]{NameInput,ContentInput,XInput,YInput,WidthInput,HeightInput,FontInput,FontInputSize,RotationInput,ColorInput,BackgroundInput,BorderWidthInput,BorderColorInput,BorderSourceInput,AnimationInput,TransitionInput,TransitionSpeedInput,ShapeInput,CornerRadiusInput,VisibleInput,TransparentBackgroundInput,MediaTagInput,PeriodFormatInput,RecordDivisionInput,        DownCapsInput,PlayClockColonInput,PlayClockLeadingZeroInput,GameClockLeadingZeroInput,ClockDecimalsInput,IconInput,IconCustomInput,IconTokenInput,IconOffsetXInput,IconOffsetYInput,IconColorInput,IconVisitorsInput,IconFlipInput,IconRotationInput,IconScaleInput,IconVerticalInput,IconFillInput,IconFillSourceInput,IconBorderWidthInput,IconBorderColorInput,IconBackgroundInput,IconUsedColorInput,IconOpacitySlider,TransitionShrinkInput,TransitionJumpHeightInput,TransitionJumpDirectionInput,ForegroundSourceInput,BackgroundSourceInput,LogoInput,PlayerPhotoSideInput,BoldInput,ItalicInput,UnderlineInput,StrikeInput,PreserveAspectInput,AspectInput,VideoCropLeftInput,VideoCropTopInput,VideoCropRightInput,VideoCropBottomInput,ChromaKeyInput,ChromaKeyToleranceInput,AudioDeviceInput,GradientInput,GradientSourceInput,GradientColorInput,GradientAngleInput,OpacitySlider,TextOpacitySlider,BackgroundOpacitySlider,BorderOpacitySlider,TextShadowInput,TextShadowColorInput,TextShadowOffsetInput,TextShadowSoftnessInput,TextShadowAngleInput,TextAlignInput,NestedLayoutInput,NestedAspectInput,TickerInput,TickerSpeedInput,TickerReverseInput})
+        foreach(var control in new Control[]{NameInput,ContentInput,XInput,YInput,WidthInput,HeightInput,FontInput,FontInputSize,RotationInput,ColorInput,BackgroundInput,BorderWidthInput,BorderColorInput,BorderSourceInput,AnimationInput,TransitionInput,TransitionSpeedInput,ShapeInput,RoundedCornersInput,CornerRadiusInput,VisibleInput,TransparentBackgroundInput,MediaTagInput,PeriodFormatInput,RecordDivisionInput,        DownCapsInput,PlayClockColonInput,PlayClockLeadingZeroInput,GameClockLeadingZeroInput,ClockDecimalsInput,IconInput,IconCustomInput,IconTokenInput,IconOffsetXInput,IconOffsetYInput,IconColorInput,IconVisitorsInput,IconFlipInput,IconRotationInput,IconScaleInput,IconVerticalInput,IconRoundedInput,IconFillInput,IconFillSourceInput,IconBorderWidthInput,IconBorderColorInput,IconBackgroundInput,IconUsedColorInput,IconOpacitySlider,TransitionShrinkInput,TransitionJumpHeightInput,TransitionJumpDirectionInput,ForegroundSourceInput,BackgroundSourceInput,LogoInput,PlayerPhotoSideInput,BoldInput,ItalicInput,UnderlineInput,StrikeInput,PreserveAspectInput,AspectInput,VideoCropLeftInput,VideoCropTopInput,VideoCropRightInput,VideoCropBottomInput,ChromaKeyInput,ChromaKeyToleranceInput,AudioDeviceInput,GradientInput,GradientSourceInput,GradientColorInput,GradientAngleInput,OpacitySlider,TextOpacitySlider,BackgroundOpacitySlider,BorderOpacitySlider,TextShadowInput,TextShadowColorInput,TextShadowOffsetInput,TextShadowSoftnessInput,TextShadowAngleInput,TextAlignInput,NestedLayoutInput,NestedAspectInput,TickerInput,TickerSpeedInput,TickerReverseInput})
             control.IsEnabled=has;
         if(has)
         {
@@ -1651,6 +1663,7 @@ public partial class ScorebugEditorWindow : Window
                 ? MotionChoice(TransitionInput,handover)
                 : (object)e.Transition;
             ShapeInput.SelectedItem=e.Shape;
+            RoundedCornersInput.IsChecked=e.Kind==ScorebugElementKind.Shape&&e.Shape==ScorebugShape.Rectangle&&e.CornerRadius>0.01;
             CornerRadiusInput.Text=Math.Clamp(e.CornerRadius,0,200).ToString("0.#");
             VisibleInput.IsChecked=e.Visible; TransparentBackgroundInput.IsChecked=e.TransparentBackground;
             MediaTagInput.Text=e.MediaTag;
@@ -1674,6 +1687,7 @@ public partial class ScorebugEditorWindow : Window
             IconInput.SelectedItem=e.Icon; IconVisitorsInput.IsChecked=e.IconVisitors; IconFlipInput.IsChecked=e.IconFlipped;
             IconRotationInput.Text=e.IconRotation.ToString("0.#");
             IconVerticalInput.IsChecked=e.IconVertical;
+            IconRoundedInput.IsChecked=e.IconRounded;
             IconBorderWidthInput.Text=Math.Clamp(e.IconBorderThickness,0,40).ToString("0.#");
             IconBorderColorInput.Text=e.IconBorderColor;
             IconBackgroundInput.Text=e.IconBackground;
@@ -1783,17 +1797,20 @@ public partial class ScorebugEditorWindow : Window
         TextSection.Visibility=text||kind==ScorebugElementKind.Html?Visibility.Visible:Visibility.Collapsed;
         // Type is typography: a logo, shape or video has no text to set a face, weight or colour on.
         FontSection.Visibility=text?Visibility.Visible:Visibility.Collapsed;
-        // Rotation is a text property in the studio; shapes and media can still carry a saved
-        // angle on their host, but the text block owns the editable control.
-        TransformSection.Visibility=text?Visibility.Visible:Visibility.Collapsed;
+        // Every kind of element can be turned: text rotates its glyphs, while a logo, image, shape
+        // or video turns its whole box. Hiding this for a logo made it look like rotation was
+        // missing from the studio altogether.
+        TransformSection.Visibility=any?Visibility.Visible:Visibility.Collapsed;
         LogoSection.Visibility=kind==ScorebugElementKind.Logo?Visibility.Visible:Visibility.Collapsed;
         PlayerPhotoSection.Visibility=kind==ScorebugElementKind.Image?Visibility.Visible:Visibility.Collapsed;
         LayoutSection.Visibility=kind==ScorebugElementKind.Layout?Visibility.Visible:Visibility.Collapsed;
         NestedSectionTitle.Text="LIVE LAYOUT";
         ShapePanel.Visibility=kind==ScorebugElementKind.Shape?Visibility.Visible:Visibility.Collapsed;
         var rectangleShape=kind==ScorebugElementKind.Shape&&e?.Shape==ScorebugShape.Rectangle;
-        CornerRadiusLabel.Visibility=rectangleShape?Visibility.Visible:Visibility.Collapsed;
-        CornerRadiusInput.Visibility=rectangleShape?Visibility.Visible:Visibility.Collapsed;
+        RoundedCornersInput.Visibility=rectangleShape?Visibility.Visible:Visibility.Collapsed;
+        var roundedCorners=rectangleShape&&RoundedCornersInput.IsChecked==true;
+        CornerRadiusLabel.Visibility=roundedCorners?Visibility.Visible:Visibility.Collapsed;
+        CornerRadiusInput.Visibility=roundedCorners?Visibility.Visible:Visibility.Collapsed;
         VideoPanel.Visibility=kind==ScorebugElementKind.Video?Visibility.Visible:Visibility.Collapsed;
         TickerSection.Visibility=text?Visibility.Visible:Visibility.Collapsed;
         // Speed and direction only mean something once the text is actually a ticker. Keeping
@@ -1845,10 +1862,12 @@ public partial class ScorebugEditorWindow : Window
         IconVisitorsInput.Content=countedIcon?"Count the visitors' timeouts":"Mark the visitors' plate";
         IconScalePanel.Visibility=text&&countedIcon?Visibility.Visible:Visibility.Collapsed;
         IconVerticalInput.Visibility=text&&icon==ScorebugIcon.TimeoutBars?Visibility.Visible:Visibility.Collapsed;
+        IconRoundedInput.Visibility=text&&icon==ScorebugIcon.TimeoutBars?Visibility.Visible:Visibility.Collapsed;
         IconFlipInput.Visibility=text&&icon is ScorebugIcon.PossessionDot or ScorebugIcon.PossessionArrow?Visibility.Visible:Visibility.Collapsed;
         IconRotationPanel.Visibility=text&&icon!=ScorebugIcon.None?Visibility.Visible:Visibility.Collapsed;
         IconLookPanel.Visibility=text&&icon!=ScorebugIcon.None?Visibility.Visible:Visibility.Collapsed;
-        IconUsedPanel.Visibility=text&&countedIcon?Visibility.Visible:Visibility.Collapsed;
+        // A used timeout now leaves the row, so there is no used-timeout colour to choose.
+        IconUsedPanel.Visibility=Visibility.Collapsed;
         // Only show the extra tuning that the chosen crossings actually use. A plain fade does
         // not need a shrink amount or a jump height on screen.
         // Read the pickers, not just the model: the moment a special crossing is chosen the
@@ -2015,6 +2034,18 @@ public partial class ScorebugEditorWindow : Window
                 TransitionDownSpeedInput.Text=ScorebugElement.ReadableSpecialTransitionSeconds.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture);
             SaveProperties();UpdatePropertyVisibility();RefreshAllVisuals();return;
         }
+        if(sender==RoundedCornersInput)
+        {
+            // The checkbox is the friendly switch; the radius field still holds the exact value.
+            // Setting its text here keeps one save path and lets the operator fine-tune afterwards.
+            var was=_loading; _loading=true;
+            try { CornerRadiusInput.Text=RoundedCornersInput.IsChecked==true?"8":"0"; }
+            finally { _loading=was; }
+            SaveProperties();
+            UpdatePropertyVisibility();
+            RefreshAllVisuals();
+            return;
+        }
         if(sender is ComboBox)
         {
             // The two special presets are much bigger movements than a fade or slide. Leaving
@@ -2030,6 +2061,7 @@ public partial class ScorebugEditorWindow : Window
             // Choosing a different icon changes which properties exist (a diamond has a base fill)
             // and whether the fill colour can be typed, so the panel is repainted with it.
             if(sender==IconInput){UpdatePropertyVisibility();UpdateColorAvailability();RefreshColorSwatches();}
+            if(sender==ShapeInput)UpdatePropertyVisibility();
             if(sender==TransitionInput)UpdatePropertyVisibility();
             Render(); return;
         }
@@ -2131,7 +2163,10 @@ public partial class ScorebugEditorWindow : Window
         var transitionClip=TransitionInput.SelectedItem as MotionClipChoice;
         var shape=ShapeInput.SelectedItem is ScorebugShape s?(ScorebugShape?)s:null;
         var cornerRadiusOk=double.TryParse(CornerRadiusInput.Text,out var cornerRadiusRaw);
-        var cornerRadius=Math.Clamp(cornerRadiusOk?cornerRadiusRaw:8,0,200);
+        // Unticking Rounded corners gives a hard rectangle; ticking it restores a soft 8 px edge
+        // unless a radius was typed.
+        var roundedCorners=RoundedCornersInput.IsChecked==true;
+        var cornerRadius=roundedCorners?Math.Clamp(cornerRadiusOk&&cornerRadiusRaw>0?cornerRadiusRaw:8,0,200):0;
         var visible=VisibleInput.IsChecked==true; var transparent=TransparentBackgroundInput.IsChecked==true;
         var mediaTag=MediaTagInput.Text.Trim();
         var preserveAspect=PreserveAspectInput.IsChecked==true;
@@ -2181,6 +2216,7 @@ public partial class ScorebugEditorWindow : Window
         var iconRotationOk=double.TryParse(IconRotationInput.Text,out var iconRotation);
         iconRotation=Math.Clamp(iconRotationOk?iconRotation:0,-360,360);
         var iconVertical=IconVerticalInput.IsChecked==true;
+        var iconRounded=IconRoundedInput.IsChecked==true;
         var iconScaleOk=double.TryParse(IconScaleInput.Text,out var iconScale);
         iconScale=Math.Clamp(iconScaleOk?iconScale:1,0.25,3);
         var iconBorderWidthOk=double.TryParse(IconBorderWidthInput.Text,out var iconBorderWidthRaw);
@@ -2229,14 +2265,15 @@ public partial class ScorebugEditorWindow : Window
             &&(transitionClip is not null
                 ? string.Equals(item.MotionTransition?.Id,transitionClip.Clip.Id,StringComparison.OrdinalIgnoreCase)
                 : (transition is null||item.MotionTransition is null))
-            &&(shape is null||item.Shape==shape)&&(!cornerRadiusOk||Math.Abs(item.CornerRadius-cornerRadius)<0.001)
+            &&(shape is null||item.Shape==shape)
+            &&(item.Kind!=ScorebugElementKind.Shape||item.Shape!=ScorebugShape.Rectangle||Math.Abs(item.CornerRadius-cornerRadius)<0.001)
             &&item.Visible==visible&&item.TransparentBackground==transparent
             &&item.MediaTag==mediaTag&&(periodFormat is null||item.PeriodFormat==periodFormat)
             &&item.DownCaps==downCaps&&item.PlayClockColon==playClockColon&&item.PlayClockLeadingZero==playClockLeadingZero&&item.GameClockLeadingZero==gameClockLeadingZero&&item.ClockDecimals==clockDecimals&&item.RecordIncludesDivision==recordDivision
             &&(!transitionShrinkOk||Math.Abs(item.TransitionShrink-transitionShrink)<0.001)
             &&(!transitionJumpOk||Math.Abs(item.TransitionJumpHeight-transitionJump)<0.001)
             &&item.TransitionJumpDirection==transitionJumpDirection
-            &&(icon is null||item.Icon==icon)&&item.IconVisitors==iconVisitors&&item.IconFlipped==iconFlipped&&(!iconRotationOk||Math.Abs(item.IconRotation-iconRotation)<0.001)&&item.IconVertical==iconVertical
+            &&(icon is null||item.Icon==icon)&&item.IconVisitors==iconVisitors&&item.IconFlipped==iconFlipped&&(!iconRotationOk||Math.Abs(item.IconRotation-iconRotation)<0.001)&&item.IconVertical==iconVertical&&item.IconRounded==iconRounded
             &&(!iconBorderWidthOk||Math.Abs(item.IconBorderThickness-iconBorderWidth)<0.001)
             &&(!iconBorderColorOk||string.Equals(item.IconBorderColor,iconBorderColor,StringComparison.OrdinalIgnoreCase))
             &&(!iconBackgroundOk||string.Equals(item.IconBackground,iconBackground,StringComparison.OrdinalIgnoreCase))
@@ -2296,7 +2333,7 @@ public partial class ScorebugEditorWindow : Window
             Group(t=>t.MotionTransition=transitionClip.Clip.Snapshot());
         else if(transition is not null&&item.Transition!=transition)Group(t=>{t.Transition=transition.Value;t.MotionTransition=null;});
         if(shape is not null&&item.Shape!=shape)Group(t=>t.Shape=shape.Value);
-        if(cornerRadiusOk&&Math.Abs(item.CornerRadius-cornerRadius)>0.001)
+        if(Math.Abs(item.CornerRadius-cornerRadius)>0.001)
             Group(t=>{if(t.Kind==ScorebugElementKind.Shape&&t.Shape==ScorebugShape.Rectangle)t.CornerRadius=cornerRadius;});
         if(item.Visible!=visible)Group(t=>t.Visible=visible);
         if(item.Ticker!=ticker)Group(t=>{if(t.Kind==ScorebugElementKind.Text)t.Ticker=ticker;});
@@ -2330,6 +2367,7 @@ public partial class ScorebugEditorWindow : Window
         if(item.IconFlipped!=iconFlipped)Group(t=>t.IconFlipped=iconFlipped);
         if(iconRotationOk&&Math.Abs(item.IconRotation-iconRotation)>0.001)Group(t=>t.IconRotation=iconRotation);
         if(item.IconVertical!=iconVertical&&item.Kind==ScorebugElementKind.Text)Group(t=>t.IconVertical=iconVertical);
+        if(item.IconRounded!=iconRounded&&item.Kind==ScorebugElementKind.Text)Group(t=>t.IconRounded=iconRounded);
         if(iconBorderWidthOk&&Math.Abs(item.IconBorderThickness-iconBorderWidth)>0.001)Group(t=>t.IconBorderThickness=iconBorderWidth);
         if(iconBorderColorOk&&!string.Equals(item.IconBorderColor,iconBorderColor,StringComparison.OrdinalIgnoreCase))Group(t=>t.IconBorderColor=iconBorderColor);
         if(iconBackgroundOk&&!string.Equals(item.IconBackground,iconBackground,StringComparison.OrdinalIgnoreCase))Group(t=>t.IconBackground=iconBackground);
@@ -2461,6 +2499,7 @@ public partial class ScorebugEditorWindow : Window
                 // This was only written through the group-edit list, so a single selected timeout
                 // element appeared to accept the vertical option and then lost it on the next move.
                 target.IconVertical=iconVertical;
+                target.IconRounded=iconRounded;
                 target.IconToken=iconToken;
                 if(iconBorderWidthOk)target.IconBorderThickness=iconBorderWidth;
                 if(iconBorderColorOk)target.IconBorderColor=iconBorderColor;
@@ -2509,8 +2548,17 @@ public partial class ScorebugEditorWindow : Window
         // Typing {{DOWNS}} or {{PLAY_CLOCK}} changes which per-element options apply. The text
         // handler sees the old model value, so refresh the panel again after the save lands.
         UpdatePropertyVisibility();
+        // The layer list is not rebuilt for an in-place property save, so a rename has to refresh
+        // the rows itself; otherwise the old name stays on screen until the next move or reorder.
+        RefreshLayerLabels();
         if(preserveAspect&&aspectOk) SyncSizeBoxes();
         if(artworkChanged)Render();
+    }
+
+    /// <summary>Repaints every layer row's bound text and glyph after an in-place edit.</summary>
+    void RefreshLayerLabels()
+    {
+        foreach(var row in Layers.Items.OfType<LayerItem>())row.Refresh();
     }
 
     /// <summary>Shows the fitted box dimensions after Preserve aspect resizes the element.</summary>
@@ -3076,8 +3124,10 @@ public partial class ScorebugEditorWindow : Window
         var add=new Button{Content="Add shape",IsDefault=true,HorizontalAlignment=HorizontalAlignment.Right};
         add.Click+=(_,_)=>{
             var kind=(ScorebugShape)(shape.SelectedItem??ScorebugShape.Rectangle);
+            var line=kind==ScorebugShape.Line;
             var wide=kind is ScorebugShape.Rectangle or ScorebugShape.Parallelogram;
-            Add(new ScorebugElement{Name=$"New {kind.ToString().ToLowerInvariant()}",Kind=ScorebugElementKind.Shape,Shape=kind,Content="",X=450,Y=470,Width=wide?200:140,Height=wide?100:140,TransparentBackground=true,BorderThickness=2});
+            Add(new ScorebugElement{Name=$"New {kind.ToString().ToLowerInvariant()}",Kind=ScorebugElementKind.Shape,Shape=kind,Content="",X=450,Y=470,
+                Width=line?260:wide?200:140,Height=line?24:wide?100:140,TransparentBackground=true,BorderThickness=line?4:2});
             picker.DialogResult=true; picker.Close();
         };
         panel.Children.Add(shape); panel.Children.Add(add); picker.Content=panel; ThemeManager.Apply(picker,_theme); picker.ShowDialog();
@@ -4556,10 +4606,21 @@ public partial class ScorebugEditorWindow : Window
         _catalog.Update(layout=>{var moved=layout.Elements[from];layout.Elements.RemoveAt(from);layout.Elements.Insert(to,moved);});
     }
 
-    sealed class LayerItem
+    sealed class LayerItem : INotifyPropertyChanged
     {
         public LayerItem(ScorebugElement element)=>Element=element;
         public ScorebugElement Element { get; }
+        public event PropertyChangedEventHandler? PropertyChanged;
+        /// <summary>Re-reads the element into the row. The list is not rebuilt for a property
+        /// save, so without this a rename (or a visibility change) kept the old text on screen.</summary>
+        public void Refresh()
+        {
+            PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(Label)));
+            PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(Glyph)));
+            PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(KindLabel)));
+            PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(LockGlyph)));
+            PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(nameof(LockTip)));
+        }
         public string Glyph => !Element.Visible ? "○" : Element.Kind switch
         {
             ScorebugElementKind.Logo => "▣",

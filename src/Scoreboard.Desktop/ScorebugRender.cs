@@ -67,10 +67,31 @@ internal static class ScorebugRender
     /// instead of only showing its studio placeholder.</summary>
     public static Brush HostBackground(ScorebugElement item, GameState? state = null)
     {
+        // A shape paints its own silhouette, not the rectangular box around it: its fill is built
+        // by ShapeFill below. Painting the host as well drew a square block behind a circle or a
+        // triangle, and made a gradient look like it had not reached the shape at all.
+        if (item.Kind == ScorebugElementKind.Shape) return Brushes.Transparent;
         var platePaint = HasPlatePaint(item);
         if (item.TransparentBackground && !platePaint) return Brushes.Transparent;
-        if (item.Kind is ScorebugElementKind.Shape or ScorebugElementKind.Logo
+        if (item.Kind == ScorebugElementKind.Logo
             && item.BackgroundSource == ScorebugColorSource.Custom
+            && string.Equals(item.Background, "#CC141D28", StringComparison.OrdinalIgnoreCase)
+            && !platePaint)
+            return Brushes.Transparent;
+        return BackgroundBrush(item, state);
+    }
+
+    /// <summary>
+    /// The paint inside a shape's outline. A line has no inside, and a transparent shape with no
+    /// explicit paint has no fill; anything else uses the same plate brush as the paint window, so
+    /// gradients and materials land on the circle, triangle or rectangle itself.
+    /// </summary>
+    public static Brush ShapeFill(ScorebugElement item, GameState? state = null)
+    {
+        if (item.Kind != ScorebugElementKind.Shape || item.Shape == ScorebugShape.Line) return Brushes.Transparent;
+        var platePaint = HasPlatePaint(item);
+        if (item.TransparentBackground && !platePaint) return Brushes.Transparent;
+        if (item.BackgroundSource == ScorebugColorSource.Custom
             && string.Equals(item.Background, "#CC141D28", StringComparison.OrdinalIgnoreCase)
             && !platePaint)
             return Brushes.Transparent;
@@ -189,6 +210,7 @@ internal static class ScorebugRender
                 Points = new PointCollection { new(0.24, 0), new(1, 0), new(0.76, 1), new(0, 1) },
                 StrokeLineJoin = PenLineJoin.Round
             },
+            ScorebugShape.Line => CreateLine(item),
             _ => new Rectangle
             {
                 RadiusX = Math.Max(0, item.CornerRadius),
@@ -197,8 +219,8 @@ internal static class ScorebugRender
         };
         shape.Stretch = Stretch.Fill;
         // A transparent shape has no flat fill, only its outline — unless an explicit gradient or
-        // material paint was chosen, in which case that artwork is the fill.
-        shape.Fill = HostBackground(item, state);
+        // material paint was chosen, in which case that artwork fills the silhouette itself.
+        shape.Fill = ShapeFill(item, state);
         shape.Stroke = HostBorder(item, state);
         shape.StrokeThickness = Math.Max(0, item.BorderThickness);
         shape.StrokeStartLineCap = PenLineCap.Round;
@@ -208,6 +230,30 @@ internal static class ScorebugRender
         shape.SnapsToDevicePixels = false;
         shape.UseLayoutRounding = false;
         return shape;
+    }
+
+    /// <summary>A straight line: horizontal while its box is wider than it is tall, vertical once
+    /// the box is taller than it is wide. One shape covers both, so a designer drags its corner
+    /// instead of choosing a separate horizontal and vertical line.</summary>
+    static Line CreateLine(ScorebugElement item)
+    {
+        var line = new Line
+        {
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            SnapsToDevicePixels = false
+        };
+        ApplyLineDirection(line, item);
+        return line;
+    }
+
+    static void ApplyLineDirection(Line line, ScorebugElement item)
+    {
+        var vertical = item.Height > item.Width;
+        line.X1 = vertical ? 0.5 : 0;
+        line.Y1 = vertical ? 0 : 0.5;
+        line.X2 = vertical ? 0.5 : 1;
+        line.Y2 = vertical ? 1 : 0.5;
     }
 
     /// <summary>Applies text, colour, font and style to whatever content an element created.</summary>
@@ -228,13 +274,18 @@ internal static class ScorebugRender
             case TextBlock plain:
                 plain.Text = text ?? item.Content;
                 break;
+            case Line line:
+                ApplyLineDirection(line, item);
+                line.Stroke = HostBorder(item, state);
+                line.StrokeThickness = Math.Max(0, item.BorderThickness);
+                break;
             case Shape shape:
                 if (shape is Rectangle rounded)
                 {
                     rounded.RadiusX = Math.Max(0, item.CornerRadius);
                     rounded.RadiusY = Math.Max(0, item.CornerRadius);
                 }
-                shape.Fill = HostBackground(item, state);
+                shape.Fill = ShapeFill(item, state);
                 shape.Stroke = HostBorder(item, state);
                 shape.StrokeThickness = Math.Max(0, item.BorderThickness);
                 break;
@@ -1062,8 +1113,30 @@ public sealed class ScorebugTextBlock : TextBlock
         ApplyStyle(item, null);
     }
 
+    bool _fittingTeamName;
+
+    static ScorebugTextBlock()
+    {
+        // TextBlock seals OnPropertyChanged, so the fit runs from the Text property itself. The
+        // callback also covers values set by a transition or a binding, not just UpdateText.
+        TextProperty.OverrideMetadata(typeof(ScorebugTextBlock),
+            new FrameworkPropertyMetadata(string.Empty,
+                FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
+                (target, _) => ((ScorebugTextBlock)target).FitTeamName()));
+    }
+
+    // Team-name elements are a single line on the graphic. Letting a long name wrap made the
+    // second line spill below its own plate and disappear under the score beside it, which read
+    // as the text being clipped by the background.
+    bool IsTeamName => _style is { } style
+        && !style.Content.Contains('\n') && !style.Content.Contains('\r')
+        && (style.Content.Contains("{{HOME_TEAM}}", StringComparison.OrdinalIgnoreCase)
+            || style.Content.Contains("{{AWAY_TEAM}}", StringComparison.OrdinalIgnoreCase));
+
     public void ApplyStyle(ScorebugElement item, GameState? state)
     {
+        _style = item;
+        var teamName = IsTeamName;
         FontFamily = FontCatalog.Resolve(item.FontFamily);
         FontSize = item.FontSize;
         FontWeight = item.Bold ? FontWeights.Bold : FontWeights.Normal;
@@ -1086,6 +1159,7 @@ public sealed class ScorebugTextBlock : TextBlock
             ScorebugTextAlign.Right => System.Windows.TextAlignment.Right,
             _ => System.Windows.TextAlignment.Center
         };
+        TextWrapping = teamName ? TextWrapping.NoWrap : TextWrapping.Wrap;
         HorizontalAlignment = item.TextAlign == ScorebugTextAlign.Center
             ? System.Windows.HorizontalAlignment.Center
             : System.Windows.HorizontalAlignment.Stretch;
@@ -1107,7 +1181,52 @@ public sealed class ScorebugTextBlock : TextBlock
             };
         }
         else Effect = null;
-        _style = item;
+        FitTeamName();
+    }
+
+    /// <summary>
+    /// Shrinks a team name just enough to stay on one line inside its plate. A short name keeps
+    /// its designed size; a long name gives up a little point size instead of wrapping under the
+    /// next layer.
+    /// </summary>
+    void FitTeamName()
+    {
+        if (_fittingTeamName || _style is not { } style || !IsTeamName) return;
+        var baseSize = Math.Max(1, style.FontSize);
+        var text = Text ?? "";
+        if (text.Length == 0)
+        {
+            SetFittedFont(baseSize);
+            return;
+        }
+        try
+        {
+            var typeface = new Typeface(FontFamily, FontStyle, FontWeight, FontStretch);
+            var formatted = new FormattedText(text, System.Globalization.CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight, typeface, baseSize, Brushes.White,
+                VisualTreeHelper.GetDpi(this).PixelsPerDip)
+            {
+                MaxTextWidth = 100000,
+                Trimming = TextTrimming.None
+            };
+            var width = Math.Max(1, style.Width - 4);
+            var height = Math.Max(1, style.Height - 2);
+            var scale = Math.Min(1, Math.Min(width / Math.Max(0.01, formatted.Width),
+                height / Math.Max(0.01, formatted.Height)));
+            SetFittedFont(Math.Max(6, baseSize * scale));
+        }
+        catch
+        {
+            SetFittedFont(baseSize);
+        }
+    }
+
+    void SetFittedFont(double size)
+    {
+        if (Math.Abs(FontSize - size) <= 0.01) return;
+        _fittingTeamName = true;
+        try { FontSize = size; }
+        finally { _fittingTeamName = false; }
     }
 
     /// <summary>Shows a new value, crossing to it with the element's chosen animation.</summary>
@@ -2227,9 +2346,14 @@ public sealed class ScorebugIconView : Grid
                 remaining = Math.Clamp(_item.IconVisitors ? state.AwayTimeouts : state.HomeTimeouts, 0, 12);
                 limit = _item.IconVisitors ? state.AwayTimeoutLimit : state.HomeTimeoutLimit;
             }
-            var count = Math.Clamp(Math.Max(remaining, limit), 0, 12);
+            // A used timeout leaves the graphic instead of sitting there in a different colour. Only
+            // what is left is drawn, and the row is anchored to the right (or the bottom), so the
+            // timeouts disappear from the left to the right in the order they were used.
+            var count = Math.Clamp(remaining, 0, 12);
             var vertical = Icon == ScorebugIcon.TimeoutBars && _item.IconVertical;
             _bars.Orientation = vertical ? Orientation.Vertical : Orientation.Horizontal;
+            _bars.HorizontalAlignment = vertical ? HorizontalAlignment.Center : HorizontalAlignment.Right;
+            _bars.VerticalAlignment = vertical ? VerticalAlignment.Bottom : VerticalAlignment.Center;
             if (count == 0)
             {
                 _bars.Children.Clear();
@@ -2241,7 +2365,10 @@ public sealed class ScorebugIconView : Grid
             // The slot is the whole side divided by the count. A bar fills nearly the whole slot, so
             // resizing the element vertically makes a vertical stack taller instead of leaving the
             // old 18 px cap behind. Horizontal bars take their thickness from the element's height.
-            var slot = (vertical ? Math.Max(1, _item.Height) : Math.Max(1, _item.Width)) / Math.Max(1, count);
+            // The slot is the full allotment, not what is left: a bar keeps its size while the
+            // others disappear, exactly like a row of used-timeout pips.
+            var slots = Math.Max(1, Math.Max(remaining, limit));
+            var slot = (vertical ? Math.Max(1, _item.Height) : Math.Max(1, _item.Width)) / slots;
             var gap = Math.Max(1, slot * 0.16);
             var width = vertical
                 ? Math.Clamp(Math.Max(1, _item.Width) * 0.62 * scale, 2, Math.Max(2, _item.Width))
@@ -2249,50 +2376,46 @@ public sealed class ScorebugIconView : Grid
             var thickness = vertical
                 ? Math.Clamp(slot - gap, 2, 400)
                 : Math.Clamp(Math.Max(1, _item.Height) * 0.28 * scale, 2, Math.Max(2, _item.Height));
-            var usedBrush = ScorebugRender.ParseBrush(string.IsNullOrWhiteSpace(_item.IconUsedColor) ? "#FF9AA5B2" : _item.IconUsedColor);
+            var barBrush = ScorebugRender.ParseBrush(foreground);
+            var corner = _item.IconRounded ? thickness / 2 : 0;
             if (_bars.Children.Count != count)
             {
                 _bars.Children.Clear();
                 var animate = Animates;
                 for (var i = 0; i < count; i++)
                 {
-                    var fill = i < remaining ? ScorebugRender.ParseBrush(foreground) : usedBrush;
-                    // Bars are rounded lines; the dots variant is the same row of round pips.
+                    // Bars can have round or square ends; the dots variant is a row of round pips.
                     Shape bar = Icon == ScorebugIcon.TimeoutDots
-                        ? new Ellipse { Width = width, Height = width, Fill = fill }
+                        ? new Ellipse { Width = width, Height = width, Fill = barBrush }
                         : new Rectangle
                         {
                             Width = width,
                             Height = thickness,
-                            RadiusX = thickness / 2,
-                            RadiusY = thickness / 2,
-                            Fill = fill
+                            RadiusX = corner,
+                            RadiusY = corner,
+                            Fill = barBrush
                         };
                     bar.Margin = vertical
                         ? new Thickness(0, gap / 2, 0, gap / 2)
                         : new Thickness(gap / 2, 0, gap / 2, 0);
                     _bars.Children.Add(bar);
-                    // A timeout being used keeps its place but turns grey, so the row still reads as
-                    // the full allotment instead of shrinking every time a timeout is taken.
                     if (animate) AnimateIn(bar);
                 }
                 _appliedForeground = foreground;
             }
             else
             {
-                // A size, colour or used-timeout change updates the existing bars in place instead of
+                // A size, colour or corner change updates the existing bars in place instead of
                 // rebuilding them, so the row never flickers while the slider moves.
-                var brush = ScorebugRender.ParseBrush(foreground);
-                var index = 0;
                 foreach (var child in _bars.Children.OfType<Shape>())
                 {
                     child.Width = width;
                     child.Height = Icon == ScorebugIcon.TimeoutDots ? width : thickness;
-                    if (child is Rectangle rounded) { rounded.RadiusX = thickness / 2; rounded.RadiusY = thickness / 2; }
+                    if (child is Rectangle rounded) { rounded.RadiusX = corner; rounded.RadiusY = corner; }
                     child.Margin = vertical
                         ? new Thickness(0, gap / 2, 0, gap / 2)
                         : new Thickness(gap / 2, 0, gap / 2, 0);
-                    child.Fill = index++ < remaining ? brush : usedBrush;
+                    child.Fill = barBrush;
                 }
                 _appliedForeground = foreground;
             }
