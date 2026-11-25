@@ -31,8 +31,6 @@ public partial class LiveChannelWindow : Window
     bool _refreshing;
 
     sealed record EventRow(string Time, string Text);
-    sealed record OverlayChoice(string LayoutId, string Label) { public override string ToString() => Label; }
-
     static readonly (string Background, string Border, string Foreground)[] TileColours =
     [
         ("#1D3C50", "#3D8FB8", "#BFE7FA"), ("#2C2440", "#8A6BC8", "#D9C9FF"),
@@ -121,13 +119,15 @@ public partial class LiveChannelWindow : Window
                     string.Equals(candidate.Id, _viewLayoutId, StringComparison.OrdinalIgnoreCase)) ?? publishedLayout;
             var live = channel is null && layout is not null && publishedLayout is not null
                 && string.Equals(layout.Id, publishedLayout.Id, StringComparison.OrdinalIgnoreCase);
-            ChannelName.Text = channel is null ? display.Name.ToUpperInvariant() : $"{channel.Name.ToUpperInvariant()} · CHANNEL";
+            ChannelName.Text = channel is null
+                ? display.Name.ToUpperInvariant()
+                : $"{channel.Name.ToUpperInvariant()} · {display.Name.ToUpperInvariant()}";
             ChannelName.ToolTip = ChannelName.Text;
             ChannelName.MaxWidth = 340;
             NowPlayingText.Text = layout is null
-                ? (channel is null ? "No layout on air" : "No layout assigned to this channel")
+                ? "No layout on air"
                 : $"{layout.Name} · {layout.Width} × {layout.Height}"
-                    + (live ? " · ON AIR" : channel is not null ? " · CHANNEL OVERLAY" : " · MONITOR ONLY");
+                    + (channel is not null || live ? " · ON AIR" : " · MONITOR ONLY");
             OnAirText.Text = channel is not null ? "● CHANNEL" : live ? "● ON AIR" : "● MONITOR";
             OnAirBadge.Background = new SolidColorBrush(channel is not null ? Color.FromRgb(0x17, 0x34, 0x3A)
                 : live ? Color.FromRgb(0x3A, 0x17, 0x17) : Color.FromRgb(0x3A, 0x2E, 0x17));
@@ -146,7 +146,6 @@ public partial class LiveChannelWindow : Window
                 ChannelHost.Content = _channelView;
             }
             BuildOutputStrip();
-            BuildChannelOverlay(channel);
             LayoutMonitorsLabel.Text = channel is null
                 ? "LAYOUT MONITORS · CLICK TO VIEW · RIGHT-CLICK FOR COLOUR"
                 : "DISPLAY LAYOUTS · CLICK TO VIEW · RIGHT-CLICK FOR COLOUR";
@@ -194,7 +193,7 @@ public partial class LiveChannelWindow : Window
             var layout = display.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0, Math.Max(0, display.Layouts.Count - 1)));
             var tile = new Button
             {
-                Width = 168, Height = 126, Padding = new Thickness(3), Margin = new Thickness(0, 0, 6, 0),
+                Width = 168, Padding = new Thickness(3), Margin = new Thickness(0, 0, 6, 0),
                 Background = Brushes.Transparent, Cursor = System.Windows.Input.Cursors.Hand,
                 BorderThickness = new Thickness(selected ? 2 : 1),
                 BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(0x38, 0xD7, 0xA3) : Color.FromRgb(0x2E, 0x3B, 0x4A)),
@@ -233,7 +232,7 @@ public partial class LiveChannelWindow : Window
         {
             OutputStrip.Children.Add(new Border
             {
-                Width = 1, Height = 94, Margin = new Thickness(2, 7, 8, 0),
+                Width = 1, Height = 110, Margin = new Thickness(2, 7, 8, 0),
                 Background = new SolidColorBrush(Color.FromRgb(0x2E, 0x3B, 0x4A))
             });
             foreach (var channel in _venue.State.Channels)
@@ -248,13 +247,13 @@ public partial class LiveChannelWindow : Window
         var selected = string.Equals(_viewChannelId, channel.Id, StringComparison.OrdinalIgnoreCase);
         var tile = new Button
         {
-            Width = 168, Height = 126, Padding = new Thickness(3), Margin = new Thickness(0, 0, 6, 0),
+            Width = 168, Padding = new Thickness(3), Margin = new Thickness(0, 0, 6, 0),
             Background = Brushes.Transparent, Cursor = System.Windows.Input.Cursors.Hand,
             BorderThickness = new Thickness(selected ? 2 : 1),
             BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(0x7F, 0xD1, 0xFF) : Color.FromRgb(0x2E, 0x3B, 0x4A)),
             Opacity = channel.Enabled ? 1 : 0.55,
             Tag = channel.Id,
-            ToolTip = $"{channel.Name}\n{layout?.Name ?? "no layout"} · CAM {channel.CameraIndex}\nView only — this never changes the output"
+            ToolTip = $"{channel.Name}\n{display?.Name ?? "no display"} · {layout?.Name ?? "no layout"} · CAM {channel.CameraIndex}\nFollows the display; this never changes the output"
         };
         ThemeManager.SetSkipTheme(tile, true);
         var stack = new StackPanel();
@@ -276,9 +275,9 @@ public partial class LiveChannelWindow : Window
         });
         stack.Children.Add(new TextBlock
         {
-            // The channel's current layout belongs on the tile. It used to show only the display
-            // and camera, so a channel following its display looked as if it had no layout at all.
-            Text = $"{layout?.Name ?? "No layout"} · CAM {channel.CameraIndex} · {(channel.Enabled ? "ENABLED" : "OFF")}",
+            // A channel is a display mirror: it names the display it follows, then that display's
+            // on-air layout. An empty or stale overlay id is ignored deliberately.
+            Text = $"{display?.Name ?? "No display"} · {layout?.Name ?? "No layout"} · CAM {channel.CameraIndex} · {(channel.Enabled ? "ENABLED" : "OFF")}",
             FontSize = 8, Margin = new Thickness(2, 1, 2, 0), TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = new SolidColorBrush(selected ? Color.FromRgb(0x8D, 0xEB, 0xCB) : Color.FromRgb(0x5C, 0x6B, 0x7E))
         });
@@ -404,20 +403,11 @@ public partial class LiveChannelWindow : Window
 
     ScorebugLayout? ChannelLayout(VenueChannel channel)
     {
-        var display = _catalog.FindDisplay(channel.DisplayId);
-        // An explicit overlay only counts when it belongs to the display the channel was pointed
-        // at. A stale layout id from a previous display made "Follow display output" keep showing
-        // the old graphic; following the display is now the reliable default.
-        if (display is not null && !string.IsNullOrWhiteSpace(channel.LayoutId))
-        {
-            var pinned = display.Layouts.FirstOrDefault(layout =>
-                string.Equals(layout.Id, channel.LayoutId, StringComparison.OrdinalIgnoreCase));
-            if (pinned is not null) return pinned;
-        }
-        if (display is not null)
-            return display.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0,
-                Math.Max(0, display.Layouts.Count - 1)));
-        return _catalog.FindLayout(channel.LayoutId);
+        // A channel shows a display, nothing different. It follows the display's published layout
+        // and never keeps a private overlay, so a stale LayoutId cannot leave it looking unassigned.
+        var display = _catalog.FindDisplay(channel.DisplayId) ?? _catalog.ActiveDisplay;
+        return display.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0,
+            Math.Max(0, display.Layouts.Count - 1)));
     }
 
     IReadOnlyList<ChannelHealth> BuildStreamHealth()
@@ -527,56 +517,6 @@ public partial class LiveChannelWindow : Window
             return output.ToArray();
         }
         catch { return []; }
-    }
-
-    void BuildChannelOverlay(VenueChannel? channel)
-    {
-        ChannelOverlayPanel.Children.Clear();
-        if (channel is null)
-        {
-            ChannelOverlayPanel.Visibility = Visibility.Collapsed;
-            return;
-        }
-        ChannelOverlayPanel.Visibility = Visibility.Visible;
-        ChannelOverlayPanel.Children.Add(new TextBlock
-        {
-            Text = "CHANNEL OVERLAY", FontSize = 9, FontWeight = FontWeights.Bold,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E)), Margin = new Thickness(1, 0, 1, 4)
-        });
-        var choices = new List<OverlayChoice> { new("", "Follow this display's on-air layout") };
-        foreach (var display in _catalog.Displays)
-            foreach (var layout in display.Layouts)
-                choices.Add(new OverlayChoice(layout.Id, $"{display.Name} · {layout.Name}"));
-        var selected = choices.FirstOrDefault(choice =>
-            string.Equals(choice.LayoutId, channel.LayoutId, StringComparison.OrdinalIgnoreCase));
-        if (selected is null && !string.IsNullOrWhiteSpace(channel.LayoutId))
-        {
-            selected = new OverlayChoice(channel.LayoutId, "Missing layout · choose another");
-            choices.Insert(1, selected);
-        }
-        var box = new ComboBox
-        {
-            ItemsSource = choices, DisplayMemberPath = nameof(OverlayChoice.Label),
-            SelectedItem = selected ?? choices[0], MinHeight = 30, Margin = new Thickness(0, 0, 0, 3),
-            ToolTip = "Switch this channel's overlay. This does not change any display's on-air layout."
-        };
-        box.SelectionChanged += (_, _) =>
-        {
-            if (_refreshing || box.SelectedItem is not OverlayChoice choice) return;
-            var layoutId = choice.LayoutId.Trim();
-            if (string.Equals(channel.LayoutId, layoutId, StringComparison.OrdinalIgnoreCase)) return;
-            channel.LayoutId = layoutId;
-            _venue.Save();
-            _venueSignature = "";
-            Refresh();
-        };
-        ChannelOverlayPanel.Children.Add(box);
-        ChannelOverlayPanel.Children.Add(new TextBlock
-        {
-            Text = "Changes this channel only. Displays keep their own on-air layouts.",
-            FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E)),
-            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(1, 0, 1, 2)
-        });
     }
 
     void BuildActions(ScorebugDisplay display, VenueChannel? channel)

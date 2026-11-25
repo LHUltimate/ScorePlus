@@ -1106,6 +1106,33 @@ internal static class Program
             Pump(TimeSpan.FromMilliseconds(100));
             if (tabShell.Engine.State.GameName != "Friday Night Lights")
                 throw new Exception("FAIL: the game name field did not reach the game state");
+            // A media macro shows its poster above the name and owns two cell rows, so the picture
+            // never squeezes the label out of the green button.
+            var sessionField = typeof(MainWindow).GetField("_session", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("FAIL: the console's media session is missing");
+            var shellSession = sessionField.GetValue(tabShell) as MediaSession
+                ?? throw new Exception("FAIL: the console's media session could not be read");
+            var posterPath = Path.Combine(Path.GetTempPath(), $"smoke-macro-poster-{Guid.NewGuid():N}.png");
+            try
+            {
+                WritePng(posterPath, Color.FromRgb(0x33, 0xAA, 0x66));
+                shellSession.Library.Add(new MediaEntry(posterPath, Name: "Poster clip"));
+                tabShell.Engine.StoreMacros([new SavedMacro
+                {
+                    Label = "Poster macro",
+                    Actions = [new MacroAction { Kind = MacroActionKind.PlayVideo, Path = posterPath, Label = "Poster clip", BypassOutput = true }]
+                }]);
+                macroDock.RefreshView(force: true);
+                tabShell.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(60));
+                var posterCard = FindAll<Border>(macroDock).FirstOrDefault(border =>
+                    border.Tag is SavedMacro macro && macro.Label == "Poster macro");
+                if (posterCard is null || Grid.GetRowSpan(posterCard) != 2
+                    || FindAll<Image>(posterCard).All(image => image.Source is null))
+                    throw new Exception("FAIL: a media macro did not grow a poster above its name");
+                Console.WriteLine("PASS: a media macro carries a two-row poster above its name");
+            }
+            finally { try { if (File.Exists(posterPath)) File.Delete(posterPath); } catch { } }
             showWindow.Close();
             showRoom.Close();
             tabShell.Close();
@@ -6994,6 +7021,12 @@ internal static class Program
             if (!FindAll<TextBlock>(liveClips).Any(text => text.Text.Contains("FILL A", StringComparison.Ordinal))
                 || !FindAll<TextBlock>(liveClips).Any(text => text.Text.Contains("FILL B", StringComparison.Ordinal)))
                 throw new Exception("FAIL: Live Clips has no fill A and fill B channels");
+            if (FindAll<TextBlock>(liveClips).Any(text => text.Text.Contains("Click a thumbnail", StringComparison.Ordinal)
+                    || text.Text.Contains("two fills", StringComparison.Ordinal)))
+                throw new Exception("FAIL: Live Clips still prints its old instructional copy");
+            if (!FindAll<Button>(liveClips).Any(button => (button.Content as string) == "RESUME")
+                || !FindAll<Button>(liveClips).Any(button => (button.Content as string) == "STOP"))
+                throw new Exception("FAIL: Live Clips does not offer both RESUME and STOP");
             liveClips.Close();
             try { File.Delete(clipVenueFile); } catch { }
             clipSession.Dispose();
@@ -7013,13 +7046,21 @@ internal static class Program
             var routePrefs = new UserPreferences();
             var routeSession = new MediaSession(routePrefs);
             routeSession.Library.Add(new MediaEntry(MediaLibrary.CameraPath(0), "Camera", Name: "Smoke camera"));
+            // The house pattern: a camera on Default follows these displays and channels.
+            routePrefs.ProgrammeRoute = new ProgrammeRoute
+            {
+                Displays = [routeDisplayA.Id],
+                Channels = [routeChannelA.Id]
+            };
             routePrefs.CameraRoutes.Add(new CameraRoute
             {
                 CameraIndex = 0,
-                Displays = [routeDisplayA.Id],
-                Channels = [routeChannelA.Id],
+                UseProgrammeDisplays = true,
+                UseProgrammeChannels = true,
                 Tags = ["Ads", "Highlights"]
             });
+            // Two pages worth of slots prove the wall pages like Live Switch.
+            routePrefs.CameraSlots = Enumerable.Repeat(string.Empty, 16).ToList();
             var cameraSwitch = new CameraSwitchWindow(routeSession, routeSession.Playback, smokeCatalog, routeVenue, routePrefs);
             ShowForSmoke(cameraSwitch);
             cameraSwitch.UpdateLayout();
@@ -7028,8 +7069,40 @@ internal static class Program
                 throw new Exception($"FAIL: Camera Switch has {cameraSwitch.MultiviewTileCount} multiview cells instead of 8");
             if (cameraSwitch.Background is not SolidColorBrush cameraBackground || cameraBackground.Color != Color.FromRgb(0x05, 0x05, 0x05))
                 throw new Exception("FAIL: Camera Switch is not on its darker background");
+            if (cameraSwitch.SourceSlots.Count != 16
+                || !string.Equals(cameraSwitch.SourceSlots[0], MediaLibrary.CameraPath(0), StringComparison.OrdinalIgnoreCase))
+                throw new Exception("FAIL: Camera Switch did not place the camera in its first source slot");
+            if (cameraSwitch.PageNumber != 1 || !cameraSwitch.PageLabel.StartsWith("1 / ", StringComparison.Ordinal))
+                throw new Exception($"FAIL: Camera Switch did not page its sixteen slots ({cameraSwitch.PageLabel})");
+            FindAll<Button>(cameraSwitch).First(button => (button.Content as string) == "›")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (cameraSwitch.PageNumber != 2 || !cameraSwitch.PageLabel.StartsWith("2 / ", StringComparison.Ordinal))
+                throw new Exception("FAIL: Camera Switch did not move to its second source page");
+            FindAll<Button>(cameraSwitch).First(button => (button.Content as string) == "‹")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
             if (!FindAll<Button>(cameraSwitch).Any(button => (button.ToolTip as string ?? "").StartsWith("Routing ·", StringComparison.Ordinal)))
                 throw new Exception("FAIL: Camera Switch does not offer a routing control on its camera tiles");
+            // Any slot can be assigned any camera; moving a camera swaps it with the slot it lands on.
+            var slotBoxes = FindAll<ComboBox>(cameraSwitch)
+                .Where(box => box.Items.Cast<object>().Any(item => (item.ToString() ?? "") == "— empty —")).ToList();
+            if (slotBoxes.Count != 8)
+                throw new Exception($"FAIL: Camera Switch lists {slotBoxes.Count} source slots instead of 8");
+            var smokeChoice = slotBoxes[0].Items.Cast<object>()
+                .FirstOrDefault(item => (item.ToString() ?? "").StartsWith("Smoke camera", StringComparison.Ordinal))
+                ?? throw new Exception("FAIL: the source slot picker does not list the smoke camera");
+            slotBoxes[1].SelectedItem = smokeChoice;
+            Pump(TimeSpan.FromMilliseconds(120));
+            // Other capture devices may already own the neighbouring slots on this machine, so only
+            // the chosen slot's camera is asserted; the old occupant swaps to the camera's old slot.
+            if (!string.Equals(cameraSwitch.SourceSlots[1], MediaLibrary.CameraPath(0), StringComparison.OrdinalIgnoreCase))
+                throw new Exception("FAIL: choosing a camera for a source slot did not place it there");
+            FindAll<Button>(cameraSwitch).First(button => (button.Content as string) == "↓")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (!string.Equals(cameraSwitch.SourceSlots[2], MediaLibrary.CameraPath(0), StringComparison.OrdinalIgnoreCase))
+                throw new Exception("FAIL: Camera Switch did not reorder its source slots");
             var smokeTile = FindAll<Button>(cameraSwitch)
                 .FirstOrDefault(button => (button.ToolTip as string ?? "").StartsWith("Smoke camera", StringComparison.Ordinal))
                 ?? throw new Exception("FAIL: the Camera Switch wall has no tile for the smoke camera");
@@ -7060,7 +7133,8 @@ internal static class Program
             // All choice for each group.
             var routeDialog = new CameraRouteWindow(
                 new MediaEntry(MediaLibrary.CameraPath(0), "Camera", Name: "Smoke camera"),
-                new CameraRoute { CameraIndex = 0 }, smokeCatalog.Displays.ToList(), routeVenue.State.Channels.ToList());
+                new CameraRoute { CameraIndex = 0 }, smokeCatalog.Displays.ToList(), routeVenue.State.Channels.ToList(),
+                routePrefs.ProgrammeRoute);
             ShowForSmoke(routeDialog);
             routeDialog.UpdateLayout();
             Pump(TimeSpan.FromMilliseconds(120));
@@ -7072,19 +7146,36 @@ internal static class Program
             displayBoxes[1].IsChecked = true;
             foreach (var tag in new[] { "Ads", "Highlights" })
                 FindAll<CheckBox>(routeDialog).First(box => (box.Content as string) == tag).IsChecked = true;
+            var defaults = FindAll<CheckBox>(routeDialog)
+                .Where(box => (box.Content as string) == "Default (programme)").ToList();
+            if (defaults.Count != 2)
+                throw new Exception("FAIL: the routing editor has no Default (programme) choice for displays and channels");
+            defaults[0].IsChecked = false;
+            defaults[1].IsChecked = false;
             var allDisplaysBox = FindAll<CheckBox>(routeDialog).First(box => (box.Content as string) == "All displays");
             allDisplaysBox.IsChecked = true;
             allDisplaysBox.IsChecked = false;
             FindAll<Button>(routeDialog).First(button => (button.Content as string) == "SAVE ROUTING")
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             if (routeDialog.Result is not { } savedRoute || savedRoute.Displays.Count != 2
+                || savedRoute.UseProgrammeDisplays
                 || !savedRoute.Tags.Contains("Ads", StringComparer.Ordinal)
                 || !savedRoute.Tags.Contains("Highlights", StringComparer.Ordinal))
                 throw new Exception("FAIL: the routing editor did not keep every chosen display and tag");
             routeDialog.Close();
             try { File.Delete(routeVenueFile); } catch { }
             CameraRouting.Clear();
-            Console.WriteLine("PASS: Camera Switch routes each camera to any displays, channels and tags, and opens on the darker background");
+            // Stream Studio's encoder is found by preference, beside the app, in package-manager
+            // folders, the registry App Paths or PATH rather than PATH alone.
+            var fakeFfmpeg = Path.Combine(Path.GetTempPath(), $"ffmpeg-{Guid.NewGuid():N}.exe");
+            File.WriteAllText(fakeFfmpeg, "stub");
+            try
+            {
+                if (!string.Equals(StreamPushService.FindFfmpeg(fakeFfmpeg), fakeFfmpeg, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("FAIL: Stream Studio did not accept an explicitly located ffmpeg");
+            }
+            finally { try { File.Delete(fakeFfmpeg); } catch { } }
+            Console.WriteLine("PASS: Camera Switch routes each camera to any displays, channels and tags, pages and reorders its sources, and opens on the darker background");
             if (liveSwitch.FindName("ReturnProgramButton") is not Button)
                 throw new Exception("FAIL: Vision has no return-to-layout control");
             liveSwitch.Close();
@@ -7218,9 +7309,14 @@ internal static class Program
                 Name = "Smoke concourse", DisplayId = smokeCatalog.ActiveDisplay.Id,
                 LayoutId = smokeCatalog.Layout.Id, CameraIndex = 1, Enabled = true
             };
+            var publishedBeforeViewing = smokeCatalog.ActiveDisplay.PublishedIndex;
+            // Deliberately point the channel at a layout that is not on air. A channel must ignore
+            // that private overlay and mirror the display's published layout.
+            smokeChannel.LayoutId = smokeCatalog.ActiveDisplay.Layouts
+                .FirstOrDefault(layout => layout.Id != smokeCatalog.ActiveDisplay.Layouts[publishedBeforeViewing].Id)?.Id
+                ?? smokeChannel.LayoutId;
             channelStore.State.Channels.Add(smokeChannel);
             channelStore.Save();
-            var publishedBeforeViewing = smokeCatalog.ActiveDisplay.PublishedIndex;
             var liveChannel = new LiveChannelWindow(smokeCatalog, smokeEngine, null, null, "Dark", channelStore);
             ShowForSmoke(liveChannel);
             liveChannel.UpdateLayout();
@@ -7238,10 +7334,30 @@ internal static class Program
                 throw new Exception($"FAIL: the Live Channel layout menu did not show a preview for every layout ({layoutPreviewButtons.Count} previews, {smokeCatalog.ActiveDisplay.Layouts.Count} layouts)");
             var channelTile = outputs.Children.OfType<Button>().FirstOrDefault(button => button.Tag is string id && id == smokeChannel.Id)
                 ?? throw new Exception("FAIL: the Live Channel did not show the venue channel in its outputs");
+            // A display tile and a channel tile both carry their name under the picture. The old
+            // fixed tile height cut that line off inside the card's background.
+            void AssertCaptionFits(Button tile, string what)
+            {
+                var caption = FindAll<TextBlock>(tile).LastOrDefault()
+                    ?? throw new Exception($"FAIL: the {what} tile has no caption");
+                var captionBounds = caption.TransformToAncestor(tile).TransformBounds(new Rect(caption.RenderSize));
+                if (captionBounds.Bottom > tile.ActualHeight + 0.5)
+                    throw new Exception($"FAIL: the {what} caption is clipped by its tile ({captionBounds.Bottom:0.0}px in {tile.ActualHeight:0.0}px)");
+            }
+            AssertCaptionFits(outputs.Children.OfType<Button>().First(), "display");
+            AssertCaptionFits(channelTile, "channel");
             channelTile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             liveChannel.UpdateLayout();
             if (smokeCatalog.ActiveDisplay.PublishedIndex != publishedBeforeViewing)
                 throw new Exception("FAIL: selecting a venue channel changed the layout on air");
+            // A channel mirrors its display, even when the saved channel still names a different
+            // layout. That stale overlay id used to leave the monitor reading "No layout assigned".
+            if (liveChannel.FindName("NowPlayingText") is not TextBlock { Text: var channelText }
+                || !channelText.Contains(smokeCatalog.ActiveDisplay.Layouts[publishedBeforeViewing].Name, StringComparison.Ordinal)
+                || !channelText.Contains("ON AIR", StringComparison.Ordinal))
+                throw new Exception($"FAIL: a channel did not follow its display's on-air layout ({liveChannel.FindName("NowPlayingText")})");
+            if (liveChannel.FindName("ChannelOverlayPanel") is not null)
+                throw new Exception("FAIL: the Live Channel still offers a private overlay picker");
             var channelLayoutButtons = actions.Children.OfType<Button>()
                 .Where(button => button.Tag is string).ToList();
             var viewedButton = channelLayoutButtons.FirstOrDefault(button =>
@@ -7289,29 +7405,9 @@ internal static class Program
                 ?? throw new Exception("FAIL: the Live Channel lost its venue channel after viewing a display");
             currentChannelTile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             liveChannel.UpdateLayout();
-            if (liveChannel.FindName("ChannelOverlayPanel") is not StackPanel overlayPanel
-                || overlayPanel.Visibility != Visibility.Visible
-                || overlayPanel.Children.OfType<ComboBox>().FirstOrDefault() is not ComboBox overlayCombo)
-                throw new Exception("FAIL: a selected channel has no overlay picker");
-            var channelTargetLayout = smokeCatalog.ActiveDisplay.Layouts
-                .First(layout => layout.Id != smokeChannel.LayoutId);
-            var targetLabel = $"{smokeCatalog.ActiveDisplay.Name} · {channelTargetLayout.Name}";
-            var targetChoice = overlayCombo.Items.Cast<object>()
-                .FirstOrDefault(item => string.Equals(item.ToString(), targetLabel, StringComparison.Ordinal))
-                ?? throw new Exception($"FAIL: the channel overlay picker does not list {targetLabel}");
-            overlayCombo.SelectedItem = targetChoice;
-            liveChannel.UpdateLayout();
-            Pump(TimeSpan.FromMilliseconds(120));
-            if (smokeChannel.LayoutId != channelTargetLayout.Id
-                || smokeCatalog.ActiveDisplay.PublishedIndex != publishedBeforeViewing)
-                throw new Exception("FAIL: changing the channel overlay changed the display's on-air layout");
             if (liveChannel.FindName("NowPlayingText") is not TextBlock { Text: var overlayText }
-                || !overlayText.Contains(channelTargetLayout.Name, StringComparison.Ordinal))
-                throw new Exception("FAIL: Live Channel did not switch its monitor to the chosen channel overlay");
-            var overlayReload = VenueStore.Load(channelFile);
-            var reloadedChannel = overlayReload.State.Channels.First(channel => channel.Id == smokeChannel.Id);
-            if (reloadedChannel.LayoutId != channelTargetLayout.Id)
-                throw new Exception("FAIL: the channel overlay choice did not persist");
+                || !overlayText.Contains(smokeCatalog.ActiveDisplay.Layouts[publishedBeforeViewing].Name, StringComparison.Ordinal))
+                throw new Exception("FAIL: the channel monitor did not return to the display's on-air layout");
             if (events.Items.Count == 0)
                 throw new Exception("FAIL: the Live Channel event feed did not show the game's events");
             if (healthPanel.Children.Count == 0)

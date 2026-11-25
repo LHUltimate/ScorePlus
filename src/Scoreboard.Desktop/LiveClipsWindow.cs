@@ -142,18 +142,7 @@ public sealed class LiveClipsWindow : Window
         DockPanel.SetDock(actions, Dock.Right);
         header.Children.Add(actions);
         var title = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        title.Children.Add(new Border
-        {
-            Background = Solid("#3D8FB8"), CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 4, 7, 4),
-            Margin = new Thickness(0, 0, 9, 0),
-            Child = new TextBlock { Text = "CLIPS", FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Brushes.Black }
-        });
         title.Children.Add(new TextBlock { Text = "LIVE CLIPS", FontSize = 17, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center });
-        title.Children.Add(new TextBlock
-        {
-            Text = "   two fills · clips and cameras on one page · preview and audience", Foreground = Solid("#B0B0B0"),
-            VerticalAlignment = VerticalAlignment.Center
-        });
         header.Children.Add(title);
         root.Children.Add(header);
 
@@ -164,11 +153,6 @@ public sealed class LiveClipsWindow : Window
         var channels = new StackPanel { Margin = new Thickness(0, 0, 0, 6) };
         channels.Children.Add(_cardA);
         channels.Children.Add(_cardB);
-        channels.Children.Add(new TextBlock
-        {
-            Text = "Click a thumbnail to load it into the selected fill. Double-click a thumbnail to take it straight to air.",
-            FontSize = 9, Foreground = Solid("#8A98AA"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 8, 2, 0)
-        });
         body.Children.Add(channels);
 
         var wall = new Border { Background = Solid("#141414"), CornerRadius = new CornerRadius(9), Padding = new Thickness(9) };
@@ -194,7 +178,7 @@ public sealed class LiveClipsWindow : Window
         footer.Child = foot;
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);
-        _status.Text = "LIVE CLIPS READY · choose a clip or a camera";
+        _status.Text = "LIVE CLIPS READY";
         return root;
     }
 
@@ -203,29 +187,24 @@ public sealed class LiveClipsWindow : Window
     UIElement BuildWallSections()
     {
         var stack = new StackPanel();
-        stack.Children.Add(SectionHeader("CLIPS", "thumbnail launcher · no drop-downs"));
+        stack.Children.Add(SectionHeader("CLIPS"));
         stack.Children.Add(_clipPanel);
         stack.Children.Add(new Border
         {
             Height = 1, Background = Solid("#383838"), Margin = new Thickness(0, 8, 0, 8)
         });
-        stack.Children.Add(SectionHeader("CAMERAS", "every capture device on this machine"));
+        stack.Children.Add(SectionHeader("CAMERAS"));
         stack.Children.Add(_cameraPanel);
         return stack;
     }
 
-    static UIElement SectionHeader(string title, string hint)
+    static UIElement SectionHeader(string title)
     {
-        var row = new DockPanel { Margin = new Thickness(2, 0, 2, 6), LastChildFill = true };
-        var heading = new TextBlock { Text = title, FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Solid("#B0B0B0"), VerticalAlignment = VerticalAlignment.Center };
-        DockPanel.SetDock(heading, Dock.Left);
-        row.Children.Add(heading);
-        row.Children.Add(new TextBlock
+        return new TextBlock
         {
-            Text = hint, FontSize = 9, Foreground = Solid("#6C7A8C"),
-            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center
-        });
-        return row;
+            Text = title, FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Solid("#B0B0B0"),
+            Margin = new Thickness(2, 0, 2, 6)
+        };
     }
 
     /// <summary>The chosen display or venue channel, shown twice: what the preview will look like
@@ -394,21 +373,11 @@ public sealed class LiveClipsWindow : Window
     ScorebugLayout? OutputLayout(VenueChannel? channel)
     {
         if (_catalog is null) return null;
-        if (channel is not null)
-        {
-            var display = _catalog.FindDisplay(channel.DisplayId);
-            if (display is not null && !string.IsNullOrWhiteSpace(channel.LayoutId))
-            {
-                var pinned = display.Layouts.FirstOrDefault(layout =>
-                    string.Equals(layout.Id, channel.LayoutId, StringComparison.OrdinalIgnoreCase));
-                if (pinned is not null) return pinned;
-            }
-            if (display is not null)
-                return display.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0,
-                    Math.Max(0, display.Layouts.Count - 1)));
-            return _catalog.FindLayout(channel.LayoutId);
-        }
-        var chosen = _catalog.FindDisplay(_outputDisplayId) ?? _catalog.ActiveDisplay;
+        // A venue channel shows its display, nothing different. Any stale channel layout id is
+        // ignored so the preview and the audience monitor follow the display's published layout.
+        var chosen = channel is not null
+            ? _catalog.FindDisplay(channel.DisplayId) ?? _catalog.ActiveDisplay
+            : _catalog.FindDisplay(_outputDisplayId) ?? _catalog.ActiveDisplay;
         return chosen.Layouts.ElementAtOrDefault(Math.Clamp(chosen.PublishedIndex, 0, Math.Max(0, chosen.Layouts.Count - 1)));
     }
 
@@ -449,12 +418,31 @@ public sealed class LiveClipsWindow : Window
         stack.Children.Add(new Border { CornerRadius = new CornerRadius(5), ClipToBounds = true, Child = picture });
         var transport = new WrapPanel { Margin = new Thickness(0, 5, 0, 0) };
         transport.Children.Add(SmallButton("PLAY", () => Player(player, channel, camera).TogglePlay()));
+        transport.Children.Add(SmallButton("RESUME", () =>
+        {
+            // Stop used to wipe the fill's position. Resume picks the loaded clip up where it
+            // paused, so a quick cut away and back does not restart the package.
+            var cameraLoaded = channel == 0 ? _cameraIndexA is not null : _cameraIndexB is not null;
+            if (cameraLoaded)
+            {
+                _status.Text = $"FILL {(channel == 0 ? "A" : "B")} · camera is already live";
+                return;
+            }
+            if (player.Entry is null)
+            {
+                _status.Text = $"FILL {(channel == 0 ? "A" : "B")} · nothing loaded";
+                return;
+            }
+            player.Play();
+            _status.Text = $"FILL {(channel == 0 ? "A" : "B")} · resumed {player.Entry.Label}";
+        }));
         transport.Children.Add(SmallButton("STOP", () =>
         {
             Player(player, channel, camera).Stop();
             if (channel == 0) _cameraIndexA = null; else _cameraIndexB = null;
             camera.Visibility = Visibility.Collapsed;
             player.Visual.Visibility = Visibility.Visible;
+            _status.Text = $"FILL {(channel == 0 ? "A" : "B")} · stopped";
         }));
         transport.Children.Add(SmallButton("TAKE", () => Take(channel)));
         transport.Children.Add(SmallButton("CLEAR", () => Clear(channel)));
@@ -491,7 +479,7 @@ public sealed class LiveClipsWindow : Window
         _target = channel;
         _cardA.BorderBrush = channel == 0 ? Solid("#38D7A3") : Brushes.Transparent;
         _cardB.BorderBrush = channel == 1 ? Solid("#38D7A3") : Brushes.Transparent;
-        _status.Text = $"FILL {(channel == 0 ? "A" : "B")} selected · click a clip or camera thumbnail to load it";
+        _status.Text = $"FILL {(channel == 0 ? "A" : "B")} selected";
     }
 
     void SessionChanged()

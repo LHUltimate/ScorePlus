@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -198,10 +199,11 @@ public partial class MacroDock : UserControl
         _cues = new CueRunner(engine, _runner);
         _practice.Tick += RefreshPracticeStatus;
         AttachEngine();
+        AttachThumbnails();
         // The compact show page is a grid of small macro boxes, like a live-book page. The step
         // editor is still one click away, but it must not eat the space the buttons need.
-        Loaded += (_, _) => { AttachEngine(); AttachMonitors(); };
-        Unloaded += (_, _) => { DetachEngine(); DetachMonitors(); };
+        Loaded += (_, _) => { AttachEngine(); AttachMonitors(); AttachThumbnails(); };
+        Unloaded += (_, _) => { DetachEngine(); DetachMonitors(); DetachThumbnails(); };
         // The board paints itself from its own palette so generated cards, the step list and the
         // editor all follow the active theme. Opting out keeps the window-wide theme pass from
         // flattening the card hierarchy and its accent.
@@ -746,7 +748,34 @@ public partial class MacroDock : UserControl
 
     // The grid uses fixed cell heights. With auto rows, a tile spanning two rows only grew
     // its own content box, so the tall and large size choices looked identical to 1 x 1.
-    double MacroCellHeight => _compact ? 36 : 84;
+    double MacroCellHeight => _compact ? 52 : 84;
+
+    /// <summary>A media macro carries a 16:9 poster above its name, so it owns two cell rows.</summary>
+    int EffectiveRowSpan(SavedMacro macro) => MediaFor(macro) is null ? Math.Clamp(macro.RowSpan, 1, 2) : 2;
+
+    MediaEntry? MediaFor(SavedMacro macro)
+    {
+        foreach (var action in macro.Actions)
+        {
+            if (action.Kind is not (MacroActionKind.PlayVideo or MacroActionKind.PutOnAir)) continue;
+            var path = (action.Path ?? "").Trim();
+            if (path.Length == 0) continue;
+            var entry = _session.Library.FirstOrDefault(item =>
+                string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
+            if (entry is not null) return entry;
+            if (File.Exists(path)) return new MediaEntry(path, Name: action.Label);
+        }
+        return null;
+    }
+
+    ImageSource? MediaThumbnail(MediaEntry entry)
+    {
+        if (entry.IsCamera)
+        {
+            try { return CameraFeed.Get(entry.CameraIndex).LastFrame; } catch { return null; }
+        }
+        return _session.Thumbnail(entry);
+    }
 
     double CardWidth()
     {
@@ -869,6 +898,32 @@ public partial class MacroDock : UserControl
         _engine.Changed -= QueueShowMonitors;
     }
 
+    bool _thumbHooked;
+
+    /// <summary>A macro that plays media shows its poster on the button. Decoded thumbnails arrive
+    /// after the card is built, so the board repaints when the media session finishes one.</summary>
+    void AttachThumbnails()
+    {
+        if (_thumbHooked) return;
+        _thumbHooked = true;
+        _session.ThumbnailReady += MacroThumbnailReady;
+    }
+
+    void DetachThumbnails()
+    {
+        if (!_thumbHooked) return;
+        _thumbHooked = false;
+        _session.ThumbnailReady -= MacroThumbnailReady;
+    }
+
+    void MacroThumbnailReady(string path)
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => MacroThumbnailReady(path)); return; }
+        if (_macros.Any(macro => macro.Actions.Any(action =>
+                string.Equals((action.Path ?? "").Trim(), path, StringComparison.OrdinalIgnoreCase))))
+            RenderMacros();
+    }
+
     bool _monitorQueued;
 
     /// <summary>
@@ -961,14 +1016,14 @@ public partial class MacroDock : UserControl
         for (var column = 0; column < columns; column++)
             MacroButtons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var placements = LayoutMacros(columns);
-        var rows = placements.Count == 0 ? 0 : placements.Max(placement => placement.Row + Math.Clamp(placement.Macro.RowSpan, 1, 2));
+        var rows = placements.Count == 0 ? 0 : placements.Max(placement => placement.Row + EffectiveRowSpan(placement.Macro));
         for (var row = 0; row < rows; row++)
             MacroButtons.RowDefinitions.Add(new RowDefinition { Height = new GridLength(MacroCellHeight) });
         // Empty rows in an explicit layout stay real drop targets instead of collapsing to zero
         // height. A hidden spacer makes the gap visible to hit testing without drawing a card.
         for (var row = 0; row < rows; row++)
         {
-            if (placements.Any(placement => placement.Row <= row && row < placement.Row + Math.Clamp(placement.Macro.RowSpan, 1, 2))) continue;
+            if (placements.Any(placement => placement.Row <= row && row < placement.Row + EffectiveRowSpan(placement.Macro))) continue;
             var spacer = new Border
             {
                 Height = MacroCellHeight,
@@ -985,7 +1040,7 @@ public partial class MacroDock : UserControl
         {
             var card = BuildMacroCard(placement.Macro);
             var columnSpan = Math.Clamp(placement.Macro.ColumnSpan, 1, Math.Min(2, columns));
-            var rowSpan = Math.Clamp(placement.Macro.RowSpan, 1, 2);
+            var rowSpan = EffectiveRowSpan(placement.Macro);
             // A spanning card stretches across its cells; an explicit width would overflow them.
             card.Width = columnSpan > 1 ? double.NaN : CardWidth();
             if (columnSpan > 1) card.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -1054,22 +1109,43 @@ public partial class MacroDock : UserControl
         header.MouseLeftButtonDown += MacroHeader_MouseDown;
         header.MouseLeftButtonUp += MacroHeader_MouseUp;
         stack.Children.Add(header);
+        var content = new StackPanel();
+        var media = MediaFor(macro);
+        if (media is not null)
+        {
+            // A poster above the label makes a media macro recognisable at a glance. The card is
+            // already two rows tall, so the picture never squeezes the name out of the green button.
+            var picture = new Border
+            {
+                Height = _compact ? 40 : 76,
+                CornerRadius = new CornerRadius(4),
+                ClipToBounds = true,
+                Background = (Brush)Resources["MacroInputBrush"],
+                Margin = new Thickness(0, 0, 0, 3)
+            };
+            var image = new Image { Source = MediaThumbnail(media), Stretch = Stretch.UniformToFill };
+            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+            picture.Child = image;
+            content.Children.Add(picture);
+        }
+        content.Children.Add(new TextBlock
+        {
+            Text = macro.Label,
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = _compact ? TextAlignment.Center : TextAlignment.Left
+        });
         var run = new Button
         {
             Style = (Style)Resources["MacroAccent"],
-            Content = new TextBlock
-            {
-                Text = macro.Label,
-                TextWrapping = TextWrapping.Wrap
-            },
+            Content = content,
             Tag = macro,
-            HorizontalContentAlignment = _compact ? HorizontalAlignment.Center : HorizontalAlignment.Left,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
             ToolTip = string.Join(Environment.NewLine, macro.Actions.Select(action => action.Summary))
         };
         if (_compact)
         {
             run.FontSize = 9;
-            run.Padding = new Thickness(4, 2, 4, 2);
+            run.Padding = new Thickness(4, 3, 4, 4);
             run.MinHeight = 20;
             run.Margin = new Thickness(0);
         }
@@ -1109,7 +1185,7 @@ public partial class MacroDock : UserControl
                 var row = macro.Row;
                 var column = Math.Clamp(macro.Column, 0, columns - 1);
                 var columnSpan = Math.Clamp(macro.ColumnSpan, 1, Math.Min(2, columns - column));
-                var rowSpan = Math.Clamp(macro.RowSpan, 1, 2);
+                var rowSpan = EffectiveRowSpan(macro);
                 var cells = (from r in Enumerable.Range(row, rowSpan)
                              from c in Enumerable.Range(column, columnSpan)
                              select (r, c)).ToArray();
@@ -1132,6 +1208,13 @@ public partial class MacroDock : UserControl
             nextColumn = 0;
             nextRow++;
         }
+        bool Fits(int row, int column, int rowSpan, int columnSpan)
+        {
+            for (var r = row; r < row + rowSpan; r++)
+            for (var c = column; c < column + columnSpan; c++)
+                if (c >= columns || occupied.Contains((r, c))) return false;
+            return true;
+        }
         foreach (var macro in pending)
         {
             if (!explicitCells && macro.StartNewRow && occupied.Any(cell => cell.Row == nextRow))
@@ -1139,10 +1222,12 @@ public partial class MacroDock : UserControl
                 nextRow++;
                 nextColumn = 0;
             }
-            while (occupied.Contains((nextRow, nextColumn))) Advance();
-            occupied.Add((nextRow, nextColumn));
-            if (Math.Clamp(macro.ColumnSpan, 1, 2) == 2 && nextColumn + 1 < columns) occupied.Add((nextRow, nextColumn + 1));
-            if (Math.Clamp(macro.RowSpan, 1, 2) == 2) occupied.Add((nextRow + 1, nextColumn));
+            var rowSpan = EffectiveRowSpan(macro);
+            var columnSpan = Math.Clamp(macro.ColumnSpan, 1, Math.Min(2, columns));
+            while (!Fits(nextRow, nextColumn, rowSpan, columnSpan)) Advance();
+            for (var r = 0; r < rowSpan; r++)
+            for (var c = 0; c < columnSpan; c++)
+                occupied.Add((nextRow + r, nextColumn + c));
             placements.Add(new MacroPlacement(macro, nextRow, nextColumn));
             Advance();
         }

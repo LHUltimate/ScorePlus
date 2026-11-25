@@ -14,22 +14,30 @@ public sealed class CameraRouteWindow : Window
     readonly List<(string Id, CheckBox Box)> _displayChecks = [];
     readonly List<(string Id, CheckBox Box)> _channelChecks = [];
     readonly List<(string Tag, CheckBox Box)> _tagChecks = [];
+    readonly CheckBox _defaultDisplays = new() { Content = "Default (programme)", FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 3) };
     readonly CheckBox _allDisplays = new() { Content = "All displays", FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 5) };
+    readonly CheckBox _defaultChannels = new() { Content = "Default (programme)", FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 3) };
     readonly CheckBox _allChannels = new() { Content = "All channels", FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 5) };
     readonly CheckBox _allTags = new() { Content = "All tags (GLOBAL)", FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 5) };
+    readonly ProgrammeRoute _programme;
     readonly WrapPanel _displayPanel = new();
     readonly WrapPanel _channelPanel = new();
     readonly WrapPanel _tagPanel = new();
     readonly TextBox _tagInput = new() { MinHeight = 28, Margin = new Thickness(0, 6, 6, 0), Width = 210 };
     readonly TextBlock _tagHint = new() { FontSize = 9, Foreground = Solid("#7C8A9C"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0) };
     readonly int _cameraIndex;
+    readonly int _displayCount;
+    readonly int _channelCount;
 
     static Brush Solid(string hex) => new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
 
     public CameraRouteWindow(MediaEntry camera, CameraRoute draft, IReadOnlyList<ScorebugDisplay> displays,
-        IReadOnlyList<VenueChannel> channels)
+        IReadOnlyList<VenueChannel> channels, ProgrammeRoute? programme = null)
     {
         _cameraIndex = camera.CameraIndex;
+        _displayCount = displays.Count;
+        _channelCount = channels.Count;
+        _programme = programme?.Copy() ?? new ProgrammeRoute();
         Title = $"ScorePlus — Route {camera.Label}";
         Width = 620;
         Height = 690;
@@ -60,7 +68,8 @@ public sealed class CameraRouteWindow : Window
         root.Children.Add(header);
 
         var body = new StackPanel();
-        body.Children.Add(Section("DISPLAYS", "Every chosen display shows this camera full-frame when it is taken."));
+        body.Children.Add(Section("DISPLAYS", "Default follows the programme routing. Otherwise every chosen display shows this camera full-frame when it is taken."));
+        body.Children.Add(_defaultDisplays);
         body.Children.Add(_allDisplays);
         body.Children.Add(_displayPanel);
         foreach (var display in displays)
@@ -77,7 +86,8 @@ public sealed class CameraRouteWindow : Window
         if (displays.Count == 0)
             body.Children.Add(Empty("No displays in this show yet."));
 
-        body.Children.Add(Section("VENUE CHANNELS", "Channels are re-pointed at this camera, so their streams follow the take."));
+        body.Children.Add(Section("VENUE CHANNELS", "Default follows the programme routing. Otherwise the chosen channels are re-pointed at this camera."));
+        body.Children.Add(_defaultChannels);
         body.Children.Add(_allChannels);
         body.Children.Add(_channelPanel);
         foreach (var channel in channels)
@@ -127,15 +137,16 @@ public sealed class CameraRouteWindow : Window
         body.Children.Add(_tagHint);
         _tagHint.Text = "Type a tag the list does not show, then press ADD TAG. Tags are comma-safe.";
 
+        _defaultDisplays.IsChecked = draft.UseProgrammeDisplays;
+        _defaultChannels.IsChecked = draft.UseProgrammeChannels;
         _allDisplays.IsChecked = draft.AllDisplays;
         _allChannels.IsChecked = draft.AllChannels;
         _allTags.IsChecked = draft.AllTags;
-        _allDisplays.Checked += (_, _) => SyncEnabled();
-        _allDisplays.Unchecked += (_, _) => SyncEnabled();
-        _allChannels.Checked += (_, _) => SyncEnabled();
-        _allChannels.Unchecked += (_, _) => SyncEnabled();
-        _allTags.Checked += (_, _) => SyncEnabled();
-        _allTags.Unchecked += (_, _) => SyncEnabled();
+        foreach (var box in new[] { _defaultDisplays, _allDisplays, _defaultChannels, _allChannels, _allTags })
+        {
+            box.Checked += (_, _) => SyncEnabled();
+            box.Unchecked += (_, _) => SyncEnabled();
+        }
         SyncEnabled();
 
         var scroll = new ScrollViewer
@@ -205,15 +216,23 @@ public sealed class CameraRouteWindow : Window
 
     void SyncEnabled()
     {
-        var displays = _allDisplays.IsChecked != true;
-        var channels = _allChannels.IsChecked != true;
+        var ownDisplays = _defaultDisplays.IsChecked != true;
+        var ownChannels = _defaultChannels.IsChecked != true;
+        var displays = ownDisplays && _allDisplays.IsChecked != true;
+        var channels = ownChannels && _allChannels.IsChecked != true;
         var tags = _allTags.IsChecked != true;
+        _allDisplays.IsEnabled = ownDisplays;
+        _allChannels.IsEnabled = ownChannels;
         foreach (var (_, box) in _displayChecks) box.IsEnabled = displays;
         foreach (var (_, box) in _channelChecks) box.IsEnabled = channels;
         foreach (var (_, box) in _tagChecks) box.IsEnabled = tags;
         _tagPanel.IsEnabled = tags;
         _tagInput.IsEnabled = tags;
         _allTags.Foreground = tags ? Solid("#F4F7FB") : Solid("#8DEBCB");
+        _defaultDisplays.Foreground = ownDisplays ? Solid("#F4F7FB") : Solid("#8DEBCB");
+        _defaultChannels.Foreground = ownChannels ? Solid("#F4F7FB") : Solid("#8DEBCB");
+        _defaultDisplays.ToolTip = $"Programme default · {_programme.DisplaySummary(_displayCount)}";
+        _defaultChannels.ToolTip = $"Programme default · {_programme.ChannelSummary(_channelCount)}";
     }
 
     void Finish(bool? clear)
@@ -235,6 +254,8 @@ public sealed class CameraRouteWindow : Window
         Result = new CameraRoute
         {
             CameraIndex = _cameraIndex,
+            UseProgrammeDisplays = _defaultDisplays.IsChecked == true,
+            UseProgrammeChannels = _defaultChannels.IsChecked == true,
             AllDisplays = _allDisplays.IsChecked == true,
             Displays = _displayChecks.Where(check => check.Box.IsChecked == true).Select(check => check.Id).ToList(),
             AllChannels = _allChannels.IsChecked == true,

@@ -732,14 +732,9 @@ public partial class VenueDock : UserControl
         stack.Children.Add(Text("CHANNEL WIZARD", 12, false, true));
         stack.Children.Add(Label("Name"));
         stack.Children.Add(Input(channel.Name, value => { channel.Name = value; Save(); ChannelList.Items.Refresh(); }));
-        stack.Children.Add(Label("Display / overlay"));
+        stack.Children.Add(Label("Display"));
         stack.Children.Add(Combo(DisplayChoices(all: false), channel.DisplayId,
             value => { channel.DisplayId = value; Save(); }));
-        stack.Children.Add(Label("Layout"));
-        var overlayChoices = LayoutChoices().ToList();
-        overlayChoices.Insert(0, new LayoutChoice("", "", "Follow display output"));
-        stack.Children.Add(LayoutCombo(overlayChoices, channel.LayoutId,
-            value => { channel.LayoutId = value; Save(); }));
         stack.Children.Add(Label("Camera input"));
         stack.Children.Add(Input(channel.CameraIndex.ToString(), value =>
         {
@@ -749,14 +744,14 @@ public partial class VenueDock : UserControl
         stack.Children.Add(Check("Enabled", channel.Enabled, value => { channel.Enabled = value; Save(); }));
         stack.Children.Add(ActionButton("Open channel", (_, _) =>
         {
-            // Opening a channel is a monitoring action. It must never take the channel's overlay
-            // to air on the operator's active display.
+            // Opening a channel is a monitoring action. It mirrors the display it follows and
+            // never changes what that display has on air.
             var window = new LiveChannelWindow(_catalog, _engine, _playback, _automation, _theme, _venue.Store)
                 { Owner = HostWindow };
             window.ShowChannel(channel.Id);
             window.Show();
         }));
-        stack.Children.Add(Text("Choose an overlay, or follow the display's on-air layout. In Live Channel you can switch this channel's overlay without changing any display. Open it and press Start stream to publish an MJPEG feed for players, OBS or a concourse encoder; camera capture stays local to this machine.", 10, true));
+        stack.Children.Add(Text("A channel mirrors its display's on-air layout and keeps its own camera input. Open it and press Start stream to publish an MJPEG feed for players, OBS or a concourse encoder; camera capture stays local to this machine.", 10, true));
         card.Child = stack;
         ChannelEditor.Children.Add(card);
     }
@@ -768,9 +763,6 @@ public partial class VenueDock : UserControl
             Name = $"Channel {_venue.State.Channels.Count + 1}",
             DisplayId = _catalog.Displays.FirstOrDefault()?.Id ?? ""
         };
-        var display = _catalog.Displays.FirstOrDefault();
-        channel.LayoutId = display?.Layouts.ElementAtOrDefault(Math.Clamp(display.PublishedIndex, 0,
-            Math.Max(0, display.Layouts.Count - 1)))?.Id ?? "";
         _venue.State.Channels.Add(channel);
         Save();
         RefreshChannels();

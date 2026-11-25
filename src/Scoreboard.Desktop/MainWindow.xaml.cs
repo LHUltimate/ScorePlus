@@ -57,6 +57,9 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     // What /watch is showing, one frame per display, and a counter the page watches so a wall
     // screen only fetches a picture when the graphic changed.
     readonly Dictionary<string,(string Signature, byte[]? Png, long Version)> _watchFrames = new(StringComparer.Ordinal);
+    // A display with a camera routed to it is a live picture, not a layout: the browser wall gets
+    // that camera's newest frame, refreshed on a short bucket so phones do not re-render every poll.
+    readonly Dictionary<string,(long Bucket, byte[] Png)> _watchCameraFrames = new(StringComparer.Ordinal);
     long _watchVersion;
     ScorebugCanvasView? _preview;
     AudiencePreview? _audience;
@@ -1235,6 +1238,11 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
     {
         var display = ResolveWatchDisplay(displayKey);
         if (display is null) return null;
+        // Camera Switch can route a camera straight to a display. The browser wall shows exactly
+        // what the desktop audience window shows: that camera full-frame.
+        if (CameraRouting.CameraFor(display.Id) is { } routedCamera
+            && WatchCameraFrame(display.Id, routedCamera, maxWidth) is { } cameraFrame)
+            return cameraFrame;
         // A multiview tile can name its own layout; otherwise show what the audience output is
         // actually sending, not the layout still being staged in the studio preview.
         var chosen = !string.IsNullOrWhiteSpace(layoutKey) ? _scorebug.FindLayout(layoutKey) : null;
@@ -1253,6 +1261,34 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         if (cached.Png is null) return null;
         _watchFrames[cacheKey] = cached;
         return (cached.Png, cached.Version);
+    }
+
+    /// <summary>The routed camera as a PNG for /watch, or null while it has no frame yet.</summary>
+    (byte[] Png, long Version)? WatchCameraFrame(string displayId, int cameraIndex, int maxWidth)
+    {
+        if (CameraFeed.Get(cameraIndex).LastFrame is not { } frame) return null;
+        var bucket = Environment.TickCount64 / 400;
+        var key = $"{displayId}|{cameraIndex}|{Math.Max(0, maxWidth)}";
+        if (_watchCameraFrames.TryGetValue(key, out var cached) && cached.Bucket == bucket)
+            return (cached.Png, bucket * 100 + cameraIndex);
+        try
+        {
+            BitmapSource source = frame;
+            if (maxWidth > 0 && frame.PixelWidth > maxWidth)
+            {
+                var scale = (double)maxWidth / frame.PixelWidth;
+                source = new TransformedBitmap(frame, new ScaleTransform(scale, scale));
+                source.Freeze();
+            }
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(source));
+            using var buffer = new MemoryStream();
+            encoder.Save(buffer);
+            var png = buffer.ToArray();
+            _watchCameraFrames[key] = (bucket, png);
+            return (png, bucket * 100 + cameraIndex);
+        }
+        catch { return null; }
     }
 
     /// <summary>Resolves /watch?display=2, a display id, or a display name; no key means this window's display.</summary>

@@ -40,6 +40,12 @@ public sealed class CameraSwitchWindow : Window
     Button _takeB = null!;
     readonly List<(CameraFeed Feed, Action<BitmapSource> Handler)> _wallHandlers = [];
     readonly List<TileState> _tileStates = [];
+    readonly List<MediaEntry> _cameraOrder = [];
+    readonly StackPanel _slotPanel = new();
+    readonly TextBlock _pageLabel = new() { FontSize = 9, Foreground = Solid("#7C8A9C"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(3, 0, 3, 0) };
+    int _page;
+    int _selectedSlot;
+    bool _assigningSlot;
     (CameraFeed? Feed, Action<BitmapSource>? Handler) _aFeed;
     (CameraFeed? Feed, Action<BitmapSource>? Handler) _bFeed;
     MediaEntry? _entryA;
@@ -49,6 +55,7 @@ public sealed class CameraSwitchWindow : Window
     string _cameraSignature = "\u0000";
 
     sealed record TileState(MediaEntry Entry, Border ABadge, Border BBadge, Button RouteButton);
+    sealed record SlotChoice(string Path, string Label) { public override string ToString() => Label; }
 
     static Brush Solid(string hex) => new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
 
@@ -147,6 +154,9 @@ public sealed class CameraSwitchWindow : Window
     public string? TargetChannel => _target == 0 ? "A" : "B";
     public string? FillALabel => _entryA?.Label;
     public string? FillBLabel => _entryB?.Label;
+    public int PageNumber => _page + 1;
+    public string PageLabel => _pageLabel.Text;
+    public IReadOnlyList<string> SourceSlots => _preferences.CameraSlots;
 
     UIElement BuildStage()
     {
@@ -154,11 +164,26 @@ public sealed class CameraSwitchWindow : Window
         var head = new DockPanel { Margin = new Thickness(0, 0, 0, 5) };
         var title = new StackPanel();
         title.Children.Add(Section("CAMERA MULTIVIEW"));
-        title.Children.Add(new TextBlock { Text = "All eight capture inputs · red = programme · green = target fill", FontSize = 10, Foreground = Solid("#7C8A9C") });
+        title.Children.Add(new TextBlock { Text = "Eight sources per page · red = programme · green = target fill", FontSize = 10, Foreground = Solid("#7C8A9C") });
         head.Children.Add(title);
+        var nav = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var up = new Button { Content = "↑", MinWidth = 26, Padding = new Thickness(6, 2, 6, 2), ToolTip = "Move the selected source earlier" };
+        up.Click += (_, _) => MoveSlot(-1);
+        var down = new Button { Content = "↓", MinWidth = 26, Padding = new Thickness(6, 2, 6, 2), Margin = new Thickness(2, 0, 8, 0), ToolTip = "Move the selected source later" };
+        down.Click += (_, _) => MoveSlot(1);
+        var prev = new Button { Content = "‹", MinWidth = 26, Padding = new Thickness(6, 2, 6, 2), ToolTip = "Previous page of sources" };
+        prev.Click += (_, _) => ChangePage(-1);
+        var next = new Button { Content = "›", MinWidth = 26, Padding = new Thickness(6, 2, 6, 2), ToolTip = "Next page of sources" };
+        next.Click += (_, _) => ChangePage(1);
+        nav.Children.Add(up);
+        nav.Children.Add(down);
+        nav.Children.Add(prev);
+        nav.Children.Add(_pageLabel);
+        nav.Children.Add(next);
         DockPanel.SetDock(_multiviewPage, Dock.Right);
-        _multiviewPage.Text = "8 INPUTS";
-        head.Children.Add(_multiviewPage);
+        nav.Children.Add(_multiviewPage);
+        DockPanel.SetDock(nav, Dock.Right);
+        head.Children.Add(nav);
         stack.Children.Add(head);
 
         _multiview.Height = 286;
@@ -248,13 +273,25 @@ public sealed class CameraSwitchWindow : Window
             FontSize = 10, Foreground = Solid("#7C8A9C"), TextWrapping = TextWrapping.Wrap
         });
         stack.Children.Add(new Separator { Margin = new Thickness(0, 12, 0, 10), Opacity = 0.3 });
+        stack.Children.Add(Section("SOURCE SLOTS"));
+        stack.Children.Add(new TextBlock
+        {
+            Text = "Choose which camera sits on each of the eight sources. ↑/↓ reorders the selected source; ‹ › page the wall.",
+            FontSize = 9, Foreground = Solid("#7C8A9C"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 5)
+        });
+        stack.Children.Add(_slotPanel);
+        stack.Children.Add(new Separator { Margin = new Thickness(0, 12, 0, 10), Opacity = 0.3 });
         stack.Children.Add(Section("ROUTING · TARGET FILL"));
         stack.Children.Add(_routeLabel);
         stack.Children.Add(_routeSummary);
         var editRoute = new Button { Content = "EDIT ROUTING", MinHeight = 30, Margin = new Thickness(0, 7, 0, 0) };
-        editRoute.ToolTip = "Choose any number of displays, venue channels and tags — or route to all";
+        editRoute.ToolTip = "Choose any number of displays, venue channels and tags — or follow the programme default";
         editRoute.Click += (_, _) => EditRouteForTarget();
         stack.Children.Add(editRoute);
+        var editProgramme = new Button { Content = "PROGRAMME ROUTING", MinHeight = 28, Margin = new Thickness(0, 4, 0, 0) };
+        editProgramme.ToolTip = "The house displays and channels every camera follows unless it overrides them";
+        editProgramme.Click += (_, _) => EditProgrammeRoute();
+        stack.Children.Add(editProgramme);
         stack.Children.Add(new Separator { Margin = new Thickness(0, 12, 0, 10), Opacity = 0.3 });
         stack.Children.Add(Section("QUICK GUIDE"));
         stack.Children.Add(new TextBlock
@@ -262,7 +299,7 @@ public sealed class CameraSwitchWindow : Window
             Text = "1 · Pick Fill A or Fill B as the target.\n2 · Click a camera to load it into that fill.\n3 · TAKE puts that fill on programme.\n4 · The other fill stays ready as preview.",
             FontSize = 10, Foreground = Solid("#8C9AAC"), TextWrapping = TextWrapping.Wrap, LineHeight = 18
         });
-        card.Child = stack;
+        card.Child = new ScrollViewer { Content = stack, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         return card;
     }
 
@@ -321,14 +358,42 @@ public sealed class CameraSwitchWindow : Window
     void RefreshCameras()
     {
         var devices = _session?.CameraDevices() ?? CameraFeed.NamedDevices();
-        var cameras = devices.Select(device =>
+        var available = devices.Select(device =>
             _session?.Library.FirstOrDefault(entry => entry.IsCamera && entry.CameraIndex == device.Index)
             ?? new MediaEntry(MediaLibrary.CameraPath(device.Index), "Camera", Name: device.Label))
             .OrderBy(entry => entry.CameraIndex).ToList();
-        if (cameras.Count == 0 && _session is not null)
-            cameras.AddRange(_session.Library.Where(entry => entry.IsCamera)
+        if (available.Count == 0 && _session is not null)
+            available.AddRange(_session.Library.Where(entry => entry.IsCamera)
                 .GroupBy(entry => entry.CameraIndex).Select(group => group.First()).OrderBy(entry => entry.CameraIndex));
-        var signature = string.Join("|", cameras.Select(entry => $"{entry.CameraIndex}:{entry.Label}"));
+
+        // The saved slots are the source list: blank cells stay blank, and a camera that has never
+        // been placed drops into the first free slot. New cameras beyond eight make another page.
+        var slots = Slots();
+        for (var index = 0; index < slots.Count; index++)
+        {
+            if (string.IsNullOrWhiteSpace(slots[index])) continue;
+            if (available.All(camera => !SamePath(camera, slots[index]))
+                || slots.Skip(index + 1).Any(other => SamePathText(other, slots[index]))) slots[index] = "";
+        }
+        foreach (var camera in available.OrderBy(entry => entry.CameraIndex))
+        {
+            if (slots.Any(path => SamePathText(path, camera.Path))) continue;
+            var blank = slots.FindIndex(string.IsNullOrWhiteSpace);
+            if (blank < 0) slots.Add(camera.Path);
+            else slots[blank] = camera.Path;
+        }
+        _preferences.CameraSlots = slots;
+        _cameraOrder.Clear();
+        foreach (var path in slots)
+        {
+            var entry = available.FirstOrDefault(camera => SamePath(camera, path));
+            if (entry is not null) _cameraOrder.Add(entry);
+        }
+
+        var pages = Math.Max(1, (slots.Count + 7) / 8);
+        _page = Math.Clamp(_page, 0, pages - 1);
+        var signature = string.Join("|", slots) + "#" + _page + "#"
+            + string.Join("|", available.Select(entry => $"{entry.CameraIndex}:{entry.Label}"));
         if (signature == _cameraSignature) return;
         _cameraSignature = signature;
         foreach (var (feed, handler) in _wallHandlers) feed.FrameReady -= handler;
@@ -336,24 +401,143 @@ public sealed class CameraSwitchWindow : Window
         _tileStates.Clear();
         _multiview.Children.Clear();
         _cameraPanel.Children.Clear();
-        for (var slot = 0; slot < 8; slot++)
+        for (var offset = 0; offset < 8; offset++)
         {
-            if (slot < cameras.Count) _multiview.Children.Add(CameraTile(cameras[slot], compact: false));
-            else _multiview.Children.Add(EmptyMultiviewCell(slot));
+            var index = _page * 8 + offset;
+            var path = index < slots.Count ? slots[index] : "";
+            var entry = available.FirstOrDefault(camera => SamePath(camera, path));
+            if (entry is not null) _multiview.Children.Add(CameraTile(entry, compact: false));
+            else _multiview.Children.Add(EmptyMultiviewCell(index));
         }
-        _multiviewPage.Text = cameras.Count == 0 ? "NO INPUTS" : $"{cameras.Count} INPUTS";
-        if (cameras.Count == 0)
+        _pageLabel.Text = $"{_page + 1} / {pages}";
+        _multiviewPage.Text = $"{_cameraOrder.Count} INPUT{(_cameraOrder.Count == 1 ? "" : "S")}";
+        if (_cameraOrder.Count == 0)
         {
             _cameraPanel.Children.Add(new TextBlock
             {
                 Text = "No capture devices found. Plug in a camera and it appears here immediately.",
                 FontSize = 11, Foreground = Solid("#8A98AA"), Margin = new Thickness(8), TextWrapping = TextWrapping.Wrap
             });
-            return;
         }
-        foreach (var entry in cameras) _cameraPanel.Children.Add(CameraTile(entry, compact: true));
+        else
+        {
+            foreach (var entry in _cameraOrder) _cameraPanel.Children.Add(CameraTile(entry, compact: true));
+        }
+        RefreshSlotPickers();
         RefreshTileBadges();
     }
+
+    List<string> Slots()
+    {
+        var slots = _preferences.CameraSlots ??= [];
+        while (slots.Count < 8) slots.Add(string.Empty);
+        return slots;
+    }
+
+    void SaveSlots()
+    {
+        try { PreferencesStore.Save(_preferences); } catch { }
+    }
+
+    void RefreshSlotPickers()
+    {
+        _assigningSlot = true;
+        try
+        {
+            _slotPanel.Children.Clear();
+            var slots = Slots();
+            for (var offset = 0; offset < 8; offset++)
+            {
+                var index = _page * 8 + offset;
+                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
+                var number = new TextBlock
+                {
+                    Text = $"{(index + 1):00}", Width = 22, FontSize = 9, Foreground = Solid("#7C8A9C"),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                DockPanel.SetDock(number, Dock.Left);
+                row.Children.Add(number);
+                var box = new ComboBox { MinHeight = 24, FontSize = 10, Tag = index };
+                var choices = new List<SlotChoice> { new("", "— empty —") };
+                foreach (var camera in _cameraOrder)
+                    choices.Add(new SlotChoice(camera.Path, $"{camera.Label} · CAM {camera.CameraIndex + 1}"));
+                box.ItemsSource = choices;
+                var current = index < slots.Count ? slots[index] : string.Empty;
+                box.SelectedItem = choices.FirstOrDefault(choice => SamePathText(choice.Path, current)) ?? choices[0];
+                box.SelectionChanged += (_, _) => SlotChanged(box);
+                row.Children.Add(box);
+                _slotPanel.Children.Add(row);
+            }
+        }
+        finally { _assigningSlot = false; }
+    }
+
+    void SlotChanged(ComboBox box)
+    {
+        if (_assigningSlot || box.Tag is not int slot || box.SelectedItem is not SlotChoice choice) return;
+        // Rebuilding the pickers from inside a picker's SelectionChanged removes the control that
+        // is still raising the event; let the combo finish first.
+        Dispatcher.BeginInvoke(() => AssignSlot(slot, choice.Path));
+    }
+
+    void AssignSlot(int slot, string? path)
+    {
+        var slots = Slots();
+        while (slots.Count <= slot) slots.Add(string.Empty);
+        var previous = slots[slot];
+        if (string.IsNullOrWhiteSpace(path)) slots[slot] = string.Empty;
+        else
+        {
+            var existing = slots.FindIndex(candidate => SamePathText(candidate, path));
+            if (existing >= 0 && existing != slot) slots[existing] = previous;
+            slots[slot] = path;
+        }
+        _preferences.CameraSlots = slots;
+        _selectedSlot = slot;
+        SaveSlots();
+        _cameraSignature = "\u0000";
+        RefreshCameras();
+        _status.Text = string.IsNullOrWhiteSpace(path)
+            ? $"SOURCE {slot + 1} cleared."
+            : $"SOURCE {slot + 1} · {_cameraOrder.FirstOrDefault(camera => SamePath(camera, path))?.Label ?? path}";
+    }
+
+    void ChangePage(int delta)
+    {
+        var pages = Math.Max(1, (Slots().Count + 7) / 8);
+        var next = Math.Clamp(_page + delta, 0, pages - 1);
+        if (next == _page) return;
+        _page = next;
+        _cameraSignature = "\u0000";
+        RefreshCameras();
+    }
+
+    void MoveSlot(int delta)
+    {
+        var slots = Slots();
+        var source = _selectedSlot;
+        if (source < 0 || source >= slots.Count || string.IsNullOrWhiteSpace(slots[source]))
+        {
+            _status.Text = "SOURCE ORDER · click a camera tile first.";
+            return;
+        }
+        var target = source + delta;
+        if (target < 0 || target >= slots.Count) return;
+        (slots[source], slots[target]) = (slots[target], slots[source]);
+        _preferences.CameraSlots = slots;
+        _selectedSlot = target;
+        _page = target / 8;
+        SaveSlots();
+        _cameraSignature = "\u0000";
+        RefreshCameras();
+        _status.Text = $"SOURCE ORDER · moved to source {target + 1} of {slots.Count}.";
+    }
+
+    static bool SamePath(MediaEntry entry, string? path) => SamePathText(entry.Path, path);
+
+    static bool SamePathText(string? left, string? right) =>
+        !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right)
+        && string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
 
     UIElement EmptyMultiviewCell(int slot)
     {
@@ -457,7 +641,7 @@ public sealed class CameraSwitchWindow : Window
         ThemeManager.SetSkipTheme(routeButton, true);
         routeButton.Click += (_, e) => { e.Handled = true; EditRoute(entry); };
         _tileStates.Add(new TileState(entry, aBadge, bBadge, routeButton));
-        button.Click += (_, _) => Load(entry, _target);
+        button.Click += (_, _) => { SelectSlot(entry); Load(entry, _target); };
         button.MouseDoubleClick += (_, _) => { Load(entry, _target); Take(_target); };
         // The routing button is a sibling of the tile button, not its child: a nested button would
         // also fire the tile's click and load the camera every time the operator opened routing.
@@ -538,7 +722,7 @@ public sealed class CameraSwitchWindow : Window
         _onAir.Text = $"ON AIR · FILL {(fill == 0 ? "A" : "B")} · {entry.Label}";
         var frame = (fill == 0 ? _aFeed.Feed : _bFeed.Feed)?.LastFrame;
         LiveClipsBus.Shared.SetLive($"{entry.Label} · LIVE CAMERA", frame);
-                    _status.Text = $"{(cut ? "CUT" : "TAKEN")} · camera {entry.Label} is live in fill {(fill == 0 ? "A" : "B")} · {RouteSummaryText(entry)}.";
+        _status.Text = $"{(cut ? "CUT" : "TAKEN")} · camera {entry.Label} is live in fill {(fill == 0 ? "A" : "B")} · {RouteSummaryText(entry)}.";
         RefreshFillChrome();
     }
 
@@ -588,12 +772,16 @@ public sealed class CameraSwitchWindow : Window
     CameraRoute? RouteFor(MediaEntry entry) =>
         _preferences.CameraRoutes.FirstOrDefault(route => route.CameraIndex == entry.CameraIndex);
 
+    void SelectSlot(MediaEntry entry)
+    {
+        var index = Slots().FindIndex(path => SamePathText(path, entry.Path));
+        if (index >= 0) _selectedSlot = index;
+    }
+
     string RouteSummaryText(MediaEntry entry)
     {
-        var route = RouteFor(entry);
-        return route is null
-            ? "own tag · no display or channel routing"
-            : route.Summary(_catalog?.Displays.Count ?? 0, _venue?.State.Channels.Count ?? 0);
+        var route = RouteFor(entry) ?? new CameraRoute { CameraIndex = entry.CameraIndex };
+        return route.Summary(_catalog?.Displays.Count ?? 0, _venue?.State.Channels.Count ?? 0, _preferences.ProgrammeRoute);
     }
 
     void RefreshRouteSummary()
@@ -619,8 +807,8 @@ public sealed class CameraSwitchWindow : Window
     void EditRoute(MediaEntry entry)
     {
         var draft = RouteFor(entry)?.Copy() ?? new CameraRoute { CameraIndex = entry.CameraIndex };
-        var dialog = new CameraRouteWindow(entry, draft, _catalog?.Displays.ToList() ?? [], _venue?.State.Channels.ToList() ?? [])
-            { Owner = this };
+        var dialog = new CameraRouteWindow(entry, draft, _catalog?.Displays.ToList() ?? [],
+            _venue?.State.Channels.ToList() ?? [], _preferences.ProgrammeRoute) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.Result is not { } saved) return;
         _preferences.CameraRoutes.RemoveAll(route => route.CameraIndex == entry.CameraIndex);
         if (saved.IsConfigured) _preferences.CameraRoutes.Add(saved);
@@ -633,16 +821,35 @@ public sealed class CameraSwitchWindow : Window
             : $"ROUTING CLEARED · {entry.Label} keeps its own tag";
     }
 
+    void EditProgrammeRoute()
+    {
+        var dialog = new ProgrammeRouteWindow(_preferences.ProgrammeRoute.Copy(),
+            _catalog?.Displays.ToList() ?? [], _venue?.State.Channels.ToList() ?? []) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Result is not { } saved) return;
+        _preferences.ProgrammeRoute = saved;
+        try { PreferencesStore.Save(_preferences); } catch { }
+        RefreshRouteSummary();
+        foreach (var tile in _tileStates)
+            tile.RouteButton.ToolTip = $"Routing · {RouteSummaryText(tile.Entry)}";
+        _status.Text = $"PROGRAMME ROUTING · {saved.Summary(_catalog?.Displays.Count ?? 0, _venue?.State.Channels.Count ?? 0)}";
+    }
+
     /// <summary>Applies a camera's route when it is taken: display overlays and channel cameras.</summary>
     void RouteTake(MediaEntry entry, CameraRoute? route)
     {
-        var displays = _catalog is null || route is null
+        // A camera with no saved route is the pure default: programme displays and channels, and
+        // its own library tag.
+        route ??= new CameraRoute { CameraIndex = entry.CameraIndex };
+        var programme = _preferences.ProgrammeRoute;
+        var displays = _catalog is null
             ? Array.Empty<string>()
-            : _catalog.Displays.Where(display => route.MatchesDisplay(display.Id)).Select(display => display.Id).ToArray();
+            : _catalog.Displays.Where(display => route.RoutesDisplay(programme, display.Id))
+                .Select(display => display.Id).ToArray();
         CameraRouting.Set(displays, entry.CameraIndex);
-        if (_venue is null || route is null || !route.RoutesToChannels) return;
-        foreach (var channel in _venue.State.Channels.Where(channel => route.MatchesChannel(channel.Id)))
-            channel.CameraIndex = entry.CameraIndex;
+        if (_venue is null) return;
+        var channels = _venue.State.Channels.Where(channel => route.RoutesChannel(programme, channel.Id)).ToArray();
+        if (channels.Length == 0) return;
+        foreach (var channel in channels) channel.CameraIndex = entry.CameraIndex;
         try { _venue.Save(); } catch { }
     }
 

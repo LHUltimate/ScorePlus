@@ -127,6 +127,18 @@ public sealed class UserPreferences
     /// </summary>
     public List<CameraRoute> CameraRoutes { get; set; } = [];
 
+    /// <summary>The house pattern every camera follows until it is given its own routing.</summary>
+    public ProgrammeRoute ProgrammeRoute { get; set; } = new();
+
+    /// <summary>
+    /// Camera Switch's eight-or-more source slots, by media path. A blank entry is an empty cell,
+    /// so an operator can park a camera on any slot and leave the rest free.
+    /// </summary>
+    public List<string> CameraSlots { get; set; } = [];
+
+    /// <summary>Where the operator's ffmpeg.exe lives, when it is not on PATH or beside the app.</summary>
+    public string FfmpegPath { get; set; } = "";
+
     /// <summary>Show the source name in each multiview tile's bottom corner.</summary>
     public bool MultiviewShowLabels { get; set; } = true;
 
@@ -285,6 +297,9 @@ public sealed class UserPreferences
         MultiviewShowLabels = MultiviewShowLabels,
         MultiviewColumns = MultiviewColumns,
         CameraRoutes = CameraRoutes.Select(route => route.Copy()).ToList(),
+        ProgrammeRoute = ProgrammeRoute.Copy(),
+        CameraSlots = [.. CameraSlots],
+        FfmpegPath = FfmpegPath,
         ReplayBoothShowLabels = ReplayBoothShowLabels,
         ReplaySeconds = ReplaySeconds,
         ReplaySpeed = ReplaySpeed,
@@ -428,6 +443,11 @@ public static class PreferencesStore
         preferences.CameraRoutes = preferences.CameraRoutes
             .Where(route => route is not null && route.CameraIndex >= 0)
             .GroupBy(route => route.CameraIndex).Select(group => group.Last()).ToList();
+        preferences.ProgrammeRoute ??= new ProgrammeRoute();
+        preferences.ProgrammeRoute.Normalize();
+        preferences.CameraSlots ??= [];
+        while (preferences.CameraSlots.Count < 8) preferences.CameraSlots.Add(string.Empty);
+        preferences.FfmpegPath ??= string.Empty;
         preferences.ReplayBoothColumns = Math.Clamp(preferences.ReplayBoothColumns, 0, 6);
         // Only the wall sizes the UI offers are legal: automatic, quarter screen, or a quarter of
         // a quarter. A hand-edited file cannot ask for a grid the window cannot draw.

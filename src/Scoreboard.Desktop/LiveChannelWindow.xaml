@@ -25,7 +25,7 @@
   <Grid Margin="12">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
-      <RowDefinition Height="150"/>
+      <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
@@ -137,7 +137,6 @@
             <StackPanel>
               <TextBlock Text="CHANNEL + DISPLAY HEALTH" FontSize="9" FontWeight="Bold" Foreground="#5C6B7E" Margin="1,0,1,5"/>
               <StackPanel x:Name="HealthPanel" Margin="0,0,0,8"/>
-              <StackPanel x:Name="ChannelOverlayPanel" Margin="0,0,0,8"/>
               <TextBlock x:Name="LayoutMonitorsLabel" Text="LAYOUT MONITORS · CLICK TO VIEW · RIGHT-CLICK FOR COLOUR" FontSize="9" FontWeight="Bold"
                          Foreground="#5C6B7E" Margin="1,0,1,5"/>
               <StackPanel x:Name="ActionPanel"/>

@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using Scoreboard.Core;
 
 namespace Scoreboard.Desktop;
@@ -46,10 +47,17 @@ public sealed class LiveBookWindow : Window
     readonly TextBlock _pushState = new() { FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) };
     readonly Button _pushButton = new() { Content = "Push to provider", MinHeight = 28, Margin = new Thickness(0, 3, 0, 0) };
     readonly StreamPushService _push = new();
+    readonly UserPreferences _preferences = PreferencesStore.Load();
     readonly TextBlock _layoutInfo = new() { FontSize = 10, Foreground = new SolidColorBrush(Color.FromRgb(0x93, 0xA0, 0xB2)), TextWrapping = TextWrapping.Wrap };
     // A direct look at the chosen overlay, even before the camera picture arrives or while the
     // scorebug is switched off. Without this Live Book read as a camera monitor with no graphics.
     readonly Image _layoutThumb = new() { Height = 118, Stretch = Stretch.Uniform, Margin = new Thickness(0, 5, 0, 5) };
+    // What the audience output shows when Camera Switch has taken a camera full-frame to this
+    // display. It sits above the layout in the stage, so the provider stream and its preview carry
+    // the same picture as the desktop audience window.
+    readonly Image _routedCamera = new() { Stretch = Stretch.Uniform, Visibility = Visibility.Collapsed };
+    (CameraFeed? Feed, Action<BitmapSource>? Handler) _routedFeed;
+    int? _routedCameraIndex;
     readonly TextBlock _stats = new() { FontFamily = new FontFamily("Consolas"), FontSize = 10, TextWrapping = TextWrapping.Wrap };
     readonly TextBlock _status = new() { FontSize = 11, TextWrapping = TextWrapping.Wrap };
     readonly TextBlock _streamUrl = new() { FontFamily = new FontFamily("Consolas"), FontSize = 10, TextWrapping = TextWrapping.Wrap };
@@ -109,6 +117,9 @@ public sealed class LiveBookWindow : Window
         Background = new SolidColorBrush(Color.FromRgb(0x0E, 0x12, 0x18));
         Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFB));
         Content = BuildChrome();
+        Panel.SetZIndex(_routedCamera, 20);
+        _stage.Children.Add(_routedCamera);
+        CameraRouting.Changed += ApplyRoutedCamera;
         ThemeManager.Apply(this, theme);
         WindowOwnerGuard.Attach(this);
         _runButton.Click += (_, _) => ToggleRunning();
@@ -131,6 +142,8 @@ public sealed class LiveBookWindow : Window
         Closed += (_, _) =>
         {
             _tick.Stop();
+            CameraRouting.Changed -= ApplyRoutedCamera;
+            DetachRoutedCamera();
             _engine.Changed -= EngineChanged;
             _catalog.Changed -= CatalogChanged;
             foreach (var destination in _venue.State.Broadcast.Destinations.Where(item => item.Kind == BroadcastDestinationKind.Stream))
@@ -239,6 +252,10 @@ public sealed class LiveBookWindow : Window
         var saveProvider = new Button { Content = "Save provider settings", MinHeight = 27, Margin = new Thickness(0, 2, 0, 0) };
         saveProvider.Click += (_, _) => ApplyProvider();
         panel.Children.Add(saveProvider);
+        var locateFfmpeg = new Button { Content = "Locate ffmpeg…", MinHeight = 27, Margin = new Thickness(0, 2, 0, 0) };
+        locateFfmpeg.ToolTip = "Point ScorePlus at ffmpeg.exe when it is in a custom folder";
+        locateFfmpeg.Click += (_, _) => LocateFfmpeg();
+        panel.Children.Add(locateFfmpeg);
         panel.Children.Add(_pushButton);
         panel.Children.Add(_pushState);
         panel.Children.Add(Section("FRAME HEALTH"));
@@ -281,8 +298,10 @@ public sealed class LiveBookWindow : Window
             new("", "", "Venue programme (published display)")
         };
         choices.AddRange(_catalog.Displays.Select(display => new SourceChoice(display.Id, "", $"DISPLAY · {display.Name}")));
+        // A channel is a display mirror. Streaming it follows that display's published layout;
+        // it never carries a private overlay of its own.
         choices.AddRange(_venue.State.Channels.Select(channel => new SourceChoice(
-            channel.DisplayId, channel.LayoutId, $"CHANNEL · {channel.Name}")));
+            channel.DisplayId, "", $"CHANNEL · {channel.Name}")));
         var pinned = _venue.State.Broadcast.StreamLayoutId;
         var selected = choices.FirstOrDefault(choice => !string.IsNullOrWhiteSpace(pinned)
                 && string.Equals(choice.LayoutId, pinned, StringComparison.OrdinalIgnoreCase)
@@ -326,9 +345,31 @@ public sealed class LiveBookWindow : Window
             string.Equals(provider.Name, stream.Provider, StringComparison.OrdinalIgnoreCase)).Name ?? "Custom RTMP";
         _serverInput.Text = stream.ServerUrl;
         _streamKeyInput.Text = stream.StreamKey;
-        _pushState.Text = StreamPushService.FindFfmpeg() is null
-            ? "ffmpeg not found · put ffmpeg.exe beside ScorePlus or on PATH"
-            : "ffmpeg ready · enter the provider key and start the local stream first";
+        var ffmpeg = StreamPushService.FindFfmpeg(_preferences.FfmpegPath);
+        _pushState.Text = ffmpeg is null
+            ? "ffmpeg not found · install it or Locate ffmpeg, then press Push"
+            : $"ffmpeg ready · {ffmpeg}";
+    }
+
+    void LocateFfmpeg()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Locate ffmpeg.exe",
+            Filter = "ffmpeg (ffmpeg.exe)|ffmpeg.exe|Programs (*.exe)|*.exe|All files (*.*)|*.*"
+        };
+        var current = StreamPushService.FindFfmpeg(_preferences.FfmpegPath);
+        if (!string.IsNullOrWhiteSpace(current)) dialog.InitialDirectory = Path.GetDirectoryName(current);
+        if (dialog.ShowDialog() != true) return;
+        if (!string.Equals(Path.GetFileName(dialog.FileName), "ffmpeg.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            _pushState.Text = "That is not ffmpeg.exe. Choose the encoder itself.";
+            return;
+        }
+        _preferences.FfmpegPath = dialog.FileName;
+        try { PreferencesStore.Save(_preferences); } catch { }
+        RefreshProvider();
+        _pushState.Text = $"ffmpeg ready · {dialog.FileName}";
     }
 
     void ProviderChanged()
@@ -366,7 +407,7 @@ public sealed class LiveBookWindow : Window
             ToggleRunning();
             if (!_running) { _pushState.Text = "Start the local stream before pushing to a provider."; return; }
         }
-        if (_push.Start(_headend.LocalStreamUrl(stream.Id), _headend.LocalAudioUrl(stream.Id), stream.ServerUrl, stream.StreamKey))
+        if (_push.Start(_headend.LocalStreamUrl(stream.Id), _headend.LocalAudioUrl(stream.Id), stream.ServerUrl, stream.StreamKey, _preferences.FfmpegPath))
         {
             _pushButton.Content = "Stop provider push";
             _pushState.Text = "PUSHING · " + stream.Provider + " · programme audio";
@@ -478,6 +519,43 @@ public sealed class LiveBookWindow : Window
             + (_venue.State.Broadcast.StreamScorebug ? "" : " · SCOREBUG OFF");
         _layoutThumb.Source = Thumbnail(layout, 320, 180);
         _streamUrl.Text = _headend.StreamUrl(FirstStreamDestination().Id);
+        ApplyRoutedCamera();
+    }
+
+    /// <summary>
+    /// Mirrors Camera Switch's full-frame routing into the stream stage: when the selected
+    /// display has a routed camera, the camera picture replaces the layout until the switch returns
+    /// to live. The preview and the delivered frames are rendered from this same stage.
+    /// </summary>
+    void ApplyRoutedCamera()
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(ApplyRoutedCamera); return; }
+        var displayId = _catalog.FindDisplayOfLayout(CurrentLayout().Id)?.Id;
+        var index = CameraRouting.CameraFor(displayId);
+        if (index == _routedCameraIndex) return;
+        DetachRoutedCamera();
+        _routedCameraIndex = index;
+        _routedCamera.Source = null;
+        _routedCamera.Visibility = Visibility.Collapsed;
+        if (index is null) return;
+        var feed = CameraFeed.Get(index.Value);
+        Action<BitmapSource> frame = source =>
+        {
+            if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => _routedCamera.Source = source); return; }
+            _routedCamera.Source = source;
+        };
+        feed.FrameReady += frame;
+        try { feed.Start(); } catch { }
+        _routedFeed = (feed, frame);
+        if (feed.LastFrame is { } last) _routedCamera.Source = last;
+        _routedCamera.Visibility = Visibility.Visible;
+    }
+
+    void DetachRoutedCamera()
+    {
+        if (_routedFeed.Handler is { } handler) _routedFeed.Feed?.FrameReady -= handler;
+        _routedFeed = default;
+        _routedCameraIndex = null;
     }
 
     ImageSource Thumbnail(ScorebugLayout layout, int width, int height)

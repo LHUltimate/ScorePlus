@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Win32;
 
 namespace Scoreboard.Desktop;
 
@@ -18,38 +19,86 @@ public sealed class StreamPushService : IDisposable
     public string LastMessage => _lastMessage;
     public string? Error { get; private set; }
 
-    public static string? FindFfmpeg()
+    /// <summary>
+    /// Finds ffmpeg wherever an operator is likely to have put it: an explicit preference, the
+    /// environment, beside the app, the usual package-manager folders, the App Paths registration
+    /// and PATH. Stream Studio also offers a file picker, so a machine that keeps it in a custom
+    /// folder never has to edit PATH.
+    /// </summary>
+    public static string? FindFfmpeg(string? configured = null)
     {
-        var configured = Environment.GetEnvironmentVariable("SCOREPLUS_FFMPEG");
-        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
-        var beside = Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe");
-        if (File.Exists(beside)) return beside;
-        var local = Path.Combine(AppContext.BaseDirectory, "ffmpeg");
-        if (File.Exists(local)) return local;
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var folder in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var candidate in Candidates(configured))
         {
             try
             {
-                var candidate = Path.Combine(folder.Trim(), "ffmpeg.exe");
-                if (File.Exists(candidate)) return candidate;
-                candidate = Path.Combine(folder.Trim(), "ffmpeg");
-                if (File.Exists(candidate)) return candidate;
+                if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate.Trim().Trim('"')))
+                    return candidate.Trim().Trim('"');
             }
             catch { }
         }
         return null;
     }
 
-    public bool Start(string localStreamUrl, string localAudioUrl, string serverUrl, string streamKey)
+    static IEnumerable<string> Candidates(string? configured)
+    {
+        if (!string.IsNullOrWhiteSpace(configured)) yield return configured;
+        var environment = Environment.GetEnvironmentVariable("SCOREPLUS_FFMPEG");
+        if (!string.IsNullOrWhiteSpace(environment)) yield return environment;
+
+        var baseDir = AppContext.BaseDirectory;
+        yield return Path.Combine(baseDir, "ffmpeg.exe");
+        yield return Path.Combine(baseDir, "ffmpeg");
+        yield return Path.Combine(baseDir, "ffmpeg", "bin", "ffmpeg.exe");
+        yield return Path.Combine(baseDir, "ffmpeg", "ffmpeg.exe");
+        yield return Path.Combine(baseDir, "tools", "ffmpeg.exe");
+
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var common = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        yield return Path.Combine(local, "Microsoft", "WinGet", "Links", "ffmpeg.exe");
+        yield return Path.Combine(profile, "scoop", "shims", "ffmpeg.exe");
+        yield return Path.Combine(common, "chocolatey", "bin", "ffmpeg.exe");
+        yield return Path.Combine(programFiles, "ffmpeg", "bin", "ffmpeg.exe");
+        yield return Path.Combine(programFilesX86, "ffmpeg", "bin", "ffmpeg.exe");
+        yield return @"C:\ffmpeg\bin\ffmpeg.exe";
+
+        foreach (var key in new[]
+        {
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\ffmpeg.exe",
+            @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\ffmpeg.exe"
+        })
+        {
+            string? registered = null;
+            try
+            {
+                using var registry = Registry.LocalMachine.OpenSubKey(key);
+                registered = registry?.GetValue(null) as string;
+            }
+            catch { }
+            if (!string.IsNullOrWhiteSpace(registered)) yield return registered;
+        }
+
+        foreach (var folder in (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (string.IsNullOrWhiteSpace(folder)) continue;
+            yield return Path.Combine(folder.Trim().Trim('"'), "ffmpeg.exe");
+            yield return Path.Combine(folder.Trim().Trim('"'), "ffmpeg");
+        }
+    }
+
+    public bool Start(string localStreamUrl, string localAudioUrl, string serverUrl, string streamKey,
+        string? ffmpegPath = null)
     {
         Stop();
         Error = null;
         _lastMessage = "";
-        var ffmpeg = FindFfmpeg();
+        var ffmpeg = FindFfmpeg(ffmpegPath);
         if (ffmpeg is null)
         {
-            Error = "ffmpeg was not found. Put ffmpeg.exe beside ScorePlus or on PATH, then press Push again.";
+            Error = "ffmpeg was not found. Install it, or use Locate ffmpeg in Stream Studio to point at ffmpeg.exe.";
             return false;
         }
         if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(streamKey))
@@ -63,10 +112,12 @@ public sealed class StreamPushService : IDisposable
             : $"-thread_queue_size 512 -f wav -i \"{localAudioUrl}\" ";
         // Map one video and one audio stream explicitly. The audio comes from the same programme
         // tap as Live Channel, so the provider hears the clips, cameras and venue mix, not silence.
-        var args = $"-hide_banner -loglevel warning -thread_queue_size 512 -re -f mjpeg -i \"{localStreamUrl}\" "
+        var args = $"-hide_banner -nostdin -loglevel warning -thread_queue_size 1024 -re -f mjpeg -i \"{localStreamUrl}\" "
             + audioInput
             + "-map 0:v:0 -map 1:a:0 -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -r 30 -g 60 "
-            + "-c:a aac -b:a 128k -ar 48000 -shortest -f flv \"" + target.Replace("\"", "") + "\"";
+            + "-vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" "
+            + "-c:a aac -b:a 128k -ar 48000 -max_muxing_queue_size 1024 -shortest -f flv \""
+            + target.Replace("\"", "") + "\"";
         try
         {
             var info = new ProcessStartInfo(ffmpeg, args)

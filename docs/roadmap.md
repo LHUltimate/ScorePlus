@@ -617,6 +617,52 @@ devices carry their own terms — integrate through their SDK, do not copy third
 Exit: a keyed scorebug reaches a router, two clips play with fill+key on separate channels, a camera
 cut and a replay run from one operator surface, and a stream carries the same picture with overlays.
 
+## Stage 6.5 — Transition and animation timeline
+
+The change of authoring model for the Transition Builder and Animation Maker. Both already edit a
+clip's phases and keys; this stage turns them into one timeline editor with property-level keyframes
+and automatic in-betweening, so an operator describes where a piece starts and where it must arrive
+instead of drawing every frame on the way.
+
+Ships:
+
+- **One timeline for both editors**: a shared ruler with seconds and frames, a playhead, zoom and
+  fit, and one row per element and property. A transition shows its outgoing and incoming legs on
+  the same ruler; an animation shows the loop, or the flourish that runs when a value changes.
+- **Per-property keyframes**: position X/Y, scale, rotation, opacity, corner radius, fill and
+  foreground colour, stroke, shadow, blur/glow and text properties each get their own track, with
+  a key at a time and a value.
+- **Automatic interpolation**: when two keys are set — for example X=0 at 0s and X=400 at 1s — the
+  editor computes every frame between them and the renderer plays that path. A move never cuts to
+  its destination unless the operator deliberately asks for a step. Each segment carries its own
+  easing (linear, ease in/out, spring or a drawn custom curve).
+- **Colour interpolation**: colour keys blend through RGB or HSV with the same easing, including
+  team-palette slots, gradient stops and the hand-over colours of a transition.
+- **Direct manipulation**: drag keys on the timeline, scrub with the playhead, drag the element on
+  the stage to write a position key, and edit a key's time, value and easing in the inspector.
+- **Graph editor**: a value-over-time curve for each keyed property, with handles for custom easing
+  and a step mode for deliberate holds.
+- **Clip composition**: reorder tracks, stagger items, add temporary text, logos and shapes, and
+  watch a live preview that matches the audience renderer frame for frame.
+- **Save and reuse**: clips stay in the show library and can be attached to layouts, elements,
+  storyboard scenes, cues and macros, surviving copy/paste and game saves.
+- **Compatibility**: old clips open and are upgraded to property tracks without losing their keys;
+  import and export keep the same clip file format.
+
+UI changes: the separate quick-start and advanced panels collapse into the timeline workspace — a
+track list on the left, ruler and stage in the centre, inspector on the right, and a transport with
+play, stop and loop along the bottom. The graph editor is one toggle away, not a second window.
+
+Program changes: Core `MotionClip` gains property-level tracks and per-segment easing;
+`MotionPlayback` and `ScorebugRender` evaluate the same interpolation function, so the builder
+preview and every audience output agree; the editor writes keys through one model instead of
+per-property special cases; tests cover two-key interpolation, colour blends, step holds and
+old-clip migration.
+
+Exit: a piece keyed at 0,0 and 400,400 travels smoothly between the two keys, a colour key blends
+rather than cutting, and the same clip plays identically in the builder preview and on an audience
+output.
+
 ## Stage 7 — Venue control
 
 Ships:

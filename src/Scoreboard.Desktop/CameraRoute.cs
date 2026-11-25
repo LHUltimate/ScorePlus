@@ -11,6 +11,12 @@ public sealed class CameraRoute
 {
     public int CameraIndex { get; set; }
 
+    /// <summary>Follow the programme's display routing instead of this camera's own list.</summary>
+    public bool UseProgrammeDisplays { get; set; } = true;
+
+    /// <summary>Follow the programme's channel routing instead of this camera's own list.</summary>
+    public bool UseProgrammeChannels { get; set; } = true;
+
     public bool AllDisplays { get; set; }
     public List<string> Displays { get; set; } = [];
 
@@ -25,7 +31,15 @@ public sealed class CameraRoute
     public bool HasTags => AllTags || Tags.Count > 0;
 
     /// <summary>True when the operator chose anything at all. An empty route means "no routing".</summary>
-    public bool IsConfigured => RoutesToDisplays || RoutesToChannels || HasTags;
+    public bool IsConfigured => UseProgrammeDisplays || UseProgrammeChannels || RoutesToDisplays || RoutesToChannels || HasTags;
+
+    /// <summary>Displays to send this camera to, with the programme default resolved.</summary>
+    public bool RoutesDisplay(ProgrammeRoute programme, string? displayId) =>
+        UseProgrammeDisplays ? programme.MatchesDisplay(displayId) : MatchesDisplay(displayId);
+
+    /// <summary>Channels to re-point at this camera, with the programme default resolved.</summary>
+    public bool RoutesChannel(ProgrammeRoute programme, string? channelId) =>
+        UseProgrammeChannels ? programme.MatchesChannel(channelId) : MatchesChannel(channelId);
 
     /// <summary>
     /// The tag a take should carry, or null to keep the camera's own library tag. GLOBAL is the
@@ -42,15 +56,18 @@ public sealed class CameraRoute
         AllChannels || (id is not null && Channels.Contains(id, StringComparer.OrdinalIgnoreCase));
 
     /// <summary>A short line for the switch panel and the camera tile tooltip.</summary>
-    public string Summary(int displayCount, int channelCount)
+    public string Summary(int displayCount, int channelCount, ProgrammeRoute? programme = null)
     {
+        programme ??= new ProgrammeRoute();
         var parts = new List<string>();
-        if (AllDisplays) parts.Add("all displays");
+        if (UseProgrammeDisplays) parts.Add($"default displays ({programme.DisplaySummary(displayCount)})");
+        else if (AllDisplays) parts.Add("all displays");
         else if (Displays.Count > 0)
             parts.Add(displayCount > 0 && Displays.Count >= displayCount ? "all displays" : $"{Displays.Count} display{(Displays.Count == 1 ? "" : "s")}");
         else parts.Add("no displays");
 
-        if (AllChannels) parts.Add("all channels");
+        if (UseProgrammeChannels) parts.Add($"default channels ({programme.ChannelSummary(channelCount)})");
+        else if (AllChannels) parts.Add("all channels");
         else if (Channels.Count > 0)
             parts.Add(channelCount > 0 && Channels.Count >= channelCount ? "all channels" : $"{Channels.Count} channel{(Channels.Count == 1 ? "" : "s")}");
         else parts.Add("no channels");
@@ -62,6 +79,8 @@ public sealed class CameraRoute
     public CameraRoute Copy() => new()
     {
         CameraIndex = CameraIndex,
+        UseProgrammeDisplays = UseProgrammeDisplays,
+        UseProgrammeChannels = UseProgrammeChannels,
         AllDisplays = AllDisplays,
         Displays = [.. Displays],
         AllChannels = AllChannels,
@@ -83,6 +102,67 @@ public sealed class CameraRoute
         Tags = Tags.Where(tag => !string.IsNullOrWhiteSpace(tag)).Select(MediaLibrary.NormalizeTag)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
+}
+
+/// <summary>
+/// The programme's own routing: the displays and venue channels a take reaches unless a camera
+/// overrides them. Every camera route starts on "Default (programme)", so this is the one place
+/// the operator sets the house pattern.
+/// </summary>
+public sealed class ProgrammeRoute
+{
+    public bool AllDisplays { get; set; }
+    public List<string> Displays { get; set; } = [];
+    public bool AllChannels { get; set; }
+    public List<string> Channels { get; set; } = [];
+
+    public bool RoutesToDisplays => AllDisplays || Displays.Count > 0;
+    public bool RoutesToChannels => AllChannels || Channels.Count > 0;
+
+    public bool MatchesDisplay(string? id) =>
+        AllDisplays || (id is not null && Displays.Contains(id, StringComparer.OrdinalIgnoreCase));
+
+    public bool MatchesChannel(string? id) =>
+        AllChannels || (id is not null && Channels.Contains(id, StringComparer.OrdinalIgnoreCase));
+
+    public string DisplaySummary(int displayCount)
+    {
+        if (AllDisplays) return "all displays";
+        if (Displays.Count == 0) return "no displays";
+        return displayCount > 0 && Displays.Count >= displayCount
+            ? "all displays" : $"{Displays.Count} display{(Displays.Count == 1 ? "" : "s")}";
+    }
+
+    public string ChannelSummary(int channelCount)
+    {
+        if (AllChannels) return "all channels";
+        if (Channels.Count == 0) return "no channels";
+        return channelCount > 0 && Channels.Count >= channelCount
+            ? "all channels" : $"{Channels.Count} channel{(Channels.Count == 1 ? "" : "s")}";
+    }
+
+    public string Summary(int displayCount, int channelCount) =>
+        $"displays {DisplaySummary(displayCount)} · channels {ChannelSummary(channelCount)}";
+
+    public ProgrammeRoute Copy() => new()
+    {
+        AllDisplays = AllDisplays,
+        Displays = [.. Displays],
+        AllChannels = AllChannels,
+        Channels = [.. Channels]
+    };
+
+    public void Normalize()
+    {
+        Displays ??= [];
+        Channels ??= [];
+        Displays = Clean(Displays);
+        Channels = Clean(Channels);
+    }
+
+    static List<string> Clean(IEnumerable<string> ids) => ids
+        .Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 }
 
 /// <summary>
