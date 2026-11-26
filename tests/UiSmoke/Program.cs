@@ -1942,6 +1942,30 @@ internal static class Program
                 applyContent.Invoke(null, [paintedShape, paintedElement, polishEngine.State, null]);
                 if (paintedShape.Fill is not System.Windows.Media.DrawingBrush)
                     throw new Exception($"FAIL: a texture did not reach the shape ({paintedShape.Fill?.GetType().Name ?? "null"})");
+                // Materials must not all paint the same wash. Paper carries fibres and a rough
+                // grain; metal carries brushed lines, so their full brush descriptions differ.
+                var paperElement = new ScorebugElement
+                {
+                    Kind = ScorebugElementKind.Shape, Shape = ScorebugShape.Rectangle,
+                    Width = 240, Height = 120, Background = "#FF6E6E6E",
+                    BackgroundTexture = ScorebugTexture.ForKind("Paper")
+                };
+                var metalElement = new ScorebugElement
+                {
+                    Kind = ScorebugElementKind.Shape, Shape = ScorebugShape.Rectangle,
+                    Width = 240, Height = 120, Background = "#FF6E6E6E",
+                    BackgroundTexture = ScorebugTexture.ForKind("Metal")
+                };
+                var paperShape = (System.Windows.Shapes.Shape)createShape.Invoke(null, [paperElement, polishEngine.State])!;
+                applyContent.Invoke(null, [paperShape, paperElement, polishEngine.State, null]);
+                var metalShape = (System.Windows.Shapes.Shape)createShape.Invoke(null, [metalElement, polishEngine.State])!;
+                applyContent.Invoke(null, [metalShape, metalElement, polishEngine.State, null]);
+                var paperXaml = System.Windows.Markup.XamlWriter.Save(paperShape.Fill);
+                var metalXaml = System.Windows.Markup.XamlWriter.Save(metalShape.Fill);
+                if (paperXaml == metalXaml)
+                    throw new Exception("FAIL: paper and metal render as the same material");
+                if (ScorebugTexture.ForKind("Paper").Grain < 0.5)
+                    throw new Exception("FAIL: the paper preset is not a rough surface");
 
                 polishEngine.SetTimeoutCount(true, 3);
                 var polishBarsItem = new ScorebugElement
@@ -1957,10 +1981,24 @@ internal static class Program
                 polishBarsItem.IconRounded = false; barsView.Update();
                 if (Math.Abs(firstBar.RadiusX) > 0.01) throw new Exception("FAIL: turning round ends off left rounded bars");
                 polishEngine.SetTimeoutCount(true, 1); barsView.Update();
-                if (barsPanel.Children.Count != 1)
-                    throw new Exception($"FAIL: {barsPanel.Children.Count} timeout bars remain after two were used");
-                if (barsPanel.HorizontalAlignment != HorizontalAlignment.Right)
-                    throw new Exception("FAIL: the remaining timeout bars are not anchored right, so they do not disappear left to right");
+                // The row keeps its full allotment; used timeouts are drawn in the used-timeout
+                // colour. By default those used bars gather at the right, leaving the remaining
+                // ones on the left.
+                if (barsPanel.Children.Count != 3)
+                    throw new Exception($"FAIL: {barsPanel.Children.Count} timeout bars drawn instead of the full allotment of 3");
+                var usedBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(polishBarsItem.IconUsedColor));
+                var usedBars = barsPanel.Children.OfType<System.Windows.Shapes.Rectangle>()
+                    .Count(bar => bar.Fill is SolidColorBrush fill && fill.Color == usedBrush.Color);
+                if (usedBars != 2)
+                    throw new Exception($"FAIL: {usedBars} timeout bars use the used-timeout colour after two were taken");
+                var firstPolishBar = (System.Windows.Shapes.Rectangle)barsPanel.Children[0];
+                if (firstPolishBar.Fill is not SolidColorBrush liveBar || liveBar.Color == usedBrush.Color)
+                    throw new Exception("FAIL: the remaining timeout bar is not left of the used ones");
+                polishBarsItem.IconTimeoutFromRight = false; barsView.Update();
+                if (((System.Windows.Shapes.Rectangle)barsPanel.Children[2]).Fill is not SolidColorBrush flippedLive
+                    || flippedLive.Color == usedBrush.Color)
+                    throw new Exception("FAIL: flipping the timeout direction did not move the used bars to the left");
+                polishBarsItem.IconTimeoutFromRight = true; barsView.Update();
 
                 // A logo can be rotated from the property panel; its section used to be hidden for
                 // every kind except text.
@@ -2434,6 +2472,26 @@ internal static class Program
             Console.WriteLine("PASS: every Audience Output press opens another window, and they close with the game");
 
 
+            // A password changed while the remote is serving must reach it at once, not at relaunch.
+            {
+                var previousRestart = RemoteControlServer.RestartRequested;
+                var restarts = 0;
+                RemoteControlServer.RestartRequested = () => restarts++;
+                var remotePrefs = new UserPreferences { Theme = "Dark", RemoteEnabled = true, RemotePassword = "old-pass", RemotePort = FreePort() };
+                var remoteApplyWindow = new SettingsWindow(remotePrefs);
+                ShowForSmoke(remoteApplyWindow);
+                remoteApplyWindow.UpdateLayout();
+                ((PasswordBox)remoteApplyWindow.FindName("RemotePasswordInput")!).Password = "new-pass";
+                var applyRemote = remoteApplyWindow.FindName("ApplyRemoteButton") as Button
+                    ?? throw new Exception("FAIL: preferences has no button to update the remote password");
+                applyRemote.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                if (restarts == 0 || remotePrefs.RemotePassword != "new-pass")
+                    throw new Exception($"FAIL: updating the remote password did not restart the remote ({restarts} restarts, password '{remotePrefs.RemotePassword}')");
+                remoteApplyWindow.Close();
+                RemoteControlServer.RestartRequested = previousRestart;
+                Console.WriteLine("PASS: a changed remote password is applied to the running remote immediately");
+            }
+
             var preferencesWindow = new SettingsWindow(new UserPreferences());
             ShowForSmoke(preferencesWindow);
             preferencesWindow.UpdateLayout();
@@ -2876,6 +2934,27 @@ internal static class Program
                 addEditor.UpdateLayout();
                 if (freshCatalog.Layout.Elements.Count != beforeAdd + 2)
                     throw new Exception("FAIL: copy and paste did not add an independent element");
+                // A pasted group is its own group: the copy must not drag the original with it.
+                var groupIds = new[] { "paste-group-" + Guid.NewGuid().ToString("N") };
+                var groupMembers = freshCatalog.Layout.Elements.TakeLast(2).ToArray();
+                freshCatalog.Update(layout =>
+                {
+                    foreach (var element in layout.Elements.Where(item => groupMembers.Any(member => member.Id == item.Id)))
+                        element.GroupId = groupIds[0];
+                });
+                studioLayers.SelectedItems.Clear();
+                foreach (var row in studioLayers.Items.Cast<object>())
+                {
+                    var element = row.GetType().GetProperty("Element")?.GetValue(row) as ScorebugElement;
+                    if (element is not null && groupMembers.Any(member => member.Id == element.Id)) studioLayers.SelectedItems.Add(row);
+                }
+                addEditor.UpdateLayout();
+                copyMethod.Invoke(addEditor, null);
+                pasteMethod.Invoke(addEditor, null);
+                var pastedGroup = freshCatalog.Layout.Elements.TakeLast(2).ToArray();
+                if (pastedGroup.Select(element => element.GroupId).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1
+                    || string.Equals(pastedGroup[0].GroupId, groupIds[0], StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("FAIL: pasted group members kept the original group id instead of forming a new group");
                 // The portrait is no longer a toolbar button of its own: it is one of the PLAYER
                 // DATA + choices, alongside Name, Number and the stats. The picker is modal, so the
                 // test adds the element the way that choice does.
@@ -3210,10 +3289,13 @@ internal static class Program
                 throw new Exception("FAIL: timeout lines are not in a row");
             iconEngine.Timeout(true);
             iconsView.Update();
-            if (FindAll<System.Windows.Shapes.Rectangle>(iconsView).Count() != iconEngine.State.HomeTimeouts)
-                throw new Exception($"FAIL: a used timeout should leave {iconEngine.State.HomeTimeouts} bars, not keep the full allotment");
-            if (barStack.HorizontalAlignment != HorizontalAlignment.Right)
-                throw new Exception("FAIL: the remaining timeout bars are not anchored right, so they disappear left to right");
+            if (FindAll<System.Windows.Shapes.Rectangle>(iconsView).Count() != iconEngine.State.HomeTimeoutLimit)
+                throw new Exception($"FAIL: a used timeout removed its bar instead of recolouring it ({FindAll<System.Windows.Shapes.Rectangle>(iconsView).Count()} of {iconEngine.State.HomeTimeoutLimit})");
+            var usedIconBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(barsItem.IconUsedColor));
+            var usedIconBars = FindAll<System.Windows.Shapes.Rectangle>(iconsView)
+                .Count(bar => bar.Fill is SolidColorBrush fill && fill.Color == usedIconBrush.Color);
+            if (usedIconBars != 1)
+                throw new Exception($"FAIL: {usedIconBars} bars show the used-timeout colour after one timeout");
             if (FindAll<System.Windows.Shapes.Rectangle>(iconsView).Any(bar => bar.RadiusX <= 0.01))
                 throw new Exception("FAIL: timeout bars are not rounded by default");
             barsItem.IconRounded = false;
@@ -3353,6 +3435,41 @@ internal static class Program
             if (FindAll<ScorebugIconView>(iconCanvas).Count() != 2)
                 throw new Exception("FAIL: the scorebug canvas did not draw the icon elements");
             iconCanvas.Dispose();
+
+            // A studio drag or resize paints while the mouse is still down. RefreshGeometry moves the
+            // drawn boxes to an unsaved edit, and the catalog's live preview event tells previews.
+            {
+                var livePreviewCatalog = new ScorebugCatalog(Path.Combine(appDataPath, $"live-resize-{Guid.NewGuid():N}.json"));
+                livePreviewCatalog.Update(layout =>
+                {
+                    layout.Elements.Clear();
+                    layout.Elements.Add(new ScorebugElement { Name = "Resize me", Content = "LIVE", X = 20, Y = 30, Width = 240, Height = 80, FontSize = 32 });
+                });
+                var livePreviewEngine = new GameEngine();
+                livePreviewEngine.NewGame("football");
+                var livePreviewView = new ScorebugCanvasView(livePreviewCatalog, livePreviewEngine);
+                livePreviewView.Measure(new Size(1280, 720));
+                livePreviewView.Arrange(new Rect(0, 0, 1280, 720));
+                livePreviewView.UpdateLayout();
+                var liveHost = FindAll<TextBlock>(livePreviewView).FirstOrDefault(text => text.Text == "LIVE")?.Parent as Border;
+                if (liveHost is null)
+                    throw new Exception("FAIL: the live-preview probe did not find its element's host");
+                var liveElement = livePreviewCatalog.Layout.Elements[0];
+                // An in-progress resize: geometry changes without a catalog save.
+                liveElement.X = 80; liveElement.Width = 520; liveElement.Height = 140;
+                livePreviewView.RefreshGeometry();
+                if (Math.Abs(liveHost.Width - 520) > 0.5 || Math.Abs(liveHost.Height - 140) > 0.5
+                    || Math.Abs(Canvas.GetLeft(liveHost) - 80) > 0.5)
+                    throw new Exception($"FAIL: an in-progress resize did not reach the preview ({liveHost.Width:0}x{liveHost.Height:0} at {Canvas.GetLeft(liveHost):0})");
+                var livePreviewFired = 0;
+                livePreviewCatalog.LivePreview += () => livePreviewFired++;
+                livePreviewCatalog.NotifyLivePreview();
+                if (livePreviewFired != 1)
+                    throw new Exception("FAIL: an in-progress studio edit does not tell previews to redraw");
+                livePreviewView.Dispose();
+                Console.WriteLine("PASS: a resize still under the mouse reaches the preview before it is saved");
+            }
+
             var iconStudio = new ScorebugEditorWindow(iconCatalog, iconEngine, null, "Dark");
             ShowForSmoke(iconStudio);
             iconStudio.UpdateLayout();
@@ -3385,6 +3502,12 @@ internal static class Program
             iconLayers.SelectedItem = timeoutLayer;
             iconStudio.UpdateLayout();
             var verticalBars = (CheckBox)iconStudio.FindName("IconVerticalInput")!;
+            var timeoutDirection = (CheckBox)iconStudio.FindName("IconTimeoutFromRightInput")!;
+            if (timeoutDirection.Visibility != Visibility.Visible || timeoutDirection.IsChecked != true)
+                throw new Exception("FAIL: the studio does not offer the right-to-left timeout direction by default");
+            var usedTimeoutPanel = (FrameworkElement)iconStudio.FindName("IconUsedPanel")!;
+            if (usedTimeoutPanel.Visibility != Visibility.Visible)
+                throw new Exception("FAIL: the used-timeout colour is hidden for a timeout element");
             verticalBars.IsChecked = true;
             Pump(TimeSpan.FromMilliseconds(450));
             ((TextBox)iconStudio.FindName("XInput")!).Text = "37";
@@ -3450,6 +3573,12 @@ internal static class Program
                 var colourSwatch = FindAll<Border>(creator).FirstOrDefault(border => border.Name == "IconColorSwatch");
                 if (colourInput is null || colourSwatch is null)
                     throw new Exception("FAIL: the Icon Creator has no colour thumbnail beside its colour field");
+                // The mark's motion is chosen in the creator and plays in its preview.
+                var animationPicker = FindAll<ComboBox>(creator).FirstOrDefault(box => box.Name == "IconAnimation");
+                if (animationPicker is null || !animationPicker.Items.Contains(CustomIconAnimation.Fade))
+                    throw new Exception("FAIL: the Icon Creator has no icon animation picker");
+                animationPicker.SelectedItem = CustomIconAnimation.Fade;
+                creator.UpdateLayout();
                 colourInput.Text = "#FFFF0000";
                 creator.UpdateLayout();
                 if (colourSwatch.Background is not SolidColorBrush colourBrush || colourBrush.Color != Colors.Red)
@@ -3468,6 +3597,8 @@ internal static class Program
                 if (stateIcon is null || stateIcon.States.Count != 2
                     || stateIcon.States[0].Glyph != "A" || stateIcon.States[1].Glyph != "B")
                     throw new Exception("FAIL: editing one icon data state changed another state");
+                if (stateIcon.Animation != CustomIconAnimation.Fade)
+                    throw new Exception($"FAIL: the icon's animation saved as {stateIcon.Animation} instead of Fade");
                 creator.Close();
                 CustomIconStore.UsePath(null);
                 if (File.Exists(creatorPath)) File.Delete(creatorPath);
@@ -5035,6 +5166,30 @@ internal static class Program
             if (FontCatalog.All.Select(f => f.Source).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 25)
                 throw new Exception("FAIL: the font picker repeats families");
             Console.WriteLine($"PASS: the studio offers {FontCatalog.All.Count} font families and imports your own");
+            // An imported font has to survive the save: it must resolve from the font file, not
+            // fall back to Segoe UI, and importing the same file twice must not make two rows.
+            var systemArial = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "arial.ttf");
+            if (File.Exists(systemArial))
+            {
+                var importedSource = FontCatalog.Import(systemArial);
+                var importedAgain = FontCatalog.Import(systemArial);
+                if (!string.Equals(importedSource, importedAgain, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception($"FAIL: importing one font twice produced two sources ({importedSource}, {importedAgain})");
+                if (!importedSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase) || !importedSource.Contains('#'))
+                    throw new Exception($"FAIL: an imported font is stored as a non-file source ({importedSource})");
+                if (FontCatalog.All.Count(choice => string.Equals(choice.Source, importedSource, StringComparison.OrdinalIgnoreCase)) != 1)
+                    throw new Exception("FAIL: the same imported font appears more than once in the picker");
+                var importedTypeface = new Typeface(FontCatalog.Resolve(importedSource), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+                if (!importedTypeface.TryGetGlyphTypeface(out var importedGlyph)
+                    || !importedGlyph.FamilyNames.Values.Any(name => name.Contains("Arial", StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception("FAIL: a stored imported font does not resolve back to its own face");
+                var fontProbe = new ScorebugLayout();
+                fontProbe.Elements.Add(new ScorebugElement { Name = "Font probe", Content = "1", FontFamily = importedSource, Width = 200, Height = 80 });
+                var fontHtml = ScorebugHtml.Build(fontProbe);
+                if (!fontHtml.Contains("@font-face", StringComparison.Ordinal) || !fontHtml.Contains("font-family:'Arial'", StringComparison.Ordinal))
+                    throw new Exception("FAIL: an exported page does not embed the imported font");
+                Console.WriteLine("PASS: an imported font resolves from its file and is embedded in the web export");
+            }
             if (Enum.GetValues<ScorebugTransition>().Length < 10)
                 throw new Exception($"FAIL: only {Enum.GetValues<ScorebugTransition>().Length} text-change animations exist");
             // The output refreshes all values while a clock runs. Repeating the value that is
@@ -7020,20 +7175,22 @@ internal static class Program
                     var barsView = FindAll<ScorebugIconView>(artCanvas).FirstOrDefault();
                     if (barsView is null)
                         throw new Exception("FAIL: switching an element to timeout bars draws no live artwork in the studio");
-                    if (FindAll<System.Windows.Shapes.Rectangle>(barsView).Count() != artEngine.State.HomeTimeouts)
-                        throw new Exception($"FAIL: timeout bars show {FindAll<System.Windows.Shapes.Rectangle>(barsView).Count()} bars for {artEngine.State.HomeTimeouts} timeouts");
+                    if (FindAll<System.Windows.Shapes.Rectangle>(barsView).Count() != artEngine.State.HomeTimeoutLimit)
+                        throw new Exception($"FAIL: timeout bars show {FindAll<System.Windows.Shapes.Rectangle>(barsView).Count()} bars for an allotment of {artEngine.State.HomeTimeoutLimit}");
                     if (FindAll<ScorebugTextBlock>(artCanvas).Any(t => t.Text.Contains("POSSESSION", StringComparison.Ordinal)))
                         throw new Exception("FAIL: the old text is still drawn under the artwork");
-                    // Live: taking another timeout removes its bar from the left, leaving the rest
-                    // anchored to the right.
+                    // Live: taking a timeout recolours the bar at the right, leaving the remaining
+                    // timeouts on the left.
                     artEngine.SetTimeoutCount(true, 1);
                     Pump(TimeSpan.FromMilliseconds(200));
-                    var artBars = FindAll<System.Windows.Shapes.Rectangle>(barsView);
-                    if (artBars.Count() != artEngine.State.HomeTimeouts)
-                        throw new Exception($"FAIL: {artBars.Count()} timeout bars remain for {artEngine.State.HomeTimeouts} timeouts");
-                    var artBarStack = FindAll<StackPanel>(barsView).First(panel => panel.Children.OfType<System.Windows.Shapes.Rectangle>().Any());
-                    if (artBarStack.HorizontalAlignment != HorizontalAlignment.Right)
-                        throw new Exception("FAIL: the used timeout bars did not disappear from the left");
+                    var artBars = FindAll<System.Windows.Shapes.Rectangle>(barsView).ToArray();
+                    if (artBars.Length != artEngine.State.HomeTimeoutLimit)
+                        throw new Exception($"FAIL: {artBars.Length} timeout bars drawn for an allotment of {artEngine.State.HomeTimeoutLimit}");
+                    var artUsed = new SolidColorBrush((Color)ColorConverter.ConvertFromString(artCatalog.Layout.Elements[0].IconUsedColor));
+                    if (artBars.Count(bar => bar.Fill is SolidColorBrush fill && fill.Color == artUsed.Color) != 2)
+                        throw new Exception("FAIL: the two used timeouts did not take the used-timeout colour");
+                    if (artBars[0].Fill is not SolidColorBrush artLive || artLive.Color == artUsed.Color)
+                        throw new Exception("FAIL: the remaining timeout is not the left-hand bar");
                     // Switching to a different icon builds that artwork instead of keeping the bars.
                     ((ComboBox)artStudio.FindName("IconInput")!).SelectedItem = ScorebugIcon.PossessionDot;
                     Pump(TimeSpan.FromMilliseconds(250));
@@ -7134,6 +7291,19 @@ internal static class Program
                         || !panelHtml.Contains("grid-column:1/-1", StringComparison.Ordinal)
                         || !panelHtml.Contains("controls.length ? '' : 'none'", StringComparison.Ordinal))
                         throw new Exception("FAIL: the remote still shows an empty sport-values card or squeezes custom-value names out of the row");
+                    // The down line can be overridden from the phone, and the page lists the
+                    // operator's own keybinds so a keyboard on the remote works.
+                    if (!panelHtml.Contains("downModes", StringComparison.Ordinal)
+                        || !panelHtml.Contains("football.distance.goal", StringComparison.Ordinal)
+                        || !panelHtml.Contains("football.distance.pat", StringComparison.Ordinal)
+                        || !panelHtml.Contains("keysCard", StringComparison.Ordinal)
+                        || !panelHtml.Contains("/api/keybinds", StringComparison.Ordinal))
+                        throw new Exception("FAIL: the remote is missing its down-line overrides or its keyboard card");
+                    RemoteControlServer.KeybindJson = () => "[{\"gesture\":\"F1\",\"action\":\"football.down.next\",\"label\":\"Next down\"}]";
+                    var keybindJson = WaitWithPump(http.GetStringAsync(baseUrl + "/api/keybinds"));
+                    if (!keybindJson.Contains("football.down.next", StringComparison.Ordinal) || !keybindJson.Contains("F1", StringComparison.Ordinal))
+                        throw new Exception("FAIL: the remote did not serve the operator's keybinds");
+                    RemoteControlServer.KeybindJson = null;
                     var action = WaitWithPump(http.PostAsync(baseUrl + "/api/action", new System.Net.Http.StringContent("a=away.score.plus2", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")));
                     if ((int)action.StatusCode != 200 || remoteEngine.State.AwayScore != 2)
                         throw new Exception($"FAIL: a remote score button did not reach the game ({(int)action.StatusCode}, {remoteEngine.State.AwayScore})");
@@ -7144,6 +7314,38 @@ internal static class Program
                     if ((int)liveOff.StatusCode != 200 || remoteHost.LiveScoreClock)
                         throw new Exception("FAIL: the remote could not switch the live score off");
                     Console.WriteLine("PASS: the phone remote needs its password, serves the console state and drives score, sport values and live output");
+                }
+
+                // The phone's down-line overrides reach the game: Goal, Inches, PAT, 2 PT and None.
+                var kickEngine = new GameEngine();
+                kickEngine.NewGame("football");
+                var kickPort = FreePort();
+                using (var kickRemote = new RemoteControlServer(kickEngine, new RemoteHostProbe(), _ => true, Dispatcher.CurrentDispatcher, kickPort, "kick"))
+                {
+                    kickRemote.Start();
+                    var kickCookies = new System.Net.CookieContainer();
+                    using var kickHttp = new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler { CookieContainer = kickCookies, AllowAutoRedirect = false });
+                    var kickUrl = $"http://127.0.0.1:{kickPort}";
+                    WaitWithPump(kickHttp.PostAsync(kickUrl + "/login", new System.Net.Http.StringContent("password=kick", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")));
+                    foreach (var (action, mode) in new[]
+                    {
+                        ("football.distance.goal", FootballDownMode.Goal),
+                        ("football.distance.inches", FootballDownMode.Inches),
+                        ("football.distance.pat", FootballDownMode.Pat),
+                        ("football.distance.twopt", FootballDownMode.TwoPoint),
+                        ("football.distance.none", FootballDownMode.None),
+                        ("football.distance.normal", FootballDownMode.Normal)
+                    })
+                    {
+                        var response = WaitWithPump(kickHttp.PostAsync(kickUrl + "/api/action",
+                            new System.Net.Http.StringContent("a=" + action, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")));
+                        if ((int)response.StatusCode != 200 || kickEngine.State.FootballDownMode != mode)
+                            throw new Exception($"FAIL: the remote's {action} did not reach the down line ({(int)response.StatusCode}, {kickEngine.State.FootballDownMode})");
+                    }
+                    var kickState = WaitWithPump(kickHttp.GetStringAsync(kickUrl + "/api/state"));
+                    if (!kickState.Contains("downMode", StringComparison.Ordinal))
+                        throw new Exception("FAIL: the remote state does not say which down-line override is set");
+                    Console.WriteLine("PASS: the phone remote can override the down line with Goal, Inches, PAT, 2 PT and none");
                 }
             }
 

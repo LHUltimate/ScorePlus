@@ -242,6 +242,9 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         Closed += (_, _) => ShowHeartbeat.Shared.Tick -= BeatShowHealth;
         _program = new ProgramSelection(_scorebug);
         _program.Changed += ProgramChanged;
+        // A drag or resize in the Display Studio moves the artwork before it is saved. The preview
+        // follows the box under the mouse instead of waiting for the mouse button to come up.
+        _scorebug.LivePreview += PreviewLiveEdit;
         // The preview is the staging desk: it must show the values the operator is about to put on
         // air, including the Yards/Goal/PAT choice, while the monitor below stays on the published
         // copy. Reading the published engine here made the preview lag one Update Output behind.
@@ -300,6 +303,10 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         RemoteControlServer.CueState = _macroDock.CueJson;
         RemoteControlServer.CueAction = _macroDock.RemoteCue;
         RemoteControlServer.LockState = () => _operatorLocked;
+        // The remote page runs the operator's own keybinds, and a password change while the remote
+        // is serving restarts it at once instead of waiting for the next launch.
+        RemoteControlServer.KeybindJson = () => Dispatcher.Invoke(RemoteKeybindJson);
+        RemoteControlServer.RestartRequested = () => Dispatcher.BeginInvoke(new Action(StartRemote));
         RemoteControlServer.CameraWallState = mode => Dispatcher.Invoke(() =>
         {
             var json = _booth.StateJson(mode);
@@ -1223,6 +1230,41 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         server.Status += message => Dispatcher.BeginInvoke(new Action(() => StatusText.Text = message));
         server.Start();
         _remote = server;
+    }
+
+    /// <summary>Draws an in-progress studio edit in the program preview, without saving anything.</summary>
+    void PreviewLiveEdit()
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(new Action(PreviewLiveEdit)); return; }
+        _preview?.RefreshGeometry();
+    }
+
+    /// <summary>
+    /// The operator's own keybinds as the phone remote reads them: gesture text, action id and a
+    /// readable name from the console's action table. The remote page turns a keypress back into
+    /// the same action its button would send, so one keybind works on the desk and on the phone.
+    /// </summary>
+    string RemoteKeybindJson()
+    {
+        try
+        {
+            var state = _engine.State;
+            var actions = ControlActions.ForSport(state.SportId, state.ScoringOptions, state.Controls)
+                .GroupBy(action => action.Id, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().Label, StringComparer.OrdinalIgnoreCase);
+            var list = KeybindStore.Load().Bindings
+                .Where(pair => pair.Key.Length > 0 && pair.Value.Length > 0)
+                .OrderBy(pair => pair.Value, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => new
+                {
+                    gesture = pair.Value,
+                    action = pair.Key,
+                    label = actions.TryGetValue(pair.Key, out var label) ? label : ControlActions.LabelFor(pair.Key)
+                })
+                .ToArray();
+            return JsonSerializer.Serialize(list);
+        }
+        catch { return "[]"; }
     }
 
     /// <summary>What a browser watching /watch should see: the program layout and the published game.</summary>

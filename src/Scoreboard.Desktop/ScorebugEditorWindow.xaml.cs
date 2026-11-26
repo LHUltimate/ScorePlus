@@ -72,9 +72,10 @@ public partial class ScorebugEditorWindow : Window
     // Everything selected, in the order it was picked; the primary is the one the property panel
     // edits and the one whose resize handle is shown.
     readonly List<string> _selectedIds = [];
-    // A real object clipboard: copy one item or a whole selection, then paste independent copies.
-    readonly List<ScorebugElement> _clipboardElements = [];
-    int _pasteCount;
+    // A real object clipboard shared by every studio window: copy one item or a whole selection,
+    // then paste independent copies into this layout or another display's layout.
+    static readonly List<ScorebugElement> _clipboardElements = [];
+    static int _pasteCount;
     // Snapshots of the active layout, oldest to newest. A catalog change captures the previous
     // baseline, so every property edit, move, add, remove and paste can be undone.
     readonly List<string> _undoHistory = [];
@@ -108,6 +109,10 @@ public partial class ScorebugEditorWindow : Window
     // The canvas is fitted to the studio panel by default. Scrolling changes this multiplier.
     double _canvasFit = 1;
     double _canvasZoom = 1;
+    // Live previews follow a drag or resize while it is still under the mouse. The clock keeps the
+    // work to a readable frame rate instead of rebuilding content on every mouse move.
+    readonly System.Diagnostics.Stopwatch _livePreviewClock = System.Diagnostics.Stopwatch.StartNew();
+    long _lastLivePreviewMs;
     const double GridStep = 20;
     bool _gridSnap;
 
@@ -1020,7 +1025,7 @@ public partial class ScorebugEditorWindow : Window
             +$"{item.Foreground}:{item.ForegroundSource}:{item.Background}:{item.BackgroundSource}:"
             +$"{item.BackgroundColor2}:{item.BackgroundSource2}:{item.BackgroundGradient}:{item.TransparentBackground}:"
             +$"{item.Opacity}:{item.TextOpacity}:{item.BackgroundOpacity}:{item.BorderOpacity}:"
-            +$"{item.BorderThickness}:{item.BorderColor}:{item.BorderSource}:{item.Icon}:{item.IconScale}:{item.IconVertical}:{item.IconRounded}:{item.IconRotation}:"
+            +$"{item.BorderThickness}:{item.BorderColor}:{item.BorderSource}:{item.Icon}:{item.IconScale}:{item.IconVertical}:{item.IconRounded}:{item.IconTimeoutFromRight}:{item.PeriodLowercase}:{item.IconRotation}:"
             +$"{item.IconFillColor}:{item.IconFillSource}:{item.IconBorderThickness}:{item.IconBorderColor}:{item.IconBackground}:{item.IconOpacity}:{item.IconUsedColor}:{item.GameClockLeadingZero}:{item.ClockDecimals}:"
             +$"{item.Animation}:{item.MotionAnimation?.Id}:{item.MotionTransition?.Id}:{item.TransitionShrink}:{item.TransitionJumpHeight}:{item.TransitionJumpDirection}:"
             +$"{item.Shape}:{item.CornerRadius}:{item.Visible}:{item.LogoSide}:{item.ImagePath}:"
@@ -1344,7 +1349,7 @@ public partial class ScorebugEditorWindow : Window
         {
             if(!_visuals.TryGetValue(item.Id,out var visual))continue;
             if(visual.Content is ScorebugTextBlock block)
-                ScorebugRender.ApplyToContent(block,item,_engine.State,ScoreboardTemplates.Bind(item.Content,_engine.State,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision,item.PlayClockLeadingZero));
+                ScorebugRender.ApplyToContent(block,item,_engine.State,ScoreboardTemplates.Bind(item.Content,_engine.State,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision,item.PlayClockLeadingZero,item.PeriodLowercase));
             else if(visual.Content is ScorebugIconView iconView)
                 iconView.Update();
             else if(visual.Content is VideoSurface videoSurface)
@@ -1386,7 +1391,7 @@ public partial class ScorebugEditorWindow : Window
             else if(visual.Content is ScorebugTextBlock block)
             {
                 block.ApplyStyle(item,_engine.State);
-                block.UpdateText(ScoreboardTemplates.Bind(item.Content,_engine.State,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision,item.PlayClockLeadingZero),item.Transition,item.TransitionSeconds);
+                block.UpdateText(ScoreboardTemplates.Bind(item.Content,_engine.State,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision,item.PlayClockLeadingZero,item.PeriodLowercase),item.Transition,item.TransitionSeconds);
             }
             else if(visual.Content is TickerView tickerView)
                 tickerView.Update(item,_engine.State);
@@ -1490,7 +1495,7 @@ public partial class ScorebugEditorWindow : Window
             PlayerBindingHint.Text="This text is not tied to a player yet. Pick a team, player and value above, or type any binding in CONTENT.";
             return;
         }
-        var printed=ScoreboardTemplates.Bind(ContentInput.Text,_engine.State,Selected?.PeriodFormat,DownCapsInput.IsChecked==true,PlayClockColonInput.IsChecked==true,GameClockLeadingZeroInput.IsChecked==true,Math.Max(0,ClockDecimalsInput.SelectedIndex),Selected?.RecordIncludesDivision==true,PlayClockLeadingZeroInput.IsChecked==true);
+        var printed=ScoreboardTemplates.Bind(ContentInput.Text,_engine.State,Selected?.PeriodFormat,DownCapsInput.IsChecked==true,PlayClockColonInput.IsChecked==true,GameClockLeadingZeroInput.IsChecked==true,Math.Max(0,ClockDecimalsInput.SelectedIndex),Selected?.RecordIncludesDivision==true,PlayClockLeadingZeroInput.IsChecked==true,PeriodLowercaseInput.IsChecked==true);
         PlayerBindingHint.Text=printed.Length==0
             ? "Prints nothing: that player or value is empty right now."
             : $"Prints now: \"{printed}\"";
@@ -1609,7 +1614,7 @@ public partial class ScorebugEditorWindow : Window
     {
         _loading=true;
         var e=Selected; var has=e is not null;
-        foreach(var control in new Control[]{NameInput,ContentInput,XInput,YInput,WidthInput,HeightInput,FontInput,FontInputSize,RotationInput,ColorInput,BackgroundInput,BorderWidthInput,BorderColorInput,BorderSourceInput,AnimationInput,TransitionInput,TransitionSpeedInput,ShapeInput,RoundedCornersInput,CornerRadiusInput,VisibleInput,TransparentBackgroundInput,MediaTagInput,PeriodFormatInput,RecordDivisionInput,        DownCapsInput,PlayClockColonInput,PlayClockLeadingZeroInput,GameClockLeadingZeroInput,ClockDecimalsInput,IconInput,IconCustomInput,IconTokenInput,IconOffsetXInput,IconOffsetYInput,IconColorInput,IconVisitorsInput,IconFlipInput,IconRotationInput,IconScaleInput,IconVerticalInput,IconRoundedInput,IconFillInput,IconFillSourceInput,IconBorderWidthInput,IconBorderColorInput,IconBackgroundInput,IconUsedColorInput,IconOpacitySlider,TransitionShrinkInput,TransitionJumpHeightInput,TransitionJumpDirectionInput,ForegroundSourceInput,BackgroundSourceInput,LogoInput,PlayerPhotoSideInput,BoldInput,ItalicInput,UnderlineInput,StrikeInput,PreserveAspectInput,AspectInput,VideoCropLeftInput,VideoCropTopInput,VideoCropRightInput,VideoCropBottomInput,ChromaKeyInput,ChromaKeyToleranceInput,AudioDeviceInput,GradientInput,GradientSourceInput,GradientColorInput,GradientAngleInput,OpacitySlider,TextOpacitySlider,BackgroundOpacitySlider,BorderOpacitySlider,TextShadowInput,TextShadowColorInput,TextShadowOffsetInput,TextShadowSoftnessInput,TextShadowAngleInput,TextAlignInput,NestedLayoutInput,NestedAspectInput,TickerInput,TickerSpeedInput,TickerReverseInput})
+        foreach(var control in new Control[]{NameInput,ContentInput,XInput,YInput,WidthInput,HeightInput,FontInput,FontInputSize,RotationInput,ColorInput,BackgroundInput,BorderWidthInput,BorderColorInput,BorderSourceInput,AnimationInput,TransitionInput,TransitionSpeedInput,ShapeInput,RoundedCornersInput,CornerRadiusInput,VisibleInput,TransparentBackgroundInput,MediaTagInput,PeriodFormatInput,PeriodLowercaseInput,RecordDivisionInput,        DownCapsInput,PlayClockColonInput,PlayClockLeadingZeroInput,GameClockLeadingZeroInput,ClockDecimalsInput,IconInput,IconCustomInput,IconTokenInput,IconOffsetXInput,IconOffsetYInput,IconColorInput,IconVisitorsInput,IconFlipInput,IconRotationInput,IconScaleInput,IconVerticalInput,IconRoundedInput,IconTimeoutFromRightInput,IconFillInput,IconFillSourceInput,IconBorderWidthInput,IconBorderColorInput,IconBackgroundInput,IconUsedColorInput,IconOpacitySlider,TransitionShrinkInput,TransitionJumpHeightInput,TransitionJumpDirectionInput,ForegroundSourceInput,BackgroundSourceInput,LogoInput,PlayerPhotoSideInput,BoldInput,ItalicInput,UnderlineInput,StrikeInput,PreserveAspectInput,AspectInput,VideoCropLeftInput,VideoCropTopInput,VideoCropRightInput,VideoCropBottomInput,ChromaKeyInput,ChromaKeyToleranceInput,AudioDeviceInput,GradientInput,GradientSourceInput,GradientColorInput,GradientAngleInput,OpacitySlider,TextOpacitySlider,BackgroundOpacitySlider,BorderOpacitySlider,TextShadowInput,TextShadowColorInput,TextShadowOffsetInput,TextShadowSoftnessInput,TextShadowAngleInput,TextAlignInput,NestedLayoutInput,NestedAspectInput,TickerInput,TickerSpeedInput,TickerReverseInput})
             control.IsEnabled=has;
         if(has)
         {
@@ -1667,6 +1672,7 @@ public partial class ScorebugEditorWindow : Window
             CornerRadiusInput.Text=Math.Clamp(e.CornerRadius,0,200).ToString("0.#");
             VisibleInput.IsChecked=e.Visible; TransparentBackgroundInput.IsChecked=e.TransparentBackground;
             MediaTagInput.Text=e.MediaTag;
+            VideoTagHintText.Text=VideoTagHint();
             PreserveAspectInput.IsChecked=e.PreserveVideoAspect;
             AspectInput.Text=e.VideoAspect.ToString("0.###");
             VideoCropLeftInput.Text=(Math.Clamp(e.VideoCropLeft,0,0.49)*100).ToString("0.#");
@@ -1684,10 +1690,12 @@ public partial class ScorebugEditorWindow : Window
             LogoImagePathText.ToolTip=string.IsNullOrWhiteSpace(e.ImagePath)?null:e.ImagePath;
             PlayerPhotoSideInput.SelectedItem=PlayerPhotoSides.FirstOrDefault(o=>o.Side==e.PlayerPhotoSide)??PlayerPhotoSides[0];
             PeriodFormatInput.SelectedItem=PeriodOptions.FirstOrDefault(o=>o.Key==e.PeriodFormat)??PeriodOptions[0];
+            PeriodLowercaseInput.IsChecked=e.PeriodLowercase;
             IconInput.SelectedItem=e.Icon; IconVisitorsInput.IsChecked=e.IconVisitors; IconFlipInput.IsChecked=e.IconFlipped;
             IconRotationInput.Text=e.IconRotation.ToString("0.#");
             IconVerticalInput.IsChecked=e.IconVertical;
             IconRoundedInput.IsChecked=e.IconRounded;
+            IconTimeoutFromRightInput.IsChecked=e.IconTimeoutFromRight;
             IconBorderWidthInput.Text=Math.Clamp(e.IconBorderThickness,0,40).ToString("0.#");
             IconBorderColorInput.Text=e.IconBorderColor;
             IconBackgroundInput.Text=e.IconBackground;
@@ -1863,11 +1871,13 @@ public partial class ScorebugEditorWindow : Window
         IconScalePanel.Visibility=text&&countedIcon?Visibility.Visible:Visibility.Collapsed;
         IconVerticalInput.Visibility=text&&icon==ScorebugIcon.TimeoutBars?Visibility.Visible:Visibility.Collapsed;
         IconRoundedInput.Visibility=text&&icon==ScorebugIcon.TimeoutBars?Visibility.Visible:Visibility.Collapsed;
+        IconTimeoutFromRightInput.Visibility=text&&countedIcon?Visibility.Visible:Visibility.Collapsed;
         IconFlipInput.Visibility=text&&icon is ScorebugIcon.PossessionDot or ScorebugIcon.PossessionArrow?Visibility.Visible:Visibility.Collapsed;
         IconRotationPanel.Visibility=text&&icon!=ScorebugIcon.None?Visibility.Visible:Visibility.Collapsed;
         IconLookPanel.Visibility=text&&icon!=ScorebugIcon.None?Visibility.Visible:Visibility.Collapsed;
-        // A used timeout now leaves the row, so there is no used-timeout colour to choose.
-        IconUsedPanel.Visibility=Visibility.Collapsed;
+        // A used timeout keeps its bar or pip in the used-timeout colour, so the colour stays a
+        // real setting for both bars and dots.
+        IconUsedPanel.Visibility=text&&countedIcon?Visibility.Visible:Visibility.Collapsed;
         // Only show the extra tuning that the chosen crossings actually use. A plain fade does
         // not need a shrink amount or a jump height on screen.
         // Read the pickers, not just the model: the moment a special crossing is chosen the
@@ -2217,6 +2227,8 @@ public partial class ScorebugEditorWindow : Window
         iconRotation=Math.Clamp(iconRotationOk?iconRotation:0,-360,360);
         var iconVertical=IconVerticalInput.IsChecked==true;
         var iconRounded=IconRoundedInput.IsChecked==true;
+        var iconTimeoutFromRight=IconTimeoutFromRightInput.IsChecked==true;
+        var periodLowercase=PeriodLowercaseInput.IsChecked==true;
         var iconScaleOk=double.TryParse(IconScaleInput.Text,out var iconScale);
         iconScale=Math.Clamp(iconScaleOk?iconScale:1,0.25,3);
         var iconBorderWidthOk=double.TryParse(IconBorderWidthInput.Text,out var iconBorderWidthRaw);
@@ -2273,7 +2285,7 @@ public partial class ScorebugEditorWindow : Window
             &&(!transitionShrinkOk||Math.Abs(item.TransitionShrink-transitionShrink)<0.001)
             &&(!transitionJumpOk||Math.Abs(item.TransitionJumpHeight-transitionJump)<0.001)
             &&item.TransitionJumpDirection==transitionJumpDirection
-            &&(icon is null||item.Icon==icon)&&item.IconVisitors==iconVisitors&&item.IconFlipped==iconFlipped&&(!iconRotationOk||Math.Abs(item.IconRotation-iconRotation)<0.001)&&item.IconVertical==iconVertical&&item.IconRounded==iconRounded
+            &&(icon is null||item.Icon==icon)&&item.IconVisitors==iconVisitors&&item.IconFlipped==iconFlipped&&(!iconRotationOk||Math.Abs(item.IconRotation-iconRotation)<0.001)&&item.IconVertical==iconVertical&&item.IconRounded==iconRounded&&item.IconTimeoutFromRight==iconTimeoutFromRight&&item.PeriodLowercase==periodLowercase
             &&(!iconBorderWidthOk||Math.Abs(item.IconBorderThickness-iconBorderWidth)<0.001)
             &&(!iconBorderColorOk||string.Equals(item.IconBorderColor,iconBorderColor,StringComparison.OrdinalIgnoreCase))
             &&(!iconBackgroundOk||string.Equals(item.IconBackground,iconBackground,StringComparison.OrdinalIgnoreCase))
@@ -2368,6 +2380,8 @@ public partial class ScorebugEditorWindow : Window
         if(iconRotationOk&&Math.Abs(item.IconRotation-iconRotation)>0.001)Group(t=>t.IconRotation=iconRotation);
         if(item.IconVertical!=iconVertical&&item.Kind==ScorebugElementKind.Text)Group(t=>t.IconVertical=iconVertical);
         if(item.IconRounded!=iconRounded&&item.Kind==ScorebugElementKind.Text)Group(t=>t.IconRounded=iconRounded);
+        if(item.IconTimeoutFromRight!=iconTimeoutFromRight&&item.Kind==ScorebugElementKind.Text)Group(t=>t.IconTimeoutFromRight=iconTimeoutFromRight);
+        if(item.PeriodLowercase!=periodLowercase)Group(t=>t.PeriodLowercase=periodLowercase);
         if(iconBorderWidthOk&&Math.Abs(item.IconBorderThickness-iconBorderWidth)>0.001)Group(t=>t.IconBorderThickness=iconBorderWidth);
         if(iconBorderColorOk&&!string.Equals(item.IconBorderColor,iconBorderColor,StringComparison.OrdinalIgnoreCase))Group(t=>t.IconBorderColor=iconBorderColor);
         if(iconBackgroundOk&&!string.Equals(item.IconBackground,iconBackground,StringComparison.OrdinalIgnoreCase))Group(t=>t.IconBackground=iconBackground);
@@ -2500,6 +2514,8 @@ public partial class ScorebugEditorWindow : Window
                 // element appeared to accept the vertical option and then lost it on the next move.
                 target.IconVertical=iconVertical;
                 target.IconRounded=iconRounded;
+                target.IconTimeoutFromRight=iconTimeoutFromRight;
+                target.PeriodLowercase=periodLowercase;
                 target.IconToken=iconToken;
                 if(iconBorderWidthOk)target.IconBorderThickness=iconBorderWidth;
                 if(iconBorderColorOk)target.IconBorderColor=iconBorderColor;
@@ -2559,6 +2575,22 @@ public partial class ScorebugEditorWindow : Window
     void RefreshLayerLabels()
     {
         foreach(var row in Layers.Items.OfType<LayerItem>())row.Refresh();
+    }
+
+    /// <summary>The tag help names the tags the media library actually carries, so the operator
+    /// does not have to guess which word makes a clip land in this video box.</summary>
+    static string VideoTagHint()
+    {
+        var tags = PreferencesStore.Load().Media
+            .Select(entry => MediaLibrary.NormalizeTag(entry.Tag))
+            .Where(tag => tag.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var list = tags.Count == 0
+            ? "No clip tags are in the media library yet."
+            : "Library tags: " + string.Join(", ", tags.Take(14)) + (tags.Count > 14 ? "…" : "");
+        return $"A clip plays in this box when its Media tag matches this box's tag. GLOBAL plays in every box; leave this empty to accept any cued clip. {list}";
     }
 
     /// <summary>Shows the fitted box dimensions after Preserve aspect resizes the element.</summary>
@@ -3436,6 +3468,9 @@ public partial class ScorebugEditorWindow : Window
         _pasteCount++;
         var offset=20*_pasteCount;
         var pastedIds=new List<string>();
+        // A pasted group is a new group, not a second handle on the original: sharing a GroupId
+        // would make selecting the copy drag the source artwork with it.
+        var groups=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         _catalog.Update(layout=>
         {
             foreach(var source in _clipboardElements)
@@ -3443,6 +3478,18 @@ public partial class ScorebugEditorWindow : Window
                 var copy=CloneElement(source);
                 copy.Id=Guid.NewGuid().ToString("N");
                 copy.LinkId=null;
+                // Any item can be copied, including one locked into finished artwork. The copy is
+                // editable so it can actually be placed.
+                copy.Locked=false;
+                if(!string.IsNullOrWhiteSpace(copy.GroupId))
+                {
+                    if(!groups.TryGetValue(copy.GroupId,out var pastedGroup))
+                    {
+                        pastedGroup=Guid.NewGuid().ToString("N");
+                        groups[copy.GroupId]=pastedGroup;
+                    }
+                    copy.GroupId=pastedGroup;
+                }
                 copy.X=Math.Clamp(copy.X+offset,0,Math.Max(0,layout.Width-copy.Width));
                 copy.Y=Math.Clamp(copy.Y+offset,0,Math.Max(0,layout.Height-copy.Height));
                 layout.Elements.Add(copy);
@@ -3885,6 +3932,9 @@ public partial class ScorebugEditorWindow : Window
     void Element_MouseDown(object sender,MouseButtonEventArgs e)
     {
         if(_resizing||sender is not Border host||host.Tag is not ScorebugElement item)return;
+        // Clicking the artwork takes focus out of a property field. Without this, Ctrl+C after a
+        // click copied the text still focused in the property panel instead of the selected item.
+        ReleaseFocus();
         var ctrl=(Keyboard.Modifiers&ModifierKeys.Control)!=0;
         var shift=(Keyboard.Modifiers&ModifierKeys.Shift)!=0;
         // A click anywhere inside an already-selected box belongs to that box, even when a larger
@@ -3973,6 +4023,7 @@ public partial class ScorebugEditorWindow : Window
             var current=_catalog.Layout.Elements.FirstOrDefault(x=>x.Id==primary.Id);
             if(current is not null&&!_loading){_loading=true;XInput.Text=current.X.ToString("0");YInput.Text=current.Y.ToString("0");_loading=false;}
         }
+        PushLivePreview();
     }
 
     void Element_MouseUp(object sender,MouseButtonEventArgs e)
@@ -4103,7 +4154,7 @@ public partial class ScorebugEditorWindow : Window
                     Canvas.SetLeft(visual.Host,target.X); Canvas.SetTop(visual.Host,target.Y);
                     visual.Content.Width=double.NaN; visual.Content.Height=double.NaN;
                     ScorebugRender.ApplyToContent(visual.Content,target,_engine.State,
-                        ScoreboardTemplates.Bind(target.Content,_engine.State,target.PeriodFormat,target.DownCaps,target.PlayClockColon,target.GameClockLeadingZero,target.ClockDecimals,target.RecordIncludesDivision));
+                        ScoreboardTemplates.Bind(target.Content,_engine.State,target.PeriodFormat,target.DownCaps,target.PlayClockColon,target.GameClockLeadingZero,target.ClockDecimals,target.RecordIncludesDivision,periodLowercase:target.PeriodLowercase));
                 }
             }
             UpdateGroupSelectionAdorners();
@@ -4127,11 +4178,12 @@ public partial class ScorebugEditorWindow : Window
                     visual.Host.Width=target.Width; visual.Host.Height=target.Height;
                     visual.Content.Width=double.NaN; visual.Content.Height=double.NaN;
                     ScorebugRender.ApplyToContent(visual.Content,target,_engine.State,
-                        ScoreboardTemplates.Bind(target.Content,_engine.State,target.PeriodFormat,target.DownCaps,target.PlayClockColon,target.GameClockLeadingZero,target.ClockDecimals,target.RecordIncludesDivision));
+                        ScoreboardTemplates.Bind(target.Content,_engine.State,target.PeriodFormat,target.DownCaps,target.PlayClockColon,target.GameClockLeadingZero,target.ClockDecimals,target.RecordIncludesDivision,periodLowercase:target.PeriodLowercase));
                 }
             }
             if(ctrl)RefreshAllVisuals();
         }
+        PushLivePreview();
         if(!_loading)
         {
             _loading=true;
@@ -4189,6 +4241,20 @@ public partial class ScorebugEditorWindow : Window
         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
             new Action(()=>_resizeSettling=false));
         e.Handled=true;
+    }
+
+    /// <summary>
+    /// Shows an edit that is still under the mouse: the canvas re-applies its own artwork and every
+    /// preview follows the new box before the operator lets go. Nothing is saved here, so an
+    /// in-progress drag never records an undo point or writes the layout file.
+    /// </summary>
+    void PushLivePreview()
+    {
+        var now=_livePreviewClock.ElapsedMilliseconds;
+        if(now-_lastLivePreviewMs<60)return;
+        _lastLivePreviewMs=now;
+        RefreshAllVisuals();
+        _catalog.NotifyLivePreview();
     }
 
     void Layers_MouseDown(object sender,MouseButtonEventArgs e)=>_listStart=e.GetPosition(null);

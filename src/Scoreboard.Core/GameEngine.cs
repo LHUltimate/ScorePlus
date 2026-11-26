@@ -265,6 +265,14 @@ public sealed class GameState
     public int[] ScoringOptions { get; set; } = [1, 2, 3];
     public int ShotClockSeconds { get; set; } = 30;
     public int Down { get; set; } = 1;
+
+    /// <summary>
+    /// Bumped when a control asks the graphic to replay its animation even though nothing it prints
+    /// changed. New series at 1st &amp; 10 used to sit still because the value stayed "1st &amp; 10";
+    /// the counter lets the view run the element's crossing again on purpose.
+    /// </summary>
+    public int AnimationPulse { get; set; }
+
     /// <summary>Normal, goal-to-go, PAT, two-point attempt, inches, or no down line at all.</summary>
     public FootballDownMode FootballDownMode { get; set; }
     /// <summary>Clock, Final or End of Reg. on the graphic.</summary>
@@ -1325,7 +1333,7 @@ public sealed class GameEngine
 
     public void AdvanceDown() { if (State.SportId != "football") return; SaveUndo("Down"); State.FootballDownMode = FootballDownMode.Normal; State.DownPending = DownPreviewEnabled; if (State.Down >= 4) { State.Down=1; State.YardsToGo=10; State.YardsToGoal=Math.Clamp(State.YardsToGoal-State.YardsToGo,0,50); } else State.Down++; Log("Down", $"Down {State.Down}, {State.YardsToGo} to go"); Changed?.Invoke(); }
     public void PreviousDown() { if (State.SportId != "football") return; SaveUndo("Previous down"); State.FootballDownMode = FootballDownMode.Normal; State.DownPending = false; if (State.Down > 1) State.Down--; Log("Down", $"Down {State.Down}, {State.YardsToGo} to go"); Changed?.Invoke(); }
-    public void NewSeries() { if (State.SportId != "football") return; SaveUndo("New series"); State.FootballDownMode = FootballDownMode.Normal; State.DownPending = false; State.Down = 1; State.YardsToGo = 10; _publishNewSeries = NewSeriesLiveEnabled; Log("Series", "New series · 1st & 10"); Changed?.Invoke(); }
+    public void NewSeries() { if (State.SportId != "football") return; SaveUndo("New series"); State.FootballDownMode = FootballDownMode.Normal; State.DownPending = false; State.Down = 1; State.YardsToGo = 10; State.AnimationPulse++; _publishNewSeries = NewSeriesLiveEnabled; Log("Series", "New series · 1st & 10"); Changed?.Invoke(); }
 
     /// <summary>True once after New series asked to go straight to air; the host publishes it.</summary>
     public bool TakePublishRequest() { var requested = _publishNewSeries; _publishNewSeries = false; return requested; }
@@ -2122,6 +2130,9 @@ public sealed class GameEngine
             (!source.DownPending || (State.Down == source.Down && State.DownPending)) && !clocksDiffer) return false;
         State.HomeScore=source.HomeScore;State.AwayScore=source.AwayScore;
         State.LastScoreAmount=source.LastScoreAmount;State.LastScoreHome=source.LastScoreHome;State.LastScoreSequence=source.LastScoreSequence;
+        // A deliberate replay request travels with the live picture, so New series animates band
+        // even when it lands on the same 1st & 10 that was already showing.
+        State.AnimationPulse=source.AnimationPulse;
         State.HomeTeam=source.HomeTeam;State.AwayTeam=source.AwayTeam;
         State.HomeAbbreviation=source.HomeAbbreviation;State.AwayAbbreviation=source.AwayAbbreviation;
         State.HomeLogoPath=source.HomeLogoPath;State.AwayLogoPath=source.AwayLogoPath;

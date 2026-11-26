@@ -25,6 +25,7 @@ public static class ScorebugHtml
         var width = Math.Max(1, layout.Width);
         var height = Math.Max(1, layout.Height);
         var stageBackground = Css(layout.Background);
+        var fontFaces = FontFaces(layout);
         var body = new StringBuilder();
 
         foreach (var element in layout.Elements ?? [])
@@ -85,6 +86,9 @@ public static class ScorebugHtml
         html.AppendLine("@keyframes sp-drift{0%,100%{transform:translate(0,0)}50%{transform:translate(14px,7px)}}");
         html.AppendLine(".sp-pulse{animation:sp-pulse 1s ease-in-out infinite;}");
         html.AppendLine(".sp-drift{animation:sp-drift 3.2s ease-in-out infinite;}");
+        // An imported font is written into the page itself: a browser cannot read a local file
+        // path, so without this the exported graphic silently fell back to Arial.
+        if (fontFaces.Length > 0) html.Append(fontFaces);
         html.AppendLine("</style></head><body>");
         html.AppendLine("<div id=\"sp-wrap\"><div id=\"sp-stage\">");
         html.Append(body);
@@ -221,7 +225,7 @@ public static class ScorebugHtml
     static string TextHtml(ScorebugElement item, GameState? state, string colour)
     {
         var text = state is not null
-            ? ScoreboardTemplates.Bind(item.Content ?? string.Empty, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero)
+            ? ScoreboardTemplates.Bind(item.Content ?? string.Empty, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero, item.PeriodLowercase)
             : item.Content ?? string.Empty;
         var font = FontFamily(item.FontFamily);
         var weight = item.Bold ? "font-weight:700;" : "font-weight:400;";
@@ -265,7 +269,7 @@ public static class ScorebugHtml
     {
         if (item.Icon != ScorebugIcon.None && state is not null && !string.IsNullOrWhiteSpace(item.IconToken))
         {
-            var bound = ScoreboardTemplates.Bind(item.IconToken, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero).Trim();
+            var bound = ScoreboardTemplates.Bind(item.IconToken, state, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero, item.PeriodLowercase).Trim();
             if (bound.Length == 0
                 || bound == "0"
                 || bound.Equals("false", StringComparison.OrdinalIgnoreCase)
@@ -315,10 +319,16 @@ public static class ScorebugHtml
                 var used = Css(string.IsNullOrWhiteSpace(item.IconUsedColor) ? "#FF9AA5B2" : item.IconUsedColor);
                 var barOutline = IconOutline(item);
                 var bars = new StringBuilder($"<div class=\"sp-bars{vertical}\" style=\"color:{colour};--sp-used:{used};\">");
+                var usedFirst = !item.IconTimeoutFromRight;
                 for (var i = 0; i < total; i++)
-                    bars.Append(i < remaining
-                        ? $"<span class=\"sp-bar\" style=\"{barOutline}\"></span>"
-                        : $"<span class=\"sp-bar used\" style=\"{barOutline}\"></span>");
+                {
+                    // Used timeouts keep their own colour; the direction decides which end they
+                    // gather at, so the row can drain from the right or from the left.
+                    var isUsed = usedFirst ? i < total - remaining : i >= remaining;
+                    bars.Append(isUsed
+                        ? $"<span class=\"sp-bar used\" style=\"{barOutline}\"></span>"
+                        : $"<span class=\"sp-bar\" style=\"{barOutline}\"></span>");
+                }
                 bars.Append("</div>");
                 return bars.ToString();
             case ScorebugIcon.PossessionDot:
@@ -335,10 +345,14 @@ public static class ScorebugHtml
                 var usedPips = Css(string.IsNullOrWhiteSpace(item.IconUsedColor) ? "#FF9AA5B2" : item.IconUsedColor);
                 var pipOutline = IconOutline(item);
                 var dots = new StringBuilder($"<div class=\"sp-dots\" style=\"color:{colour};--sp-used:{usedPips};\">");
+                var dotsUsedFirst = !item.IconTimeoutFromRight;
                 for (var i = 0; i < totalPips; i++)
-                    dots.Append(i < remainingPips
-                        ? $"<span class=\"sp-pip\" style=\"{pipOutline}\"></span>"
-                        : $"<span class=\"sp-pip used\" style=\"{pipOutline}\"></span>");
+                {
+                    var isUsedPip = dotsUsedFirst ? i < totalPips - remainingPips : i >= remainingPips;
+                    dots.Append(isUsedPip
+                        ? $"<span class=\"sp-pip used\" style=\"{pipOutline}\"></span>"
+                        : $"<span class=\"sp-pip\" style=\"{pipOutline}\"></span>");
+                }
                 dots.Append("</div>");
                 return dots.ToString();
             case ScorebugIcon.YellowCard:
@@ -450,21 +464,60 @@ public static class ScorebugHtml
     }
 
     /// <summary>The family name of a font choice, including an imported font file.</summary>
-    static string FontFamily(string? value)
+    static string FontFamilyName(string? value)
     {
         var text = (value ?? string.Empty).Trim();
-        if (text.Length == 0) return "'Segoe UI',Arial,sans-serif";
-        if (text.StartsWith("file:", StringComparison.OrdinalIgnoreCase) || text.Contains('\\') || text.Contains('/'))
+        var hash = text.LastIndexOf('#');
+        if (hash >= 0 && hash < text.Length - 1) return text[(hash + 1)..].Trim();
+        if (text.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
         {
+            try { return Path.GetFileNameWithoutExtension(new Uri(text).LocalPath); }
+            catch { }
+        }
+        return text;
+    }
+
+    static string FontFamily(string? value)
+    {
+        var name = FontFamilyName(value);
+        return name.Length == 0
+            ? "'Segoe UI',Arial,sans-serif"
+            : $"'{name.Replace("'", string.Empty)}',Arial,sans-serif";
+    }
+
+    /// <summary>
+    /// Embeds every imported font the layout uses as a data URI. A page that only names a family
+    /// falls back on a machine where that font is not installed; embedding keeps the artwork.
+    /// </summary>
+    static string FontFaces(ScorebugLayout layout)
+    {
+        var css = new StringBuilder();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        long total = 0;
+        foreach (var element in layout.Elements ?? [])
+        {
+            var source = element.FontFamily ?? string.Empty;
+            if (!source.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) continue;
+            var hash = source.LastIndexOf('#');
+            var uriText = hash > 0 ? source[..hash] : source;
+            var family = FontFamilyName(source);
+            if (family.Length == 0 || !seen.Add(family)) continue;
             try
             {
-                var name = Path.GetFileNameWithoutExtension(text);
-                if (!string.IsNullOrWhiteSpace(name)) return $"'{name.Replace("'", string.Empty)}',Arial,sans-serif";
+                if (!Uri.TryCreate(uriText, UriKind.Absolute, out var uri) || !uri.IsFile) continue;
+                var path = uri.LocalPath;
+                if (!File.Exists(path)) continue;
+                var info = new FileInfo(path);
+                // A page is not the place for a multi-megabyte collection of faces.
+                if (info.Length is <= 0 or > 4_000_000 || total + info.Length > 8_000_000) continue;
+                var opentype = Path.GetExtension(path).Equals(".otf", StringComparison.OrdinalIgnoreCase);
+                var data = Convert.ToBase64String(File.ReadAllBytes(path));
+                total += info.Length;
+                css.AppendLine($"@font-face{{font-family:'{family.Replace("'", string.Empty)}';src:url(data:{(opentype ? "font/otf" : "font/ttf")};base64,{data}) format('{(opentype ? "opentype" : "truetype")}');font-display:block;}}");
             }
-            catch { }
-            return "'Segoe UI',Arial,sans-serif";
+            catch { /* a font that moved is a fallback, never a broken page */ }
         }
-        return $"'{text.Replace("'", string.Empty)}',Arial,sans-serif";
+        return css.ToString();
     }
 
     /// <summary>An image file as a data URI, so the page has no loose files; null when it is missing.</summary>

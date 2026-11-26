@@ -103,6 +103,9 @@ public sealed class ScorebugCanvasView : Grid
     readonly Dictionary<string, ElementLogicRule?> _logicRule = [];
     readonly Dictionary<string,(string Target, System.Windows.Threading.DispatcherTimer Timer)> _pendingText = [];
     bool _flushDelay;
+    // The game's replay counter as this view last drew it. A change means an action asked for its
+    // animation again even though the words it prints did not change.
+    int _seenAnimationPulse;
     bool _disposed;
     // Time-of-day text is not driven by the game clock, so it gets its own one-second pulse;
     // otherwise a layout with {{TIME}} freezes whenever no clock is running.
@@ -149,6 +152,7 @@ public sealed class ScorebugCanvasView : Grid
         _timelineClock.Tick+=(_,_)=>ApplyTimelineToVisuals();
         _layoutChain.Add(Layout.Id);
         _lastScoreSequence=_stateProvider().LastScoreSequence;
+        _seenAnimationPulse=_stateProvider().AnimationPulse;
         Rebuild();
         ApplyElementLogic(_stateProvider());
         ScheduleBlending();
@@ -1208,6 +1212,28 @@ public sealed class ScorebugCanvasView : Grid
 
     public void Refresh()=>UpdateValues();
 
+    /// <summary>
+    /// Moves and sizes what is already drawn to match an edit that is still under the mouse. The
+    /// studio calls this while a drag or resize is in progress, so a preview shows the new box
+    /// before the operator lets go, without rebuilding (and without restarting) any video.
+    /// </summary>
+    public void RefreshGeometry()
+    {
+        if(!Dispatcher.CheckAccess()){Dispatcher.BeginInvoke(RefreshGeometry);return;}
+        if(_disposed)return;
+        var state=_stateProvider();
+        foreach(var item in Layout.Elements)
+        {
+            if(!_visuals.TryGetValue(item.Id,out var visual))continue;
+            if(Math.Abs(visual.Host.Width-item.Width)>0.01)visual.Host.Width=item.Width;
+            if(Math.Abs(visual.Host.Height-item.Height)>0.01)visual.Host.Height=item.Height;
+            Canvas.SetLeft(visual.Host,item.X);
+            Canvas.SetTop(visual.Host,item.Y);
+            if(visual.Content is ScorebugTextBlock block)block.ApplyStyle(item,state);
+            else if(visual.Content is ScorebugIconView icon)icon.Update();
+        }
+    }
+
     /// <summary>Switches a nested feed between filling its box and keeping the source's shape.</summary>
     public void SetFill(bool fill)=>_viewbox.Stretch=fill?Stretch.Fill:Stretch.Uniform;
 
@@ -1239,11 +1265,18 @@ public sealed class ScorebugCanvasView : Grid
             if(!PrintsAClock(item.Content))continue;
             if(!_visuals.TryGetValue(item.Id,out var visual))continue;
             if(visual.Content is not ScorebugTextBlock block)continue;
-            var text=ScoreboardTemplates.Bind(item.Content,state,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision,item.PlayClockLeadingZero);
+            var text=ScoreboardTemplates.Bind(item.Content,state,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision,item.PlayClockLeadingZero,item.PeriodLowercase);
             block.UpdateClockText(text);
             _shownText[item.Id]=text;
         }
     }
+
+    /// <summary>True when an element prints the down-and-distance line, the words New series resets.</summary>
+    static bool PrintsDownLine(string content) =>
+        content.Contains("{{DOWNS}}",StringComparison.OrdinalIgnoreCase)
+        ||content.Contains("{{DOWN}}",StringComparison.OrdinalIgnoreCase)
+        ||content.Contains("{{TO_GO}}",StringComparison.OrdinalIgnoreCase)
+        ||content.Contains("{{YARDS_TO_GO}}",StringComparison.OrdinalIgnoreCase);
 
     /// <summary>True when this element prints a clock, so the fast path has something to update.</summary>
     static bool PrintsAClock(string content) =>
@@ -1447,6 +1480,10 @@ public sealed class ScorebugCanvasView : Grid
         if(!Dispatcher.CheckAccess()){Dispatcher.BeginInvoke(UpdateValues);return;}
         if(_disposed)return;
         var state=_stateProvider();
+        // Read the replay request once: every down-line element draws from the same counter, so
+        // the whole line restarts together rather than one item per pass.
+        var replayPulse=state.AnimationPulse!=_seenAnimationPulse;
+        _seenAnimationPulse=state.AnimationPulse;
         ApplyElementLogic(state);
         ScheduleBlending();
         var layout=Layout;
@@ -1485,9 +1522,17 @@ public sealed class ScorebugCanvasView : Grid
             }
             if(visual.Content is ScorebugTextBlock block)
             {
-                var text=ScoreboardTemplates.Bind(item.Content,state,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision,item.PlayClockLeadingZero);
+                var text=ScoreboardTemplates.Bind(item.Content,state,item.PeriodFormat,item.DownCaps,item.PlayClockColon,item.GameClockLeadingZero,item.ClockDecimals,item.RecordIncludesDivision,item.PlayClockLeadingZero,item.PeriodLowercase);
                 block.ApplyStyle(item,state);
-                ShowValue(item,block,text);
+                if(replayPulse&&PrintsDownLine(item.Content))
+                {
+                    // New series at 1st & 10 prints the same line, so the ordinary update had
+                    // nothing to animate. Cancel any delay and run the crossing on purpose.
+                    CancelPending(item.Id);
+                    block.Replay(text,item.Transition,item.TransitionSeconds);
+                    _shownText[item.Id]=text;
+                }
+                else ShowValue(item,block,text);
             }
             else if(visual.Content is ScorebugIconView icon)
             {

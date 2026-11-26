@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using Microsoft.Win32;
 using Scoreboard.Core;
 
@@ -35,6 +36,11 @@ public sealed class IconMakerWindow : Window
     readonly TextBox _scale = new() { MinWidth = 64 };
     readonly TextBox _opacity = new() { MinWidth = 64 };
     readonly TextBox _rotation = new() { MinWidth = 64 };
+    readonly ComboBox _animation = new() { Name = "IconAnimation", MinHeight = 28, MinWidth = 170 };
+    // The preview plays the mark's chosen motion, so the operator sees the animation before saving.
+    readonly ScaleTransform _previewPulse = new(1, 1);
+    readonly RotateTransform _previewSpin = new();
+    readonly TranslateTransform _previewHop = new();
     readonly TextBox _stateName = new() { MinWidth = 130 };
     readonly ComboBox _stateField = new() { MinHeight = 28, MinWidth = 150 };
     readonly ComboBox _stateOperator = new() { MinHeight = 28, MinWidth = 140, Margin = new Thickness(6, 0, 0, 0) };
@@ -101,6 +107,12 @@ public sealed class IconMakerWindow : Window
         var previewContent = new Grid();
         previewContent.Children.Add(_previewGlyph);
         previewContent.Children.Add(_previewImage);
+        previewContent.RenderTransformOrigin = new Point(0.5, 0.5);
+        var previewMotion = new TransformGroup();
+        previewMotion.Children.Add(_previewPulse);
+        previewMotion.Children.Add(_previewSpin);
+        previewMotion.Children.Add(_previewHop);
+        previewContent.RenderTransform = previewMotion;
         _preview.Child = previewContent;
         _preview.RenderTransformOrigin = new Point(0.5, 0.5);
         _previewStage.Child = _preview;
@@ -266,6 +278,23 @@ public sealed class IconMakerWindow : Window
         _round.Checked += (_, _) => UpdatePreview();
         _round.Unchecked += (_, _) => UpdatePreview();
         editor.Children.Add(_round);
+
+        editor.Children.Add(SectionLabel("ANIMATION", 12));
+        _animation.ItemsSource = Enum.GetValues<CustomIconAnimation>();
+        _animation.ToolTip = "Motion the mark runs while it is on the graphic. It belongs to the icon, so every data state keeps the same movement.";
+        _animation.SelectionChanged += (_, _) =>
+        {
+            if (_filling) return;
+            _editing.Animation = _animation.SelectedItem is CustomIconAnimation animation
+                ? animation : CustomIconAnimation.None;
+            UpdatePreview();
+        };
+        editor.Children.Add(_animation);
+        editor.Children.Add(new TextBlock
+        {
+            Text = "None holds still. Fade dissolves in and out, Pulse grows and shrinks, Spin turns slowly, Bounce hops and Blink softens rhythmically. The preview plays it exactly as the graphic will.",
+            FontSize = 10, Opacity = 0.65, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 0)
+        });
 
         var positionRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         var anchorPanel = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
@@ -525,6 +554,7 @@ public sealed class IconMakerWindow : Window
             _scale.Text = (design?.Scale ?? _editing.Scale).ToString("0.##");
             _opacity.Text = (design?.Opacity ?? _editing.Opacity).ToString("0.##");
             _rotation.Text = (design?.Rotation ?? _editing.Rotation).ToString("0.##");
+            _animation.SelectedItem = _editing.Animation;
             _stateName.Text = design?.Name ?? "";
             _stateName.IsEnabled = design is not null;
             _stateField.IsEnabled = design is not null;
@@ -619,6 +649,8 @@ public sealed class IconMakerWindow : Window
             if (double.TryParse(_rotation.Text, out var rotation)) design.Rotation = rotation;
             design.Name = _stateName.Text.Trim();
         }
+        _editing.Animation = _animation.SelectedItem is CustomIconAnimation chosen
+            ? chosen : CustomIconAnimation.None;
     }
 
     void RefreshStateLabels()
@@ -762,6 +794,54 @@ public sealed class IconMakerWindow : Window
         transform.Children.Add(new RotateTransform(rotation));
         transform.Children.Add(new TranslateTransform(offsetX * 0.72, offsetY * 0.72));
         _preview.RenderTransform = transform;
+        // Read the opacity from the field, not the element: a running Fade already owns the
+        // element's opacity and would hand that half-faded value back as the resting level.
+        AnimatePreview(double.TryParse(_opacity.Text, out var designOpacity) ? Math.Clamp(designOpacity, 0, 1) : 1,
+            _editing.Animation);
+    }
+
+    /// <summary>
+    /// Plays the icon's motion in the preview. The preview is rebuilt on every field change, so the
+    /// animations are cleared first; otherwise a running one would keep overriding the new look.
+    /// </summary>
+    void AnimatePreview(double baseOpacity, CustomIconAnimation animation)
+    {
+        _preview.BeginAnimation(UIElement.OpacityProperty, null);
+        _previewPulse.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        _previewPulse.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        _previewSpin.BeginAnimation(RotateTransform.AngleProperty, null);
+        _previewHop.BeginAnimation(TranslateTransform.YProperty, null);
+        _previewPulse.ScaleX = _previewPulse.ScaleY = 1;
+        _previewSpin.Angle = 0;
+        _previewHop.Y = 0;
+        _preview.Opacity = baseOpacity;
+        var forever = RepeatBehavior.Forever;
+        var soft = new SineEase { EasingMode = EasingMode.EaseInOut };
+        switch (animation)
+        {
+            case CustomIconAnimation.Fade:
+                _preview.BeginAnimation(UIElement.OpacityProperty,
+                    new DoubleAnimation(baseOpacity * 0.15, baseOpacity, TimeSpan.FromSeconds(1.4)) { AutoReverse = true, RepeatBehavior = forever, EasingFunction = soft });
+                break;
+            case CustomIconAnimation.Blink:
+                _preview.BeginAnimation(UIElement.OpacityProperty,
+                    new DoubleAnimation(baseOpacity * 0.35, baseOpacity, TimeSpan.FromSeconds(0.45)) { AutoReverse = true, RepeatBehavior = forever, EasingFunction = soft });
+                break;
+            case CustomIconAnimation.Pulse:
+                _previewPulse.BeginAnimation(ScaleTransform.ScaleXProperty,
+                    new DoubleAnimation(1, 1.14, TimeSpan.FromSeconds(0.9)) { AutoReverse = true, RepeatBehavior = forever, EasingFunction = soft });
+                _previewPulse.BeginAnimation(ScaleTransform.ScaleYProperty,
+                    new DoubleAnimation(1, 1.14, TimeSpan.FromSeconds(0.9)) { AutoReverse = true, RepeatBehavior = forever, EasingFunction = soft });
+                break;
+            case CustomIconAnimation.Spin:
+                _previewSpin.BeginAnimation(RotateTransform.AngleProperty,
+                    new DoubleAnimation(0, 360, TimeSpan.FromSeconds(4)) { RepeatBehavior = forever });
+                break;
+            case CustomIconAnimation.Bounce:
+                _previewHop.BeginAnimation(TranslateTransform.YProperty,
+                    new DoubleAnimation(0, -10, TimeSpan.FromSeconds(0.5)) { AutoReverse = true, RepeatBehavior = forever, EasingFunction = soft });
+                break;
+        }
     }
 
     void SaveIcon()

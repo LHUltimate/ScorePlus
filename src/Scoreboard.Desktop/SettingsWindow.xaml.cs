@@ -201,6 +201,26 @@ public partial class SettingsWindow : Window
         RemoteStatus.Text = $"Ready on port {_draft.RemotePort}. On this computer http://localhost:{_draft.RemotePort} · on a phone on the same Wi-Fi {lan}";
     }
 
+    /// <summary>
+    /// Saves the password and restarts the remote at once. The running server holds the hash it was
+    /// created with, so without this a phone kept signing in with the old password until ScorePlus
+    /// was restarted — which is exactly what "it still uses the old one" looked like.
+    /// </summary>
+    void ApplyRemote_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Commit()) return;
+        _committed = true;
+        RemoteControlServer.RestartRequested?.Invoke();
+        if (!_original.RemoteEnabled || string.IsNullOrWhiteSpace(_original.RemotePassword))
+        {
+            RemoteStatus.Text = "The remote is off. Tick the box and set a password to serve it.";
+            return;
+        }
+        var urls = RemoteControlServer.Urls(_original.RemotePort);
+        var lan = urls.Count > 1 ? urls[^1] : urls[0];
+        RemoteStatus.Text = $"Password updated on port {_original.RemotePort}. Phones must sign in again: {lan}";
+    }
+
     void OpenRemote_Click(object sender, RoutedEventArgs e)
     {
         // The address on the network, not localhost: the operator usually copies it from the URL
@@ -435,6 +455,7 @@ public partial class SettingsWindow : Window
         _original.ShowOvertimeFinal = _draft.ShowOvertimeFinal;
         _original.AccentColor = _draft.AccentColor;
         _original.AccentColor2 = _draft.AccentColor2;
+        var remoteBefore = (_original.RemoteEnabled, _original.RemotePassword, _original.RemotePort);
         _original.RemotePort = _draft.RemotePort;
         _original.RemotePassword = _draft.RemotePassword;
         _original.OperatorLockPasswordHash = _draft.OperatorLockPasswordHash;
@@ -446,6 +467,10 @@ public partial class SettingsWindow : Window
         GameEngine.DownPreviewEnabled = _original.NextDownPreview;
         GameEngine.NewSeriesLiveEnabled = _original.NewSeriesLive;
         DisplayTiming.Apply(_original);
+        // A saved remote change takes effect while the page is still open. Enter saves without
+        // closing, and the old server used to keep its old password until the window was dismissed.
+        if (remoteBefore != (_original.RemoteEnabled, _original.RemotePassword, _original.RemotePort))
+            RemoteControlServer.RestartRequested?.Invoke();
         return true;
     }
 

@@ -155,6 +155,9 @@
         <TextBlock x:Name="RemoteStatus" Text="Remote is off." TextWrapping="Wrap" Foreground="#93A0B2" FontSize="11" Margin="6,6,6,4"/>
         <Button x:Name="OpenRemoteButton" Content="Open remote in browser" HorizontalAlignment="Left" MinHeight="30"
                 Padding="12,4" Margin="4,2,4,2" Click="OpenRemote_Click" ToolTip="Open the phone console on this computer"/>
+        <Button x:Name="ApplyRemoteButton" Content="Update remote password" HorizontalAlignment="Left" MinHeight="30"
+                Padding="12,4" Margin="4,2,4,6" Click="ApplyRemote_Click"
+                ToolTip="Save the password and restart the remote right now, so a running remote stops accepting the old one"/>
         <Separator/>
         <TextBlock Text="UPDATES" Foreground="#93A0B2" FontSize="11" Margin="4,14,0,2"/>
         <CheckBox x:Name="CheckUpdatesInput" Content="Check for a newer version when ScorePlus starts" Checked="Update_Changed" Unchecked="Update_Changed"/>

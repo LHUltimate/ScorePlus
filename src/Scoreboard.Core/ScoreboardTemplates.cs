@@ -19,8 +19,8 @@ public static class ScoreboardTemplates
     /// </summary>
     static readonly Regex SportToken = new(@"\{\{SPORT:(?<id>[^}]+)\}\}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public static string Bind(string content, GameState state, string? periodFormat = null, bool downCaps = false, bool playClockColon = false, bool gameClockLeadingZero = true, int clockDecimals = 0, bool recordIncludesDivision = false, bool playClockLeadingZero = false) =>
-        PlayerToken.Replace(StatToken.Replace(SportToken.Replace(ReplaceFixed(content, state, periodFormat, downCaps, playClockColon, gameClockLeadingZero, clockDecimals, recordIncludesDivision, playClockLeadingZero), match =>
+    public static string Bind(string content, GameState state, string? periodFormat = null, bool downCaps = false, bool playClockColon = false, bool gameClockLeadingZero = true, int clockDecimals = 0, bool recordIncludesDivision = false, bool playClockLeadingZero = false, bool periodLowercase = false) =>
+        PlayerToken.Replace(StatToken.Replace(SportToken.Replace(ReplaceFixed(content, state, periodFormat, downCaps, playClockColon, gameClockLeadingZero, clockDecimals, recordIncludesDivision, playClockLeadingZero, periodLowercase), match =>
         {
             var control = SportValues.FindControl(state, match.Groups["id"].Value.Trim());
             return control is null ? string.Empty : SportValues.Display(state, control);
@@ -48,7 +48,7 @@ public static class ScoreboardTemplates
             return player?.Field(field) ?? string.Empty;
         });
 
-    static string ReplaceFixed(string content, GameState state, string? periodFormat, bool downCaps, bool playClockColon, bool gameClockLeadingZero, int clockDecimals = 0, bool recordIncludesDivision = false, bool playClockLeadingZero = false) => content
+    static string ReplaceFixed(string content, GameState state, string? periodFormat, bool downCaps, bool playClockColon, bool gameClockLeadingZero, int clockDecimals = 0, bool recordIncludesDivision = false, bool playClockLeadingZero = false, bool periodLowercase = false) => content
         // Team names render exactly as the operator typed them: full text, original case.
         .Replace("{{HOME_TEAM}}", state.HomeTeam)
         .Replace("{{AWAY_TEAM}}", state.AwayTeam)
@@ -73,7 +73,11 @@ public static class ScoreboardTemplates
         .Replace("{{LAST_SCORE_TEAM}}", state.LastScoreAmount == 0 ? string.Empty : state.LastScoreTeam)
         .Replace("{{LAST_SCORE_ABBR}}", state.LastScoreAmount == 0 ? string.Empty : state.LastScoreAbbreviation)
         .Replace("{{LAST_SCORE_SIDE}}", state.LastScoreAmount == 0 ? string.Empty : state.LastScoreHome ? "HOME" : "AWAY")
-        .Replace("{{PERIOD}}", PeriodDisplay.Format(state, periodFormat).ToUpperInvariant())
+        // The quarter's own letters are upper case by default (1ST, OT); an element can ask for
+        // lower case instead (1st, ot) without changing every other element on the show.
+        .Replace("{{PERIOD}}", periodLowercase
+            ? PeriodDisplay.Format(state, periodFormat)
+            : PeriodDisplay.Format(state, periodFormat).ToUpperInvariant())
         // A league cloud feed can be placed in a lower third without rebuilding the graphic.
         .Replace("{{LEAGUE_GAMES}}", state.LeagueTickerText)
         .Replace("{{LEAGUE_TICKER}}", state.LeagueTickerText)

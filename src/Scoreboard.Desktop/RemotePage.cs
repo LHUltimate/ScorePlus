@@ -110,6 +110,11 @@ public static class RemotePage
              and left only the number visible. */
           #controls, #footballValues, #stats { grid-template-columns:1fr; }
         }
+        /* A chosen down-line override and any other latched button reads as on, like a flag. */
+        button.on{background:#123c33;border-color:#14a67c;color:#c9f7e8}
+        .keys{display:flex;flex-direction:column;gap:5px}
+        .keyRow{display:flex;align-items:center;gap:8px;font-size:11px;color:#9fb0c4;line-height:1.3}
+        .keyRow kbd{font-family:inherit;font-weight:800;color:#c9f7e8;background:#0f2b24;border:1px solid #1d6b56;border-radius:5px;padding:3px 6px;min-width:30px;text-align:center;white-space:nowrap}
         """;
 
     const string Script = """
@@ -171,6 +176,64 @@ public static class RemotePage
           field.value = raw.trim();
           post(Object.assign({ a: action }, extra));
         }
+
+        // The phone console's keyboard runs the operator's own keybinds. The list comes from the
+        // app, so a gesture edited in Preferences reaches the phone without reopening the page.
+        let keybinds = [];
+        function loadKeybinds() {
+          fetch('/api/keybinds', { cache: 'no-store', credentials: 'same-origin' })
+            .then(r => r.ok ? r.json() : [])
+            .then(list => { keybinds = Array.isArray(list) ? list : []; renderKeybinds(); })
+            .catch(() => { });
+        }
+
+        function renderKeybinds() {
+          const card = $('keysCard'), host = $('keysList');
+          if (!card || !host) return;
+          host.innerHTML = '';
+          keybinds.forEach(bind => {
+            const row = document.createElement('div');
+            row.className = 'keyRow';
+            const key = document.createElement('kbd');
+            key.textContent = bind.gesture;
+            const label = document.createElement('span');
+            label.textContent = bind.label || bind.action;
+            row.append(key, label);
+            host.append(row);
+          });
+          card.style.display = keybinds.length ? '' : 'none';
+        }
+
+        // Turns a browser key event into the same text Keybinds uses: Ctrl+Shift+K, Space, F5.
+        function gestureFor(event) {
+          const parts = [];
+          if (event.ctrlKey) parts.push('Ctrl');
+          if (event.altKey) parts.push('Alt');
+          if (event.shiftKey) parts.push('Shift');
+          if (event.metaKey) parts.push('Win');
+          let key = event.key;
+          if (key === ' ') key = 'Space';
+          else if (key === 'Escape') key = 'Esc';
+          else if (key === 'Backspace') key = 'Backspace';
+          else if (key === 'Enter') key = 'Enter';
+          else if (key.startsWith('Arrow')) key = key.slice(5);
+          else if (key.length === 1) key = key.toUpperCase();
+          parts.push(key);
+          return parts.join('+');
+        }
+
+        document.addEventListener('keydown', event => {
+          if (event.defaultPrevented || !keybinds.length) return;
+          const target = event.target;
+          if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+              || target.tagName === 'SELECT' || target.isContentEditable)) return;
+          const gesture = gestureFor(event);
+          const match = keybinds.find(bind => String(bind.gesture || '').toLowerCase() === gesture.toLowerCase());
+          if (!match) return;
+          event.preventDefault();
+          act(match.action);
+          flash((match.label || match.action) + ' · ' + match.gesture);
+        });
 
         document.addEventListener('keydown', event => {
           if (event.key !== 'Enter') return;
@@ -263,6 +326,13 @@ public static class RemotePage
           button.append(name, state);
           button.dataset.flag = control.id;
           return button;
+        }
+
+        function renderDownModes(state) {
+          const modes = document.querySelectorAll('#downModes [data-mode]');
+          for (let index = 0; index < modes.length; index++) {
+            modes[index].classList.toggle('on', modes[index].dataset.mode === state.downMode);
+          }
         }
 
         function renderControls(state) {
@@ -474,6 +544,7 @@ public static class RemotePage
           liveButton.className = live ? 'live-on' : 'live-off';
           renderScoreButtons(state);
           renderControls(state);
+          renderDownModes(state);
           renderStats(state);
           renderPenalty(state);
           renderCue(state);
@@ -631,6 +702,16 @@ public static class RemotePage
             <button class="small" data-act="football.down.recall">Last down</button>
             <button class="small" id="ballSide" data-act="football.ball.side">◀ VISITORS</button>
           </div>
+          <!-- The distance overrides: the graphic prints Goal, Inches, PAT or 2 PT instead of a
+               number, so the phone needs the same choice the console's down line has. -->
+          <div class="row" id="downModes">
+            <button class="small" data-mode="Normal" data-act="football.distance.normal">Yards</button>
+            <button class="small" data-mode="Inches" data-act="football.distance.inches">Inches</button>
+            <button class="small" data-mode="Goal" data-act="football.distance.goal">Goal</button>
+            <button class="small" data-mode="Pat" data-act="football.distance.pat">PAT</button>
+            <button class="small" data-mode="TwoPoint" data-act="football.distance.twopt">2 PT</button>
+            <button class="small" data-mode="None" data-act="football.distance.none">None</button>
+          </div>
         </div>
 
         <div class="card">
@@ -703,6 +784,11 @@ public static class RemotePage
           <button class="small" id="rosterOffAir" style="margin:6px 0 8px">TAKE PLAYER OFF AIR</button>
           <div class="grid" id="rosterList"></div>
           <div id="playerStats"></div>
+        </div>
+
+        <div class="card" id="keysCard" style="display:none">
+          <div class="title">KEYBOARD <span class="right">from Preferences · Keybinds</span></div>
+          <div class="keys" id="keysList"></div>
         </div>
 
         <div id="lockScreen" hidden><div class="box"><h2>SCOREPLUS LOCKED</h2><p>The operator has locked the console, media, rosters and remote. Ask them to unlock ScorePlus on the desktop.</p></div></div>
@@ -888,6 +974,7 @@ public static class RemotePage
           document.getElementById('rosterAway').onclick=function(){side='away';loadRoster();};
           document.getElementById('rosterOffAir').onclick=function(){post('/api/roster/action',{a:'clear',side:side,id:''}).then(loadRoster);};
           show('console');
+          loadKeybinds();
         })();
         </script>
         """;

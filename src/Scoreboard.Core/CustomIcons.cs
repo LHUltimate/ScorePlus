@@ -4,6 +4,25 @@ using System.Text.Json.Serialization;
 
 namespace Scoreboard.Core;
 
+/// <summary>
+/// Motion a made icon can run while it is on the graphic. The mark keeps its designed look and
+/// only its movement changes, so an icon can breathe on a lower third without being redrawn.
+/// </summary>
+public enum CustomIconAnimation
+{
+    None,
+    /// <summary>A slow dissolve in and out.</summary>
+    Fade,
+    /// <summary>A gentle grow and shrink.</summary>
+    Pulse,
+    /// <summary>A continuous slow turn.</summary>
+    Spin,
+    /// <summary>A small hop, the way a mark bounces on a matte.</summary>
+    Bounce,
+    /// <summary>A soft blink between solid and faint.</summary>
+    Blink
+}
+
 /// <summary>Where a made icon sits inside its scorebug element.</summary>
 public enum CustomIconAnchor
 {
@@ -119,7 +138,8 @@ public sealed record CustomIconLook(
     double OffsetY,
     double Scale,
     double Opacity,
-    double Rotation);
+    double Rotation,
+    CustomIconAnimation Animation);
 
 /// <summary>
 /// An icon the operator drew: a glyph, its colour and the plate behind it. Icons live outside the
@@ -157,6 +177,13 @@ public sealed class CustomIcon
     public double Rotation { get; set; }
 
     /// <summary>
+    /// How the mark moves while it is up. It belongs to the icon rather than to one data state, so
+    /// every design of the same icon keeps the same motion and the mark never jumps when the game
+    /// value switches designs.
+    /// </summary>
+    public CustomIconAnimation Animation { get; set; }
+
+    /// <summary>
     /// Designed looks selected by live data. The first matching state wins; when none match, the
     /// fallback look above is used.
     /// </summary>
@@ -180,10 +207,10 @@ public sealed class CustomIcon
             {
                 if (candidate is null || !candidate.Matches(state)) continue;
                 return new CustomIconLook(candidate.Glyph, candidate.ImagePath, candidate.Color, candidate.Plate, candidate.Round,
-                    candidate.Anchor, candidate.OffsetX, candidate.OffsetY, candidate.Scale, candidate.Opacity, candidate.Rotation);
+                    candidate.Anchor, candidate.OffsetX, candidate.OffsetY, candidate.Scale, candidate.Opacity, candidate.Rotation, Animation);
             }
         }
-        return new CustomIconLook(Glyph, ImagePath, Color, Plate, Round, Anchor, OffsetX, OffsetY, Scale, Opacity, Rotation);
+        return new CustomIconLook(Glyph, ImagePath, Color, Plate, Round, Anchor, OffsetX, OffsetY, Scale, Opacity, Rotation, Animation);
     }
 
     public void Normalize()
@@ -201,6 +228,7 @@ public sealed class CustomIcon
         Scale = double.IsFinite(Scale) ? Math.Clamp(Scale, 0.05, 8) : 1;
         Opacity = double.IsFinite(Opacity) ? Math.Clamp(Opacity, 0, 1) : 1;
         Rotation = double.IsFinite(Rotation) ? Math.Clamp(Rotation, -360, 360) : 0;
+        if (!Enum.IsDefined(Animation)) Animation = CustomIconAnimation.None;
         States ??= [];
         States = States.Where(state => state is not null).Take(48).ToList();
         foreach (var state in States) state.Normalize();
@@ -312,6 +340,7 @@ public static class CustomIconStore
             existing.Scale = icon.Scale;
             existing.Opacity = icon.Opacity;
             existing.Rotation = icon.Rotation;
+            existing.Animation = icon.Animation;
             existing.States = icon.States.Select(state => state.Copy()).ToList();
         }
         Save();

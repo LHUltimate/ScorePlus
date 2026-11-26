@@ -250,6 +250,20 @@ public sealed class RemoteControlServer : IDisposable
     /// <summary>Set by the console: false refuses score and clock actions for a graphics or cues profile.</summary>
     public static Func<string, bool>? ActionAllowed { get; set; }
 
+    /// <summary>
+    /// The operator's keybinds, as JSON, so the phone console's keyboard sends the same actions as
+    /// the desktop desk. Set by the main window; the list is rebuilt on every request so a keybind
+    /// edited in Preferences reaches the phone without reopening the page.
+    /// </summary>
+    public static Func<string>? KeybindJson { get; set; }
+
+    /// <summary>
+    /// Set by the main window: restarts the remote from the saved preferences. A running server
+    /// holds the password hash it was created with, so changing the password while it serves used
+    /// to leave phones signing in with the old one until ScorePlus was restarted.
+    /// </summary>
+    public static Action? RestartRequested { get; set; }
+
     /// <summary>The run of show as the phone's cue strip reads it, and the actions its buttons send.</summary>
     public static Func<string>? CueState { get; set; }
     public static Func<string, bool>? CueAction { get; set; }
@@ -347,6 +361,11 @@ public sealed class RemoteControlServer : IDisposable
         if (request.Path == "/api/state" && request.Method == "GET")
         {
             await Write(stream, 200, "application/json; charset=utf-8", Snapshot());
+            return;
+        }
+        if (request.Path == "/api/keybinds" && request.Method == "GET")
+        {
+            await Write(stream, 200, "application/json; charset=utf-8", KeybindJson?.Invoke() ?? "[]");
             return;
         }
         if (request.Path == "/api/camera-wall" && request.Method == "GET")
@@ -471,6 +490,14 @@ public sealed class RemoteControlServer : IDisposable
                     case "football.down.plus": _engine.AdvanceDown(); return (true, string.Empty);
                     case "football.down.minus": _engine.PreviousDown(); return (true, string.Empty);
                     case "football.distance.set": _engine.SetFootballDistance(Number("value", _engine.State.YardsToGo)); return (true, string.Empty);
+                    // The down line's own overrides, so a phone can say Goal, Inches, PAT or 2 PT
+                    // without typing a number the graphic would print as yards.
+                    case "football.distance.normal": _engine.SetFootballDownMode(FootballDownMode.Normal); return (true, string.Empty);
+                    case "football.distance.inches": _engine.SetFootballDownMode(FootballDownMode.Inches); return (true, string.Empty);
+                    case "football.distance.goal": _engine.SetFootballDownMode(FootballDownMode.Goal); return (true, string.Empty);
+                    case "football.distance.pat": _engine.SetFootballDownMode(FootballDownMode.Pat); return (true, string.Empty);
+                    case "football.distance.twopt": _engine.SetFootballDownMode(FootballDownMode.TwoPoint); return (true, string.Empty);
+                    case "football.distance.none": _engine.SetFootballDownMode(FootballDownMode.None); return (true, string.Empty);
                     case "football.ball.set": _engine.SetFootballDistance(_engine.State.YardsToGo, Number("value", _engine.State.YardsToGoal)); return (true, string.Empty);
                     case "stat.adjust": _engine.AdjustStat(form.GetValueOrDefault("id", string.Empty), Number("value", 0)); return (true, string.Empty);
                     case "team.name":
@@ -573,6 +600,7 @@ public sealed class RemoteControlServer : IDisposable
             periods = s.TotalPeriods,
             down = s.Down,
             toGo = s.YardsToGo,
+            downMode = s.FootballDownMode.ToString(),
             ballOn = s.YardsToGoal,
             ballHome = s.BallOnHomeSide,
             playClock = s.PlayClockSeconds,

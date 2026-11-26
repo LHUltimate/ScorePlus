@@ -170,7 +170,7 @@ internal static class ScorebugRender
         // after the graphic was built appears immediately instead of waiting for a rebuild.
         if (item.Kind == ScorebugElementKind.Logo) return new ScorebugLogoView(item, state?.Invoke(), showVideoPlaceholder);
         if (item.Kind == ScorebugElementKind.Shape) return CreateShape(item, state?.Invoke());
-        var text = state is null ? item.Content : ScoreboardTemplates.Bind(item.Content, state(), item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero);
+        var text = state is null ? item.Content : ScoreboardTemplates.Bind(item.Content, state(), item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero, item.PeriodLowercase);
         return MakeText(item, text, state?.Invoke());
     }
 
@@ -476,7 +476,7 @@ public sealed class TickerView : Grid, IDisposable
             return;
         }
         if (_rotationActive) StopRotation();
-        var raw = game is null ? item.Content : ScoreboardTemplates.Bind(item.Content, game, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero);
+        var raw = game is null ? item.Content : ScoreboardTemplates.Bind(item.Content, game, item.PeriodFormat, item.DownCaps, item.PlayClockColon, item.GameClockLeadingZero, item.ClockDecimals, item.RecordIncludesDivision, item.PlayClockLeadingZero, item.PeriodLowercase);
         raw = System.Text.RegularExpressions.Regex.Replace(raw ?? "", @"\s+", " ").Trim();
         var display = raw.Length == 0 ? " " : raw + "   \u2022   ";
         var foreground = Paint.Text(item, game);
@@ -1231,7 +1231,7 @@ public sealed class ScorebugTextBlock : TextBlock
 
     /// <summary>Shows a new value, crossing to it with the element's chosen animation.</summary>
     /// <param name="seconds">How long the whole crossing takes: 0 snaps, 5 is a slow dissolve.</param>
-    public void UpdateText(string text, ScorebugTransition transition, double seconds = 0.2)
+    public void UpdateText(string text, ScorebugTransition transition, double seconds = 0.2, bool force = false)
     {
         text ??= "";
         var total = Math.Clamp(double.IsFinite(seconds) ? seconds : 0.2, 0, 5);
@@ -1246,10 +1246,18 @@ public sealed class ScorebugTextBlock : TextBlock
             transition = down;
             total = Math.Clamp(_style.TransitionDownSeconds ?? total, 0, 5);
         }
+        // A forced replay asks for the crossing again even though the value is the same. It cancels
+        // whatever was running so the animation starts from the value that is already on screen.
+        if (force)
+        {
+            _generation++;
+            _queuedText = null;
+            _animating = false;
+        }
         // The target is already recorded when a transition starts. A refresh that prints the same
         // value must leave that transition alone, and it also cancels a value queued behind it:
         // the latest state is the value already crossing in, not an older detour.
-        if (_shown == text) { _queuedText = null; return; }
+        if (!force && _shown == text) { _queuedText = null; return; }
         // A different value that arrives mid-crossing waits its turn. A cut still snaps, because
         // a cut is supposed to land immediately.
         if (_animating && transition != ScorebugTransition.Cut && total >= 0.02)
@@ -1304,6 +1312,22 @@ public sealed class ScorebugTextBlock : TextBlock
                 PlayValueMotion(valueMotion, beforeValue, text);
             });
         });
+    }
+
+    /// <summary>
+    /// Plays the element's crossing again for the value already showing. New series at 1st &amp; 10
+    /// prints the same words, so the ordinary update path had nothing to animate; this gives the
+    /// down line its animation on purpose.
+    /// </summary>
+    public void Replay(string text, ScorebugTransition transition, double seconds = 0.2)
+    {
+        if (!string.Equals(_shown, text ?? "", StringComparison.Ordinal))
+        {
+            UpdateText(text ?? "", transition, seconds);
+            return;
+        }
+        if (string.IsNullOrEmpty(_shown)) return;
+        UpdateText(_shown, transition, seconds, force: true);
     }
 
     void PlayValueMotion(MotionClip? clip, string before, string after)
@@ -1935,6 +1959,13 @@ public sealed class ScorebugIconView : Grid
     TextBlock? _customText;
     Image? _customImage;
     string _customImagePath = "";
+    // The made icon's own motion. The design transform lives on the host, so these sit on the
+    // content inside it and the two never overwrite each other.
+    Grid? _customContent;
+    readonly ScaleTransform _customPulse = new(1, 1);
+    readonly RotateTransform _customSpin = new();
+    readonly TranslateTransform _customHop = new();
+    CustomIconAnimation _customAnimation = CustomIconAnimation.None;
 
     /// <summary>
     /// Which live artwork this view was built for, so the studio can tell one icon from another.
@@ -2038,9 +2069,15 @@ public sealed class ScorebugIconView : Grid
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
-            var customContent = new Grid();
+            var customContent = new Grid { RenderTransformOrigin = new Point(0.5, 0.5) };
+            var customMotion = new TransformGroup();
+            customMotion.Children.Add(_customPulse);
+            customMotion.Children.Add(_customSpin);
+            customMotion.Children.Add(_customHop);
+            customContent.RenderTransform = customMotion;
             customContent.Children.Add(_customText);
             customContent.Children.Add(_customImage);
+            _customContent = customContent;
             _customHost = new Border
             {
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -2130,6 +2167,66 @@ public sealed class ScorebugIconView : Grid
         transform.Children.Add(new RotateTransform(look.Rotation));
         transform.Children.Add(new TranslateTransform(look.OffsetX, look.OffsetY));
         _customHost.RenderTransform = transform;
+        ApplyCustomAnimation(look.Animation);
+    }
+
+    /// <summary>
+    /// Runs the icon's chosen motion: Fade and Blink soften the mark, Pulse grows it, Spin turns it
+    /// and Bounce hops it. Only a change of animation restarts it, so the glyph never blinks back to
+    /// the first keyframe on every value refresh.
+    /// </summary>
+    void ApplyCustomAnimation(CustomIconAnimation animation)
+    {
+        if (_customContent is null || _customAnimation == animation) return;
+        _customAnimation = animation;
+        _customPulse.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        _customPulse.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        _customSpin.BeginAnimation(RotateTransform.AngleProperty, null);
+        _customHop.BeginAnimation(TranslateTransform.YProperty, null);
+        _customPulse.ScaleX = _customPulse.ScaleY = 1;
+        _customSpin.Angle = 0;
+        _customHop.Y = 0;
+        foreach (var element in new UIElement?[] { _customText, _customImage })
+        {
+            if (element is null) continue;
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+            element.Opacity = 1;
+        }
+        var forever = RepeatBehavior.Forever;
+        var soft = new SineEase { EasingMode = EasingMode.EaseInOut };
+        switch (animation)
+        {
+            case CustomIconAnimation.Fade:
+                Fade(_customText, 0.15, 1.4, forever, soft);
+                Fade(_customImage, 0.15, 1.4, forever, soft);
+                break;
+            case CustomIconAnimation.Blink:
+                Fade(_customText, 0.35, 0.45, forever, soft);
+                Fade(_customImage, 0.35, 0.45, forever, soft);
+                break;
+            case CustomIconAnimation.Pulse:
+                _customPulse.BeginAnimation(ScaleTransform.ScaleXProperty,
+                    new DoubleAnimation(1, 1.14, TimeSpan.FromSeconds(0.9)) { AutoReverse = true, RepeatBehavior = forever, EasingFunction = soft });
+                _customPulse.BeginAnimation(ScaleTransform.ScaleYProperty,
+                    new DoubleAnimation(1, 1.14, TimeSpan.FromSeconds(0.9)) { AutoReverse = true, RepeatBehavior = forever, EasingFunction = soft });
+                break;
+            case CustomIconAnimation.Spin:
+                _customSpin.BeginAnimation(RotateTransform.AngleProperty,
+                    new DoubleAnimation(0, 360, TimeSpan.FromSeconds(4)) { RepeatBehavior = forever });
+                break;
+            case CustomIconAnimation.Bounce:
+                _customHop.BeginAnimation(TranslateTransform.YProperty,
+                    new DoubleAnimation(0, -10, TimeSpan.FromSeconds(0.5)) { AutoReverse = true, RepeatBehavior = forever, EasingFunction = soft });
+                break;
+        }
+    }
+
+    /// <summary>Dissolves one part of the made icon between two opacities, forever.</summary>
+    static void Fade(UIElement? element, double from, double seconds, RepeatBehavior repeat, IEasingFunction easing)
+    {
+        if (element is null) return;
+        element.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(from, 1, TimeSpan.FromSeconds(seconds)) { AutoReverse = true, RepeatBehavior = repeat, EasingFunction = easing });
     }
 
     /// <summary>Paints the icon's own outline, fill and opacity, inside the element's box.</summary>
@@ -2241,7 +2338,7 @@ public sealed class ScorebugIconView : Grid
         // value is set again.
         if (!string.IsNullOrWhiteSpace(_item.IconToken))
         {
-            var bound = _state is null ? string.Empty : ScoreboardTemplates.Bind(_item.IconToken, _state(), _item.PeriodFormat, _item.DownCaps, _item.PlayClockColon, _item.GameClockLeadingZero, _item.ClockDecimals, _item.RecordIncludesDivision);
+            var bound = _state is null ? string.Empty : ScoreboardTemplates.Bind(_item.IconToken, _state(), _item.PeriodFormat, _item.DownCaps, _item.PlayClockColon, _item.GameClockLeadingZero, _item.ClockDecimals, _item.RecordIncludesDivision, _item.PlayClockLeadingZero, _item.PeriodLowercase);
             var showing = !string.IsNullOrWhiteSpace(bound)
                 && !string.Equals(bound.Trim(), "0", StringComparison.Ordinal)
                 && !bound.Trim().Equals("false", StringComparison.OrdinalIgnoreCase)
@@ -2346,14 +2443,14 @@ public sealed class ScorebugIconView : Grid
                 remaining = Math.Clamp(_item.IconVisitors ? state.AwayTimeouts : state.HomeTimeouts, 0, 12);
                 limit = _item.IconVisitors ? state.AwayTimeoutLimit : state.HomeTimeoutLimit;
             }
-            // A used timeout leaves the graphic instead of sitting there in a different colour. Only
-            // what is left is drawn, and the row is anchored to the right (or the bottom), so the
-            // timeouts disappear from the left to the right in the order they were used.
-            var count = Math.Clamp(remaining, 0, 12);
+            // The whole allotment stays on the graphic. A used timeout turns the used-timeout colour,
+            // and the direction decides which end those used bars gather at: from the right by
+            // default (so the remaining timeouts sit on the left), or from the left when flipped.
+            var count = Math.Clamp(Math.Max(remaining, limit), 0, 12);
             var vertical = Icon == ScorebugIcon.TimeoutBars && _item.IconVertical;
             _bars.Orientation = vertical ? Orientation.Vertical : Orientation.Horizontal;
-            _bars.HorizontalAlignment = vertical ? HorizontalAlignment.Center : HorizontalAlignment.Right;
-            _bars.VerticalAlignment = vertical ? VerticalAlignment.Bottom : VerticalAlignment.Center;
+            _bars.HorizontalAlignment = HorizontalAlignment.Center;
+            _bars.VerticalAlignment = VerticalAlignment.Center;
             if (count == 0)
             {
                 _bars.Children.Clear();
@@ -2367,7 +2464,7 @@ public sealed class ScorebugIconView : Grid
             // old 18 px cap behind. Horizontal bars take their thickness from the element's height.
             // The slot is the full allotment, not what is left: a bar keeps its size while the
             // others disappear, exactly like a row of used-timeout pips.
-            var slots = Math.Max(1, Math.Max(remaining, limit));
+            var slots = Math.Max(1, count);
             var slot = (vertical ? Math.Max(1, _item.Height) : Math.Max(1, _item.Width)) / slots;
             var gap = Math.Max(1, slot * 0.16);
             var width = vertical
@@ -2377,6 +2474,9 @@ public sealed class ScorebugIconView : Grid
                 ? Math.Clamp(slot - gap, 2, 400)
                 : Math.Clamp(Math.Max(1, _item.Height) * 0.28 * scale, 2, Math.Max(2, _item.Height));
             var barBrush = ScorebugRender.ParseBrush(foreground);
+            var usedBrush = ScorebugRender.ParseBrush(_item.IconUsedColor);
+            var usedCount = Math.Max(0, count - remaining);
+            bool IsUsed(int index) => _item.IconTimeoutFromRight ? index >= remaining : index < usedCount;
             var corner = _item.IconRounded ? thickness / 2 : 0;
             if (_bars.Children.Count != count)
             {
@@ -2386,14 +2486,14 @@ public sealed class ScorebugIconView : Grid
                 {
                     // Bars can have round or square ends; the dots variant is a row of round pips.
                     Shape bar = Icon == ScorebugIcon.TimeoutDots
-                        ? new Ellipse { Width = width, Height = width, Fill = barBrush }
+                        ? new Ellipse { Width = width, Height = width, Fill = IsUsed(i) ? usedBrush : barBrush }
                         : new Rectangle
                         {
                             Width = width,
                             Height = thickness,
                             RadiusX = corner,
                             RadiusY = corner,
-                            Fill = barBrush
+                            Fill = IsUsed(i) ? usedBrush : barBrush
                         };
                     bar.Margin = vertical
                         ? new Thickness(0, gap / 2, 0, gap / 2)
@@ -2407,6 +2507,7 @@ public sealed class ScorebugIconView : Grid
             {
                 // A size, colour or corner change updates the existing bars in place instead of
                 // rebuilding them, so the row never flickers while the slider moves.
+                var index = 0;
                 foreach (var child in _bars.Children.OfType<Shape>())
                 {
                     child.Width = width;
@@ -2415,7 +2516,8 @@ public sealed class ScorebugIconView : Grid
                     child.Margin = vertical
                         ? new Thickness(0, gap / 2, 0, gap / 2)
                         : new Thickness(gap / 2, 0, gap / 2, 0);
-                    child.Fill = barBrush;
+                    child.Fill = IsUsed(index) ? usedBrush : barBrush;
+                    index++;
                 }
                 _appliedForeground = foreground;
             }

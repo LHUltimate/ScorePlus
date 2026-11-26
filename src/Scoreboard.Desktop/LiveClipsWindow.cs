@@ -92,7 +92,13 @@ public sealed class LiveClipsWindow : Window
         {
             Content = BuildWallSections(),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            // Only the clips and cameras wall scrolls; the preview and audience monitors above it
+            // stay put. Smooth wheel panning makes a long clip library feel like one page.
+            CanContentScroll = false,
+            PanningMode = PanningMode.VerticalOnly,
+            Focusable = false,
+            VerticalAlignment = VerticalAlignment.Stretch
         };
 
         _cardA = ChannelCard("FILL A", _channelA, _cameraA, _channelAStatus, 0);
@@ -147,6 +153,10 @@ public sealed class LiveClipsWindow : Window
         root.Children.Add(header);
 
         var body = new Grid();
+        // The body must give its wall a bounded height. Without this row the wall asked for all the
+        // height its clip tiles wanted, so the tiles were clipped by the window and the scrollbar
+        // never appeared.
+        body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(286) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -165,6 +175,7 @@ public sealed class LiveClipsWindow : Window
         wallStack.Children.Add(_wallScroll);
         wall.Child = wallStack;
         body.Children.Add(wall);
+        Grid.SetRow(body, 1);
         root.Children.Add(body);
 
         var footer = new Border { Background = Solid("#141414"), CornerRadius = new CornerRadius(7), Padding = new Thickness(10, 5, 10, 5), Margin = new Thickness(0, 8, 0, 0) };
@@ -187,7 +198,8 @@ public sealed class LiveClipsWindow : Window
     UIElement BuildWallSections()
     {
         var stack = new StackPanel();
-        stack.Children.Add(SectionHeader("CLIPS"));
+        stack.Children.Add(SectionHeader("CLIPS",
+            "A clip plays in a video box whose Media tag matches the clip's tag · GLOBAL plays in every box"));
         stack.Children.Add(_clipPanel);
         stack.Children.Add(new Border
         {
@@ -198,13 +210,20 @@ public sealed class LiveClipsWindow : Window
         return stack;
     }
 
-    static UIElement SectionHeader(string title)
+    static UIElement SectionHeader(string title, string? caption = null)
     {
-        return new TextBlock
+        var panel = new StackPanel { Margin = new Thickness(2, 0, 2, 6) };
+        panel.Children.Add(new TextBlock
         {
-            Text = title, FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Solid("#B0B0B0"),
-            Margin = new Thickness(2, 0, 2, 6)
-        };
+            Text = title, FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Solid("#B0B0B0")
+        });
+        if (!string.IsNullOrWhiteSpace(caption))
+            panel.Children.Add(new TextBlock
+            {
+                Text = caption, FontSize = 9, Foreground = Solid("#6C7A8C"),
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0)
+            });
+        return panel;
     }
 
     /// <summary>The chosen display or venue channel, shown twice: what the preview will look like
@@ -541,7 +560,7 @@ public sealed class LiveClipsWindow : Window
             Width = 190, Margin = new Thickness(0, 0, 8, 8), Background = Solid("#0A0A0A"),
             CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1), BorderBrush = Solid("#383838"),
             Cursor = System.Windows.Input.Cursors.Hand, Tag = entry,
-            ToolTip = $"{entry.Label}\nTags: {entry.Tag}\nClick: load into fill {(_target == 0 ? "A" : "B")} · double-click: take to air"
+            ToolTip = $"{entry.Label}\nMedia tag: {entry.Tag}\nPlays in video boxes tagged {entry.Tag}; GLOBAL plays in every box\nClick: load into fill {(_target == 0 ? "A" : "B")} · double-click: take to air"
         };
         var stack = new StackPanel();
         var picture = new Grid { Height = 106, Background = Brushes.Black, ClipToBounds = true };

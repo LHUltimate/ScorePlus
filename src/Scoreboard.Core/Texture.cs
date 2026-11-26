@@ -150,52 +150,52 @@ public sealed class ScorebugTexture
         switch (kind)
         {
             case "Metal":
-                texture.Roughness = 0.28; texture.Glossiness = 0.62; texture.Ambience = 0.2;
-                texture.Shine = 0.55; texture.Metallic = 0.8; texture.Grain = 0.05;
-                texture.Emboss = 0.18; texture.Bevel = 0.35; texture.Satin = 0.05;
-                texture.Contrast = 0.35; texture.Angle = 90; texture.Opacity = 0.62;
+                texture.Roughness = 0.24; texture.Glossiness = 0.68; texture.Ambience = 0.16;
+                texture.Shine = 0.62; texture.Metallic = 0.85; texture.Grain = 0.16;
+                texture.Emboss = 0.18; texture.Bevel = 0.38; texture.Satin = 0.04;
+                texture.Contrast = 0.38; texture.Angle = 0; texture.Opacity = 0.64;
                 break;
             case "Chrome":
-                texture.Roughness = 0.1; texture.Glossiness = 0.85; texture.Ambience = 0.1;
-                texture.Shine = 0.8; texture.Metallic = 1; texture.Grain = 0.02;
-                texture.Emboss = 0.1; texture.Bevel = 0.5; texture.Satin = 0; texture.Iridescence = 0.15;
-                texture.Contrast = 0.55; texture.Angle = 100; texture.Opacity = 0.7;
+                texture.Roughness = 0.06; texture.Glossiness = 0.92; texture.Ambience = 0.06;
+                texture.Shine = 0.9; texture.Metallic = 1; texture.Grain = 0.04;
+                texture.Emboss = 0.08; texture.Bevel = 0.55; texture.Satin = 0; texture.Iridescence = 0.2;
+                texture.Contrast = 0.62; texture.Angle = 105; texture.Opacity = 0.74;
                 break;
             case "Glass":
-                texture.Roughness = 0.15; texture.Glossiness = 0.7; texture.Ambience = 0.55;
-                texture.Shine = 0.45; texture.Metallic = 0.1; texture.Grain = 0.02;
-                texture.Emboss = 0; texture.Bevel = 0.2; texture.Satin = 0.2;
-                texture.Contrast = 0.12; texture.Angle = 120; texture.Opacity = 0.4;
+                texture.Roughness = 0.08; texture.Glossiness = 0.82; texture.Ambience = 0.62;
+                texture.Shine = 0.58; texture.Metallic = 0.05; texture.Grain = 0.03;
+                texture.Emboss = 0; texture.Bevel = 0.16; texture.Satin = 0.24;
+                texture.Contrast = 0.08; texture.Angle = 128; texture.Opacity = 0.34;
                 break;
             case "Frost":
-                texture.Roughness = 0.9; texture.Glossiness = 0.12; texture.Ambience = 0.7;
-                texture.Shine = 0.06; texture.Grain = 0.35; texture.Satin = 0.4;
-                texture.Contrast = 0.05; texture.Scale = 0.6; texture.Opacity = 0.5;
+                texture.Roughness = 0.94; texture.Glossiness = 0.08; texture.Ambience = 0.78;
+                texture.Shine = 0.04; texture.Grain = 0.5; texture.Satin = 0.46;
+                texture.Contrast = 0.04; texture.Scale = 0.7; texture.Opacity = 0.54;
                 break;
             case "Fabric":
-                texture.Roughness = 0.85; texture.Glossiness = 0.08; texture.Ambience = 0.45;
-                texture.Shine = 0.04; texture.Grain = 0.45; texture.Satin = 0.55;
-                texture.Emboss = 0.12; texture.Scale = 2.4; texture.Opacity = 0.55;
+                texture.Roughness = 0.9; texture.Glossiness = 0.06; texture.Ambience = 0.42;
+                texture.Shine = 0.03; texture.Grain = 0.3; texture.Satin = 0.62;
+                texture.Emboss = 0.14; texture.Scale = 2.6; texture.Opacity = 0.58;
                 break;
             case "Velvet":
-                texture.Roughness = 0.95; texture.Glossiness = 0.05; texture.Ambience = 0.3;
-                texture.Shine = 0.02; texture.Grain = 0.2; texture.Satin = 0.75;
-                texture.Scale = 3; texture.Contrast = 0.15; texture.Opacity = 0.55;
+                texture.Roughness = 0.98; texture.Glossiness = 0.03; texture.Ambience = 0.24;
+                texture.Shine = 0.01; texture.Grain = 0.06; texture.Satin = 0.92;
+                texture.Scale = 3.2; texture.Contrast = 0.22; texture.Opacity = 0.6;
                 break;
             case "Stone":
-                texture.Roughness = 0.92; texture.Glossiness = 0.15; texture.Ambience = 0.25;
-                texture.Grain = 0.6; texture.Emboss = 0.28; texture.Bevel = 0.25;
-                texture.Scale = 1.4; texture.Contrast = 0.25; texture.Opacity = 0.62;
+                texture.Roughness = 0.96; texture.Glossiness = 0.12; texture.Ambience = 0.22;
+                texture.Grain = 0.74; texture.Emboss = 0.34; texture.Bevel = 0.28;
+                texture.Scale = 1.15; texture.Contrast = 0.3; texture.Opacity = 0.64;
                 break;
             case "Concrete":
-                texture.Roughness = 1; texture.Glossiness = 0.03; texture.Ambience = 0.2;
-                texture.Grain = 0.8; texture.Emboss = 0.35; texture.Scale = 0.8;
-                texture.Contrast = 0.2; texture.Opacity = 0.65;
+                texture.Roughness = 1; texture.Glossiness = 0.02; texture.Ambience = 0.16;
+                texture.Grain = 0.95; texture.Emboss = 0.22; texture.Scale = 0.85;
+                texture.Contrast = 0.18; texture.Opacity = 0.62;
                 break;
             case "Paper":
-                texture.Roughness = 0.88; texture.Glossiness = 0.05; texture.Ambience = 0.6;
-                texture.Grain = 0.25; texture.Emboss = 0.08; texture.Satin = 0.15;
-                texture.Scale = 1.8; texture.Opacity = 0.35;
+                texture.Roughness = 1; texture.Glossiness = 0.02; texture.Ambience = 0.72;
+                texture.Grain = 0.62; texture.Emboss = 0.12; texture.Satin = 0.08;
+                texture.Scale = 0.85; texture.Contrast = 0.08; texture.Opacity = 0.48;
                 break;
             case "Hologram":
                 texture.Roughness = 0.3; texture.Glossiness = 0.6; texture.Ambience = 0.5;

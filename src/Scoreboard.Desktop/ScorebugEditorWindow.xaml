@@ -469,6 +469,9 @@
             <TextBlock Text="Quarter style for this element" Style="{StaticResource FieldLabel}"/>
             <ComboBox x:Name="PeriodFormatInput" Margin="10,0,10,4" SelectionChanged="Property_Changed"
                       ToolTip="How {{PERIOD}} prints on this element — Quarter 1, Q1, 1 or 1st"/>
+            <CheckBox x:Name="PeriodLowercaseInput" Content="Lowercase the letters (1st)" FontSize="11"
+                      Margin="10,2,10,4" Checked="Property_Changed" Unchecked="Property_Changed"
+                      ToolTip="Off prints 1ST, OT. On prints 1st, ot, preserving the quarter format's own casing."/>
           </StackPanel>
           <StackPanel x:Name="TeamRecordSection">
             <TextBlock Text="TEAM RECORD" Style="{StaticResource SectionTitle}"/>
@@ -759,6 +762,9 @@
             <CheckBox x:Name="IconVerticalInput" Content="Stack the timeout bars vertically" Margin="10,2,10,4"
                       Checked="Property_Changed" Unchecked="Property_Changed"
                       ToolTip="Keep each bar horizontal but stack them down the box instead of across it"/>
+            <CheckBox x:Name="IconTimeoutFromRightInput" Content="Remove timeouts from the right" IsChecked="True"
+                      Margin="10,2,10,4" Checked="Property_Changed" Unchecked="Property_Changed"
+                      ToolTip="On: used timeouts turn the used-timeout colour at the right and grow leftward, leaving the remaining ones on the left. Off: they grow from the left instead."/>
             <CheckBox x:Name="IconRoundedInput" Content="Round the bar ends" Margin="10,2,10,8"
                       Checked="Property_Changed" Unchecked="Property_Changed"
                       ToolTip="On: round-ended timeout bars. Off: square-edged bars."/>
@@ -785,7 +791,7 @@
           <TextBlock Text="Media tag" Style="{StaticResource FieldLabel}"/>
           <TextBox x:Name="MediaTagInput" Style="{StaticResource FieldBox}" TextChanged="Property_Changed"
                    ToolTip="Leave empty to show any playing clip, or name a tag so only that tag's clips appear"/>
-          <TextBlock x:Name="VideoTagHintText" Text="Only media with this tag plays inside this element. The tag label is drawn in the studio only; the audience screen stays blank until a clip is cued."
+          <TextBlock x:Name="VideoTagHintText" Text="A clip plays in this box when its Media tag matches this box's tag. GLOBAL plays in every box; leave this empty to accept any cued clip. Set a clip's tag in the MEDIA dock's Tag field before importing it."
                      Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap" Margin="10,0,10,6"/>
           <CheckBox x:Name="PreserveAspectInput" Content="Preserve the video's aspect ratio" Margin="10,2,10,2"
                     Checked="Property_Changed" Unchecked="Property_Changed"

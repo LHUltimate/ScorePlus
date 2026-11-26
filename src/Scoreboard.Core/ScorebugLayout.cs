@@ -418,6 +418,9 @@ public sealed class ScorebugElement
     /// <summary>How this element prints a quarter: "Full", "Short", "Number", "Ordinal", or null for the game default.</summary>
     public string? PeriodFormat { get; set; }
 
+    /// <summary>Print the quarter's letters in lower case: 1st instead of 1ST, ot instead of OT.</summary>
+    public bool PeriodLowercase { get; set; }
+
     /// <summary>Print the words in this element's down line in full caps, e.g. 1st &amp; GOAL.</summary>
     public bool DownCaps { get; set; }
 
@@ -467,6 +470,13 @@ public sealed class ScorebugElement
 
     /// <summary>For timeout bars: round the ends of each bar. Off draws square-ended bars.</summary>
     public bool IconRounded { get; set; } = true;
+
+    /// <summary>
+    /// For timeout bars and dots: used timeouts sit at the right (or the bottom) and grow leftward
+    /// as they are taken, so the remaining timeouts stay on the left. Off swaps the ends and the
+    /// used timeouts grow left to right.
+    /// </summary>
+    public bool IconTimeoutFromRight { get; set; } = true;
 
     /// <summary>
     /// Turns the icon artwork in degrees. 90 lays a possession arrow on its side pointing down,
@@ -852,6 +862,16 @@ public sealed class ScorebugCatalog
 
     public string? Warning { get; private set; }
     public event Action? Changed;
+
+    /// <summary>
+    /// Raised while a studio drag or resize is still under the mouse, after the elements have moved
+    /// but before the edit is saved. Previews follow the box as it is dragged instead of waiting
+    /// for the mouse button to come up; nothing is persisted and no undo point is recorded.
+    /// </summary>
+    public event Action? LivePreview;
+
+    /// <summary>Tells every preview to redraw the in-progress edit without saving it.</summary>
+    public void NotifyLivePreview() => LivePreview?.Invoke();
 
     /// <summary>Saved transitions the makers can apply again.</summary>
     public List<MotionClip> Transitions { get; private set; } = [];
