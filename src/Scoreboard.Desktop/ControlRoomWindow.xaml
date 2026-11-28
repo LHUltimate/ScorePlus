@@ -9,10 +9,16 @@
       <Setter Property="BorderBrush" Value="#2A2D33"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="0"/>
-      <Setter Property="Margin" Value="0"/>
+      <!-- One margin for every card: the UniformGrid cell is shared, so equal margins mean equal
+           widths and no card can overlap the next one. -->
+      <Setter Property="Margin" Value="4"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
       <Setter Property="VerticalContentAlignment" Value="Stretch"/>
       <Setter Property="Cursor" Value="Hand"/>
+      <!-- Every card is the same size; the scroll viewer keeps the page readable on short screens
+           instead of letting each card clip its own text. -->
+      <Setter Property="Height" Value="180"/>
+      <Setter Property="ClipToBounds" Value="False"/>
     </Style>
     <Style x:Key="HubTitle" TargetType="TextBlock">
       <Setter Property="FontSize" Value="15"/>
@@ -45,8 +51,12 @@
       </StackPanel>
     </DockPanel>
 
-    <UniformGrid Grid.Row="1" Columns="4" Rows="3" VerticalAlignment="Center">
-      <Button x:Name="DisplayStudioCard" Style="{StaticResource HubCard}" Click="DisplayStudio_Click" Margin="0,0,8,8">
+    <!-- A scroll viewer measures the grid with unlimited height, so every card is as tall as the
+         tallest one instead of each cell clipping its own description and status strip. -->
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  Padding="0,0,8,0">
+    <UniformGrid Columns="5" Rows="3" VerticalAlignment="Top">
+      <Button x:Name="DisplayStudioCard" Style="{StaticResource HubCard}" Click="DisplayStudio_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -68,7 +78,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="ContentStudioCard" Style="{StaticResource HubCard}" Click="ContentStudio_Click" Margin="0,0,8,8">
+      <Button x:Name="ContentStudioCard" Style="{StaticResource HubCard}" Click="ContentStudio_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -90,7 +100,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="ShowCard" Style="{StaticResource HubCard}" Click="Show_Click" Margin="0,0,8,8">
+      <Button x:Name="ShowCard" Style="{StaticResource HubCard}" Click="Show_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -112,7 +122,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="LiveSwitchCard" Style="{StaticResource HubCard}" Click="LiveSwitch_Click" Margin="0,0,0,8">
+      <Button x:Name="LiveSwitchCard" Style="{StaticResource HubCard}" Click="LiveSwitch_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -134,7 +144,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="LiveClipsCard" Style="{StaticResource HubCard}" Click="LiveClips_Click" Margin="0,0,8,0">
+      <Button x:Name="LiveClipsCard" Style="{StaticResource HubCard}" Click="LiveClips_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -156,7 +166,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="LiveChannelCard" Style="{StaticResource HubCard}" Click="LiveChannel_Click" Margin="0,0,8,0">
+      <Button x:Name="LiveChannelCard" Style="{StaticResource HubCard}" Click="LiveChannel_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -178,7 +188,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="ReplayBoothCard" Style="{StaticResource HubCard}" Click="ReplayBooth_Click" Margin="0,0,8,0">
+      <Button x:Name="ReplayBoothCard" Style="{StaticResource HubCard}" Click="ReplayBooth_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -200,7 +210,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="VenueCard" Style="{StaticResource HubCard}" Click="Venue_Click" Margin="0,0,8,8">
+      <Button x:Name="VenueCard" Style="{StaticResource HubCard}" Click="Venue_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -222,7 +232,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="GraphicsCard" Style="{StaticResource HubCard}" Click="GraphicsOutput_Click" Margin="0,0,8,8">
+      <Button x:Name="GraphicsCard" Style="{StaticResource HubCard}" Click="GraphicsOutput_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -244,7 +254,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="StreamStudioCard" Style="{StaticResource HubCard}" Click="LiveBook_Click" Margin="0,0,8,8">
+      <Button x:Name="StreamStudioCard" Style="{StaticResource HubCard}" Click="LiveBook_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -266,7 +276,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="CameraSwitchCard" Style="{StaticResource HubCard}" Click="CameraSwitch_Click" Margin="0,0,8,8">
+      <Button x:Name="CameraSwitchCard" Style="{StaticResource HubCard}" Click="CameraSwitch_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -288,7 +298,7 @@
         </Grid>
       </Button>
 
-      <Button x:Name="MultiviewCard" Style="{StaticResource HubCard}" Click="Multiview_Click" Margin="0,0,0,8">
+      <Button x:Name="MultiviewCard" Style="{StaticResource HubCard}" Click="Multiview_Click">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="5"/>
@@ -309,7 +319,52 @@
           </StackPanel>
         </Grid>
       </Button>
+
+      <Button x:Name="AnimationMakerCard" Style="{StaticResource HubCard}" Click="AnimationMaker_Click">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Border Background="#5BC0EB" CornerRadius="8,8,0,0"/>
+          <StackPanel Grid.Row="1" Margin="15,12,15,12">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="13" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock Text="ANIMATION MAKER" Style="{StaticResource HubTitle}"/>
+            </DockPanel>
+            <TextBlock Text="Motion a value follows" Foreground="#BFE7FA" FontSize="11" Margin="0,2,0,8"/>
+            <TextBlock Text="A timeline with keyframes, easing and a graph editor. Saved clips appear on elements, icons and score events."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
+            <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
+              <TextBlock x:Name="AnimationStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Button>
+
+      <Button x:Name="TransitionMakerCard" Style="{StaticResource HubCard}" Click="TransitionMaker_Click">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Border Background="#FF7A59" CornerRadius="8,8,0,0"/>
+          <StackPanel Grid.Row="1" Margin="15,12,15,12">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Text="14" FontSize="10" Foreground="#5C6B7E"/>
+              <TextBlock Text="TRANSITION BUILDER" Style="{StaticResource HubTitle}"/>
+            </DockPanel>
+            <TextBlock Text="How a graphic leaves and arrives" Foreground="#FFC1AE" FontSize="11" Margin="0,2,0,8"/>
+            <TextBlock Text="Exit and enter legs on one ruler. Saved hand-overs appear in Display Studio, Live Switch and storyboards."
+                       Foreground="#93A0B2" FontSize="10" TextWrapping="Wrap"/>
+            <Border Background="#0C0E11" CornerRadius="5" Padding="8,5" Margin="0,10,0,0">
+              <TextBlock x:Name="TransitionStatus" Text="—" Foreground="#B7C3D2" FontSize="10"/>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Button>
     </UniformGrid>
+    </ScrollViewer>
 
     <Border Grid.Row="2" Background="#14161A" CornerRadius="7" Padding="11,6" Margin="0,12,0,0">
       <DockPanel>

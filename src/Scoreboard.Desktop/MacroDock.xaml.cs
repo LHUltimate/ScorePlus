@@ -227,6 +227,9 @@ public partial class MacroDock : UserControl
             new KindChoice(MacroActionKind.SwitchLayout, "Layout — switch a display to a layout"),
             new KindChoice(MacroActionKind.StoryboardScene, "Storyboard scene — take a scene and its transition"),
             new KindChoice(MacroActionKind.LayerEffect, "Layer effect — set blur or glow on one layer"),
+            new KindChoice(MacroActionKind.LayoutLayer, "Layer — show or hide one layer of a layout"),
+            new KindChoice(MacroActionKind.LayoutGroup, "Group — show or hide a Display Studio group"),
+            new KindChoice(MacroActionKind.LayoutState, "State — take a saved layout look"),
             new KindChoice(MacroActionKind.PenaltyFlag, "Flag — put a flag down or clear it"),
             new KindChoice(MacroActionKind.RosterStat, "Roster stat — change any player's stat"),
             new KindChoice(MacroActionKind.Control, "Console button — run any control action"),
@@ -1286,6 +1289,14 @@ public partial class MacroDock : UserControl
         LayoutPanel.Visibility = kind == MacroActionKind.SwitchLayout ? Visibility.Visible : Visibility.Collapsed;
         ScenePanel.Visibility = kind == MacroActionKind.StoryboardScene ? Visibility.Visible : Visibility.Collapsed;
         EffectPanel.Visibility = kind == MacroActionKind.LayerEffect ? Visibility.Visible : Visibility.Collapsed;
+        var layoutTarget = kind is MacroActionKind.LayoutLayer or MacroActionKind.LayoutGroup
+            or MacroActionKind.LayoutState;
+        LayoutTargetsPanel.Visibility = layoutTarget ? Visibility.Visible : Visibility.Collapsed;
+        LayerElementRow.Visibility = kind == MacroActionKind.LayoutLayer ? Visibility.Visible : Visibility.Collapsed;
+        LayerGroupRow.Visibility = kind == MacroActionKind.LayoutGroup ? Visibility.Visible : Visibility.Collapsed;
+        LayerStateRow.Visibility = kind == MacroActionKind.LayoutState ? Visibility.Visible : Visibility.Collapsed;
+        LayerVisibleBox.Visibility = kind == MacroActionKind.LayoutState ? Visibility.Collapsed : Visibility.Visible;
+        if (layoutTarget && LayerLayoutBox.Items.Count == 0) RefreshLayerTargets();
         CommandPanel.Visibility = kind == MacroActionKind.Control ? Visibility.Visible : Visibility.Collapsed;
         SportValuePanel.Visibility = kind == MacroActionKind.SportValue ? Visibility.Visible : Visibility.Collapsed;
         CustomValuePanel.Visibility = kind == MacroActionKind.CustomValue ? Visibility.Visible : Visibility.Collapsed;
@@ -1345,7 +1356,8 @@ public partial class MacroDock : UserControl
     static bool AlwaysDirect(MacroActionKind kind) => kind is MacroActionKind.PlayVideo
         or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir or MacroActionKind.SwitchLayout
         or MacroActionKind.MediaVolume or MacroActionKind.Replay
-        or MacroActionKind.StoryboardScene or MacroActionKind.LayerEffect;
+        or MacroActionKind.StoryboardScene or MacroActionKind.LayerEffect
+        or MacroActionKind.LayoutLayer or MacroActionKind.LayoutGroup or MacroActionKind.LayoutState;
 
     /// <summary>The step path for each entry in the replay action picker.</summary>
     static string ReplayPath(int index) => Math.Clamp(index, 0, 4) switch
@@ -1479,6 +1491,57 @@ public partial class MacroDock : UserControl
     void EffectLayout_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (!_syncing) RefreshEffectElements();
+    }
+
+    /// <summary>Fills the layout picker for layer, group and state steps.</summary>
+    void RefreshLayerTargets()
+    {
+        var selectedDisplay = (LayerLayoutBox.SelectedItem as LayoutChoice)?.DisplayId;
+        var selectedLayout = (LayerLayoutBox.SelectedItem as LayoutChoice)?.LayoutId;
+        var choices = _catalog?.Displays
+            .SelectMany(display => display.Layouts.Select(layout =>
+                new LayoutChoice(display.Id, layout.Id, $"{display.Name} · {layout.Name}")))
+            .ToList() ?? [];
+        LayerLayoutBox.ItemsSource = choices;
+        LayerLayoutBox.SelectedItem = choices.FirstOrDefault(choice =>
+            string.Equals(choice.DisplayId, selectedDisplay, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(choice.LayoutId, selectedLayout, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault();
+        RefreshLayerParts();
+    }
+
+    void RefreshLayerParts()
+    {
+        if (LayerLayoutBox.SelectedItem is not LayoutChoice choice)
+        {
+            LayerElementBox.ItemsSource = Array.Empty<EffectElementChoice>();
+            LayerGroupBox.ItemsSource = Array.Empty<EffectElementChoice>();
+            LayerStateBox.ItemsSource = Array.Empty<EffectElementChoice>();
+            return;
+        }
+        var layout = _catalog?.FindLayout(choice.DisplayId, choice.LayoutId);
+        var selectedElement = (LayerElementBox.SelectedItem as EffectElementChoice)?.Id;
+        var selectedGroup = (LayerGroupBox.SelectedItem as EffectElementChoice)?.Id;
+        var selectedState = (LayerStateBox.SelectedItem as EffectElementChoice)?.Id;
+        var elements = layout?.Elements.Select(element =>
+            new EffectElementChoice(element.Id, $"{element.Name} · {element.Kind}")).ToList() ?? [];
+        var groups = layout?.Groups().Select(group =>
+            new EffectElementChoice(group.Id, group.Name)).ToList() ?? [];
+        var states = layout?.States.Select(state =>
+            new EffectElementChoice(state.Id, $"{state.Name} · {state.Transition} {state.Seconds:0.##}s")).ToList() ?? [];
+        LayerElementBox.ItemsSource = elements;
+        LayerGroupBox.ItemsSource = groups;
+        LayerStateBox.ItemsSource = states;
+        LayerElementBox.SelectedItem = elements.FirstOrDefault(item =>
+            string.Equals(item.Id, selectedElement, StringComparison.OrdinalIgnoreCase)) ?? elements.FirstOrDefault();
+        LayerGroupBox.SelectedItem = groups.FirstOrDefault(item =>
+            string.Equals(item.Id, selectedGroup, StringComparison.OrdinalIgnoreCase)) ?? groups.FirstOrDefault();
+        LayerStateBox.SelectedItem = states.FirstOrDefault(item =>
+            string.Equals(item.Id, selectedState, StringComparison.OrdinalIgnoreCase)) ?? states.FirstOrDefault();
+    }
+
+    void LayerLayout_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_syncing) RefreshLayerParts();
     }
 
     void SyncRoster()
@@ -2212,6 +2275,11 @@ public partial class MacroDock : UserControl
         if (kind == MacroActionKind.MediaVolume)
             value = Math.Clamp(int.TryParse(VolumePercentBox.Text, out var percent) ? percent : 100, 0, 100);
         if (kind == MacroActionKind.LayerEffect) value = effectIndex;
+        var layerLayout = LayerLayoutBox.SelectedItem as LayoutChoice;
+        var layerElement = LayerElementBox.SelectedItem as EffectElementChoice;
+        var layerGroup = LayerGroupBox.SelectedItem as EffectElementChoice;
+        var layerState = LayerStateBox.SelectedItem as EffectElementChoice;
+        var layerKind = kind is MacroActionKind.LayoutLayer or MacroActionKind.LayoutGroup or MacroActionKind.LayoutState;
         var replaySeconds = double.TryParse(ReplaySecondsBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var replayBack)
             ? Math.Clamp(replayBack, 0, 600) : 8;
         var replaySpeed = double.TryParse(ReplaySpeedBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var replayRate)
@@ -2229,7 +2297,9 @@ public partial class MacroDock : UserControl
         return new MacroAction
         {
             Kind = kind,
-            Home = SideBox.SelectedIndex != 1,
+            Home = kind is MacroActionKind.LayoutLayer or MacroActionKind.LayoutGroup
+                ? LayerVisibleBox.IsChecked == true
+                : SideBox.SelectedIndex != 1,
             Amount = kind == MacroActionKind.LayerEffect
                 ? effectAmount
                 : int.TryParse(AmountBox.Text, out var amount) ? amount : 1,
@@ -2243,6 +2313,9 @@ public partial class MacroDock : UserControl
                 MacroActionKind.SwitchLayout => layout?.LayoutId ?? "",
                 MacroActionKind.StoryboardScene => scene?.Id ?? "",
                 MacroActionKind.LayerEffect => effectElement?.Id ?? "",
+                MacroActionKind.LayoutLayer => layerElement?.Id ?? "",
+                MacroActionKind.LayoutGroup => layerGroup?.Id ?? "",
+                MacroActionKind.LayoutState => layerState?.Id ?? "",
                 MacroActionKind.PenaltyFlag => flagType,
                 MacroActionKind.Control => command?.Id ?? "",
                 MacroActionKind.SportValue => sportValue?.Id ?? "",
@@ -2263,6 +2336,9 @@ public partial class MacroDock : UserControl
                 : kind == MacroActionKind.SwitchLayout ? layout?.Label ?? ""
                 : kind == MacroActionKind.StoryboardScene ? scene?.Label ?? ""
                 : kind == MacroActionKind.LayerEffect ? effectElement?.Label ?? ""
+                : kind == MacroActionKind.LayoutLayer ? layerElement?.Label ?? ""
+                : kind == MacroActionKind.LayoutGroup ? layerGroup?.Label ?? ""
+                : kind == MacroActionKind.LayoutState ? layerState?.Label ?? ""
                 : kind == MacroActionKind.PenaltyFlag ? flagType
                 : kind == MacroActionKind.MediaVolume ? volumeMedia?.Label ?? ""
                 : kind == MacroActionKind.RunMacro ? chained?.Label ?? ""
@@ -2271,8 +2347,10 @@ public partial class MacroDock : UserControl
                     ? media.Label
                     : "",
             DisplayId = kind == MacroActionKind.SwitchLayout ? layout?.DisplayId ?? ""
-                : kind == MacroActionKind.LayerEffect ? effectLayout?.DisplayId ?? "" : "",
-            LayoutId = kind == MacroActionKind.LayerEffect ? effectLayout?.LayoutId ?? "" : "",
+                : kind == MacroActionKind.LayerEffect ? effectLayout?.DisplayId ?? ""
+                : layerKind ? layerLayout?.DisplayId ?? "" : "",
+            LayoutId = kind == MacroActionKind.LayerEffect ? effectLayout?.LayoutId ?? ""
+                : layerKind ? layerLayout?.LayoutId ?? "" : "",
             PlayerId = (PlayerBox.SelectedItem as PlayerChoice)?.Id ?? "",
             PlayerName = (PlayerBox.SelectedItem as PlayerChoice)?.Label ?? "",
             StatName = StatBox.Text.Trim(),
@@ -2412,6 +2490,25 @@ public partial class MacroDock : UserControl
                 EffectBox.SelectedIndex = Math.Clamp(action.Value, 0, 2);
                 EffectAmountBox.Text = Math.Clamp(action.Amount, 0, 100).ToString();
                 EffectColorBox.Text = string.IsNullOrWhiteSpace(action.Text) ? "#FF38D7A3" : action.Text;
+            }
+            if (action.Kind is MacroActionKind.LayoutLayer or MacroActionKind.LayoutGroup or MacroActionKind.LayoutState)
+            {
+                RefreshLayerTargets();
+                LayerLayoutBox.SelectedItem = LayerLayoutBox.Items.OfType<LayoutChoice>().FirstOrDefault(choice =>
+                    string.Equals(choice.DisplayId, action.DisplayId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(choice.LayoutId, action.LayoutId, StringComparison.OrdinalIgnoreCase))
+                    ?? LayerLayoutBox.Items.OfType<LayoutChoice>().FirstOrDefault();
+                RefreshLayerParts();
+                var target = action.Kind switch
+                {
+                    MacroActionKind.LayoutLayer => LayerElementBox,
+                    MacroActionKind.LayoutGroup => LayerGroupBox,
+                    _ => LayerStateBox
+                };
+                target.SelectedItem = target.Items.OfType<EffectElementChoice>()
+                    .FirstOrDefault(choice => string.Equals(choice.Id, action.Path, StringComparison.OrdinalIgnoreCase))
+                    ?? target.Items.OfType<EffectElementChoice>().FirstOrDefault();
+                LayerVisibleBox.IsChecked = action.Home;
             }
             if (action.Kind == MacroActionKind.ClockControl)
             {

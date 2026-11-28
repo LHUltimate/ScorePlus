@@ -22,8 +22,11 @@ public enum DataFeedKind
     Weather
 }
 
-/// <summary>The game values a feed can write. Custom values cover weather, possession text and
-/// any other source an operator wants to put on a board.</summary>
+/// <summary>
+/// The game values a feed can write. Beyond the scoreboard basics a source can fill team identity,
+/// the player on the graphic, one named player's stat, or any custom value — so a league feed can
+/// carry jersey numbers and per-player yardage, not just the score.
+/// </summary>
 public enum DataFeedTarget
 {
     HomeScore,
@@ -35,7 +38,21 @@ public enum DataFeedTarget
     AwayTimeouts,
     HomeFouls,
     AwayFouls,
-    CustomValue
+    CustomValue,
+    // New targets are appended: a saved feed stores the number, so inserting one above would
+    // silently turn an old "visitors fouls" mapping into something else.
+    HomeTeamName,
+    AwayTeamName,
+    HomeAbbreviation,
+    AwayAbbreviation,
+    HomePlayerName,
+    AwayPlayerName,
+    HomePlayerNumber,
+    AwayPlayerNumber,
+    HomePlayerPosition,
+    AwayPlayerPosition,
+    HomePlayerStat,
+    AwayPlayerStat
 }
 
 /// <summary>One source value to one game value. Key is a JSON path, CSV header, XML leaf name or
@@ -44,13 +61,26 @@ public sealed class DataFeedMapping
 {
     public string Key { get; set; } = "";
     public DataFeedTarget Target { get; set; } = DataFeedTarget.CustomValue;
+    /// <summary>A custom value name, or the stat name for a player-stat mapping.</summary>
     public string CustomName { get; set; } = "";
+    /// <summary>
+    /// Which roster player a player mapping writes. Empty means the player currently on the graphic
+    /// for that side, which is what most feeds want: a live box score follows the selected player.
+    /// </summary>
+    public string PlayerId { get; set; } = "";
     public double Scale { get; set; } = 1;
     public double Offset { get; set; }
 
-    public string Label => Target == DataFeedTarget.CustomValue && !string.IsNullOrWhiteSpace(CustomName)
-        ? $"{Key} → {CustomName}"
-        : $"{Key} → {DataFeedLabels.Target(Target)}";
+    public string Label => Target switch
+    {
+        DataFeedTarget.CustomValue when !string.IsNullOrWhiteSpace(CustomName) => $"{Key} → {CustomName}",
+        DataFeedTarget.HomePlayerStat or DataFeedTarget.AwayPlayerStat when !string.IsNullOrWhiteSpace(CustomName)
+            => $"{Key} → {(Target == DataFeedTarget.HomePlayerStat ? "Home" : "Away")} player {CustomName}",
+        _ => $"{Key} → {DataFeedLabels.Target(Target)}"
+    };
+
+    /// <summary>True for the targets that name a player stat rather than a whole-game value.</summary>
+    public bool IsPlayerStat => Target is DataFeedTarget.HomePlayerStat or DataFeedTarget.AwayPlayerStat;
 }
 
 /// <summary>A value read from a source, already flattened to a key and printable text.</summary>
@@ -95,7 +125,7 @@ public sealed class DataFeed
         Mappings = Mappings.Select(mapping => new DataFeedMapping
         {
             Key = mapping.Key, Target = mapping.Target, CustomName = mapping.CustomName,
-            Scale = mapping.Scale, Offset = mapping.Offset
+            PlayerId = mapping.PlayerId, Scale = mapping.Scale, Offset = mapping.Offset
         }).ToList()
     };
 }
@@ -124,12 +154,31 @@ public static class DataFeedLabels
         DataFeedTarget.AwayTimeouts => "Visitors timeouts",
         DataFeedTarget.HomeFouls => "Home fouls",
         DataFeedTarget.AwayFouls => "Visitors fouls",
+        DataFeedTarget.HomeTeamName => "Home team name",
+        DataFeedTarget.AwayTeamName => "Visitors team name",
+        DataFeedTarget.HomeAbbreviation => "Home abbreviation",
+        DataFeedTarget.AwayAbbreviation => "Visitors abbreviation",
+        DataFeedTarget.HomePlayerName => "Home player name",
+        DataFeedTarget.AwayPlayerName => "Visitors player name",
+        DataFeedTarget.HomePlayerNumber => "Home player number",
+        DataFeedTarget.AwayPlayerNumber => "Visitors player number",
+        DataFeedTarget.HomePlayerPosition => "Home player position",
+        DataFeedTarget.AwayPlayerPosition => "Visitors player position",
+        DataFeedTarget.HomePlayerStat => "Home player stat",
+        DataFeedTarget.AwayPlayerStat => "Visitors player stat",
         DataFeedTarget.CustomValue => "Custom value",
         _ => target.ToString()
     };
 
     public static IReadOnlyList<DataFeedKind> Kinds => Enum.GetValues<DataFeedKind>();
     public static IReadOnlyList<DataFeedTarget> Targets => Enum.GetValues<DataFeedTarget>();
+
+    /// <summary>True when the target writes the player on the graphic, or a named player.</summary>
+    public static bool TouchesPlayer(DataFeedTarget target) => target is
+        DataFeedTarget.HomePlayerName or DataFeedTarget.AwayPlayerName or
+        DataFeedTarget.HomePlayerNumber or DataFeedTarget.AwayPlayerNumber or
+        DataFeedTarget.HomePlayerPosition or DataFeedTarget.AwayPlayerPosition or
+        DataFeedTarget.HomePlayerStat or DataFeedTarget.AwayPlayerStat;
 }
 
 /// <summary>Reads a manual block, CSV, JSON or XML into flat key/value rows. JSON paths use dots
@@ -392,6 +441,42 @@ public static class DataFeedApplier
                 case DataFeedTarget.AwayFouls:
                     if (TryInt(number, out var awayFouls)) { SetFouls(engine, home: false, awayFouls); applied++; }
                     break;
+                case DataFeedTarget.HomeTeamName:
+                    if (raw.Length > 0) { SetTeamName(engine, home: true, raw); applied++; }
+                    break;
+                case DataFeedTarget.AwayTeamName:
+                    if (raw.Length > 0) { SetTeamName(engine, home: false, raw); applied++; }
+                    break;
+                case DataFeedTarget.HomeAbbreviation:
+                    if (raw.Length > 0) { SetTeamAbbreviation(engine, home: true, raw); applied++; }
+                    break;
+                case DataFeedTarget.AwayAbbreviation:
+                    if (raw.Length > 0) { SetTeamAbbreviation(engine, home: false, raw); applied++; }
+                    break;
+                case DataFeedTarget.HomePlayerName:
+                    if (SetPlayerField(engine, home: true, mapping, raw, PlayerField.Name)) applied++;
+                    break;
+                case DataFeedTarget.AwayPlayerName:
+                    if (SetPlayerField(engine, home: false, mapping, raw, PlayerField.Name)) applied++;
+                    break;
+                case DataFeedTarget.HomePlayerNumber:
+                    if (TryInt(number, out var homeNumber) && SetPlayerField(engine, home: true, mapping, homeNumber, PlayerField.Number)) applied++;
+                    break;
+                case DataFeedTarget.AwayPlayerNumber:
+                    if (TryInt(number, out var awayNumber) && SetPlayerField(engine, home: false, mapping, awayNumber, PlayerField.Number)) applied++;
+                    break;
+                case DataFeedTarget.HomePlayerPosition:
+                    if (SetPlayerField(engine, home: true, mapping, raw, PlayerField.Position)) applied++;
+                    break;
+                case DataFeedTarget.AwayPlayerPosition:
+                    if (SetPlayerField(engine, home: false, mapping, raw, PlayerField.Position)) applied++;
+                    break;
+                case DataFeedTarget.HomePlayerStat:
+                    if (TryInt(number, out var homeStat) && SetPlayerField(engine, home: true, mapping, homeStat, PlayerField.Stat)) applied++;
+                    break;
+                case DataFeedTarget.AwayPlayerStat:
+                    if (TryInt(number, out var awayStat) && SetPlayerField(engine, home: false, mapping, awayStat, PlayerField.Stat)) applied++;
+                    break;
                 case DataFeedTarget.CustomValue:
                     var name = string.IsNullOrWhiteSpace(mapping.CustomName) ? mapping.Key : mapping.CustomName.Trim();
                     if (name.Length == 0) break;
@@ -411,6 +496,82 @@ public static class DataFeedApplier
             }
         }
         return applied;
+    }
+
+    /// <summary>Writes one team's name, keeping its abbreviation, colours and records.</summary>
+    static void SetTeamName(GameEngine engine, bool home, string name)
+    {
+        var state = engine.State;
+        engine.SetTeamIdentity(home, name.Trim(),
+            (home ? state.HomeAbbreviation : state.AwayAbbreviation).Trim(),
+            home ? state.HomeLogoPath : state.AwayLogoPath,
+            home ? state.HomePrimaryColor : state.AwayPrimaryColor,
+            home ? state.HomeSecondaryColor : state.AwaySecondaryColor,
+            home ? state.HomeMascot : state.AwayMascot,
+            home ? state.HomeRecordDisplay : state.AwayRecordDisplay,
+            home ? state.HomeRanking : state.AwayRanking,
+            home ? state.HomeDivisionRecord : state.AwayDivisionRecord);
+    }
+
+    /// <summary>Writes one team's abbreviation, keeping everything else about the team.</summary>
+    static void SetTeamAbbreviation(GameEngine engine, bool home, string abbreviation)
+    {
+        var state = engine.State;
+        engine.SetTeamIdentity(home,
+            (home ? state.HomeTeam : state.AwayTeam).Trim(), abbreviation.Trim(),
+            home ? state.HomeLogoPath : state.AwayLogoPath,
+            home ? state.HomePrimaryColor : state.AwayPrimaryColor,
+            home ? state.HomeSecondaryColor : state.AwaySecondaryColor,
+            home ? state.HomeMascot : state.AwayMascot,
+            home ? state.HomeRecordDisplay : state.AwayRecordDisplay,
+            home ? state.HomeRanking : state.AwayRanking,
+            home ? state.HomeDivisionRecord : state.AwayDivisionRecord);
+    }
+
+    enum PlayerField { Name, Number, Position, Stat }
+
+    /// <summary>
+    /// Writes a field or a stat on a roster player and re-resolves the player on the graphic. The
+    /// mapping may name a player; when it does not, the player currently selected for that side is
+    /// the one a live feed follows.
+    /// </summary>
+    static bool SetPlayerField(GameEngine engine, bool home, DataFeedMapping mapping, object value, PlayerField field)
+    {
+        var roster = RosterStore.Book.Find(home ? engine.State.HomeRosterId : engine.State.AwayRosterId);
+        if (roster is null) return false;
+        var selected = home ? engine.State.HomePlayer : engine.State.AwayPlayer;
+        var player = !string.IsNullOrWhiteSpace(mapping.PlayerId)
+            ? roster.Find(mapping.PlayerId)
+            : roster.Find(selected?.PlayerId);
+        if (player is null) return false;
+        switch (field)
+        {
+            case PlayerField.Name:
+                var name = Convert.ToString(value)?.Trim() ?? "";
+                if (name.Length == 0 || string.Equals(name, player.Name, StringComparison.Ordinal)) return false;
+                player.Name = name;
+                break;
+            case PlayerField.Number:
+                var number = Math.Clamp(Convert.ToInt32(value), 0, 999);
+                if (number == player.Number) return false;
+                player.Number = number;
+                break;
+            case PlayerField.Position:
+                var position = Convert.ToString(value)?.Trim() ?? "";
+                if (string.Equals(position, player.Position, StringComparison.Ordinal)) return false;
+                player.Position = position;
+                break;
+            case PlayerField.Stat:
+                var statName = (mapping.CustomName ?? "").Trim();
+                if (statName.Length == 0) return false;
+                player.SetStat(statName, Math.Clamp(Convert.ToInt32(value), -99999, 99999));
+                break;
+        }
+        RosterStore.Save();
+        engine.RecordEvent("Data", $"{(home ? "Home" : "Visitors")} · {player.Record} · "
+            + (field == PlayerField.Stat ? $"{mapping.CustomName} = {value}" : $"{field} = {value}"));
+        engine.ReloadSelectedPlayer(home, publish: engine.PlayerStatsLive);
+        return true;
     }
 
     static void SetFouls(GameEngine engine, bool home, int value)
@@ -488,6 +649,7 @@ public sealed class DataFeedStore
             {
                 mapping.Key = (mapping.Key ?? "").Trim();
                 mapping.CustomName = (mapping.CustomName ?? "").Trim();
+                mapping.PlayerId = (mapping.PlayerId ?? "").Trim();
                 mapping.Scale = double.IsFinite(mapping.Scale) ? mapping.Scale : 1;
                 mapping.Offset = double.IsFinite(mapping.Offset) ? mapping.Offset : 0;
             }

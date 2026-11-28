@@ -503,6 +503,30 @@
             <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
                        Text="These are the effects WPF actually draws: blur and glow. A cue can set one layer or clear it again."/>
           </StackPanel>
+          <StackPanel x:Name="LayoutTargetsPanel">
+            <TextBlock Text="LAYOUT" Style="{StaticResource MacroLabel}"/>
+            <ComboBox x:Name="LayerLayoutBox" Style="{StaticResource MacroCombo}" SelectionChanged="LayerLayout_Changed"
+                      ToolTip="The layout whose layer, group or state this step changes"/>
+            <StackPanel x:Name="LayerElementRow">
+              <TextBlock Text="LAYER" Style="{StaticResource MacroLabel}"/>
+              <ComboBox x:Name="LayerElementBox" Style="{StaticResource MacroCombo}"
+                        ToolTip="Every element in the chosen layout"/>
+            </StackPanel>
+            <StackPanel x:Name="LayerGroupRow">
+              <TextBlock Text="GROUP (DISPLAY STUDIO)" Style="{StaticResource MacroLabel}"/>
+              <ComboBox x:Name="LayerGroupBox" Style="{StaticResource MacroCombo}"
+                        ToolTip="Every layer group in the chosen layout"/>
+            </StackPanel>
+            <StackPanel x:Name="LayerStateRow">
+              <TextBlock Text="STATE" Style="{StaticResource MacroLabel}"/>
+              <ComboBox x:Name="LayerStateBox" Style="{StaticResource MacroCombo}"
+                        ToolTip="Every saved look for the chosen layout"/>
+            </StackPanel>
+            <CheckBox x:Name="LayerVisibleBox" Content="Visible after this step" IsChecked="True"
+                      Foreground="{DynamicResource MacroMutedBrush}" FontSize="10" Margin="0,6,0,0"/>
+            <TextBlock Style="{StaticResource MacroHint}" Margin="0,3,0,0"
+                       Text="A layer or group step turns artwork on or off; a state step takes a whole saved look and its hand-over."/>
+          </StackPanel>
           <StackPanel x:Name="ClockPanel">
             <TextBlock Text="CLOCK" Style="{StaticResource MacroLabel}"/>
             <ComboBox x:Name="ClockBox" Style="{StaticResource MacroCombo}"/>

@@ -425,14 +425,21 @@ public partial class ContentStudioWindow : Window
         panel.Children.Add(layouts);
         panel.Children.Add(Label("Transition in"));
         var transition = new ComboBox { MinHeight = 30, Margin = new Thickness(0, 0, 0, 5) };
-        transition.ItemsSource = TransitionChoices;
-        transition.SelectedItem = TransitionChoices.FirstOrDefault(choice => choice.Kind == scene.Transition) ?? TransitionChoices[1];
+        var transitions = TransitionOptions();
+        transition.ItemsSource = transitions;
+        transition.SelectedItem = transitions.FirstOrDefault(choice => scene.TransitionClip is { } clip
+                && choice.Clip is { } candidate && string.Equals(candidate.Id, clip.Id, StringComparison.OrdinalIgnoreCase))
+            ?? transitions.FirstOrDefault(choice => choice.Clip is null && choice.Kind == scene.Transition)
+            ?? transitions[1];
         transition.SelectionChanged += (_, _) =>
         {
             if (transition.SelectedItem is TransitionChoice choice)
             {
+                // A saved hand-over from the Transition Builder replaces the preset for this scene.
+                scene.TransitionClip = choice.Clip?.Snapshot();
                 scene.Transition = choice.Kind;
-                scene.TransitionSeconds = scene.Transition == LayoutTransition.Cut ? 0 : Math.Max(0.1, scene.TransitionSeconds);
+                scene.TransitionSeconds = choice.Clip is { } custom ? custom.TotalSeconds
+                    : scene.Transition == LayoutTransition.Cut ? 0 : Math.Max(0.1, scene.TransitionSeconds);
                 SaveStoryboard();
                 RefreshStoryboard();
                 ShowScene(_sceneIndex);
@@ -1142,7 +1149,17 @@ public partial class ContentStudioWindow : Window
         new(LayoutTransition.Move, "Move items")
     ];
 
-    sealed record TransitionChoice(LayoutTransition Kind, string Label) { public override string ToString() => Label; }
+    sealed record TransitionChoice(LayoutTransition Kind, string Label, MotionClip? Clip = null) { public override string ToString() => Label; }
+
+    /// <summary>Built-in hand-overs plus every transition saved in the builder.</summary>
+    IReadOnlyList<TransitionChoice> TransitionOptions()
+    {
+        var options = new List<TransitionChoice>(TransitionChoices);
+        options.AddRange(_catalog.Transitions
+            .Where(clip => clip is not null && !clip.IsEmpty)
+            .Select(clip => new TransitionChoice(LayoutTransition.Fade, $"Custom · {clip.Name}", clip)));
+        return options;
+    }
     sealed record LayoutChoice(string Display, string Id, string Name) { public override string ToString() => $"{Display} · {Name}"; }
 
     static string TransitionName(LayoutTransition transition) =>

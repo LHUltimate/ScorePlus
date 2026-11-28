@@ -117,7 +117,7 @@
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="320"/>
       <RowDefinition Height="*"/>
-      <RowDefinition Height="126"/>
+      <RowDefinition Height="176"/>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
@@ -259,6 +259,23 @@
           <DockPanel Margin="0,2,0,0">
             <TextBlock Text="LAYERS" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" VerticalAlignment="Center"/>
             <WrapPanel x:Name="LayerPanel"/>
+          </DockPanel>
+          <!-- Display Studio groups are layers here: one chip turns a whole stat panel on. -->
+          <DockPanel Margin="0,2,0,0">
+            <TextBlock Text="GROUPS" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" VerticalAlignment="Center"/>
+            <WrapPanel x:Name="GroupPanel"/>
+          </DockPanel>
+          <!-- Saved layout states: a whole look, taken with its own hand-over. -->
+          <DockPanel Margin="0,2,0,0">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
+              <TextBox x:Name="StateNameBox" Width="120" MinHeight="24" Margin="0,0,4,0"
+                       ToolTip="Name for the look saved from this layout"/>
+              <Button Content="+ Save state" MinHeight="24" Padding="8,2" FontSize="9"
+                      Click="SaveState_Click"
+                      ToolTip="Capture this layout's current layers and positions as a state"/>
+            </StackPanel>
+            <TextBlock Text="STATES" Style="{StaticResource SectionTitle}" Margin="0,0,10,0" VerticalAlignment="Center"/>
+            <WrapPanel x:Name="StatePanel"/>
           </DockPanel>
         </StackPanel>
       </DockPanel>

@@ -58,7 +58,13 @@ public enum MacroActionKind
     /// <summary>Publish one storyboard scene, using the scene's transition and layout.</summary>
     StoryboardScene,
     /// <summary>Set or clear a real WPF layer effect on one element of a layout.</summary>
-    LayerEffect
+    LayerEffect,
+    /// <summary>Show or hide one layer (element) of a layout. Home is true for visible.</summary>
+    LayoutLayer,
+    /// <summary>Show or hide every layer of a Display Studio group. Home is true for visible.</summary>
+    LayoutGroup,
+    /// <summary>Take a saved layout state, with that state's own hand-over.</summary>
+    LayoutState
 }
 
 /// <summary>A single console, media or roster change saved inside a macro.</summary>
@@ -197,6 +203,9 @@ public sealed class MacroAction
         MacroActionKind.StoryboardScene => $"Storyboard scene · {(string.IsNullOrWhiteSpace(Label) ? Path : Label)}",
         MacroActionKind.LayerEffect => $"Layer effect · {(string.IsNullOrWhiteSpace(Label) ? Path : Label)} · " +
             $"{(Value == 1 ? "blur" : Value == 2 ? "glow" : "none")}{ (Value == 0 ? "" : $" {(Math.Clamp(Amount, 0, 100))}%") }",
+        MacroActionKind.LayoutLayer => $"Layer · {(string.IsNullOrWhiteSpace(Label) ? Path : Label)} {(Home ? "on" : "off")}",
+        MacroActionKind.LayoutGroup => $"Group · {(string.IsNullOrWhiteSpace(Label) ? Path : Label)} {(Home ? "on" : "off")}",
+        MacroActionKind.LayoutState => $"State · {(string.IsNullOrWhiteSpace(Label) ? Path : Label)}",
         _ => Kind.ToString()
     };
 

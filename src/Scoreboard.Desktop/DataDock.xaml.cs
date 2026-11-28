@@ -163,7 +163,7 @@ public partial class DataDock : UserControl
         Grid.SetColumnSpan(target, 2);
         grid.Children.Add(target);
 
-        var custom = Field(mapping.CustomName, "Custom value name (text or number)");
+        var custom = Field(mapping.CustomName, "Custom value name, or the player stat this mapping writes");
         custom.TextChanged += (_, _) => { mapping.CustomName = custom.Text; SaveConfig(); };
         Grid.SetRow(custom, 1);
         Grid.SetColumn(custom, 0);
@@ -186,16 +186,90 @@ public partial class DataDock : UserControl
         Grid.SetColumn(remove, 3);
         grid.Children.Add(remove);
 
+        // A player mapping can name any player on that side's roster. Left on "Player on the
+        // graphic" it follows whoever the operator has selected, which is what a live box score does.
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var playerPicker = new ComboBox { MinHeight = 28, Margin = new Thickness(0, 2, 4, 0), MinWidth = 180 };
+        Grid.SetRow(playerPicker, 2);
+        Grid.SetColumnSpan(playerPicker, 3);
+        grid.Children.Add(playerPicker);
+        void FillPlayers(DataFeedTarget chosen)
+        {
+            var home = chosen is DataFeedTarget.HomePlayerName or DataFeedTarget.HomePlayerNumber
+                or DataFeedTarget.HomePlayerPosition or DataFeedTarget.HomePlayerStat;
+            var roster = RosterStore.Book.Find(home ? _engine.State.HomeRosterId : _engine.State.AwayRosterId);
+            var options = new List<PlayerChoice> { new("", "Player on the graphic") };
+            if (roster is not null)
+                options.AddRange(roster.Players.Select(player => new PlayerChoice(player.Id, $"#{player.Number} {player.Name}")));
+            playerPicker.ItemsSource = options;
+            playerPicker.SelectedItem = options.FirstOrDefault(option =>
+                string.Equals(option.Id, mapping.PlayerId, StringComparison.OrdinalIgnoreCase)) ?? options[0];
+            playerPicker.Visibility = DataFeedLabels.TouchesPlayer(chosen) ? Visibility.Visible : Visibility.Collapsed;
+        }
+        playerPicker.SelectionChanged += (_, _) =>
+        {
+            if (playerPicker.SelectedItem is PlayerChoice choice)
+            {
+                mapping.PlayerId = choice.Id;
+                SaveConfig();
+            }
+        };
+
         target.SelectionChanged += (_, _) =>
         {
             if (target.SelectedItem is not TargetChoice choice) return;
             mapping.Target = choice.Target;
-            custom.Visibility = choice.Target == DataFeedTarget.CustomValue ? Visibility.Visible : Visibility.Collapsed;
+            custom.Visibility = choice.Target == DataFeedTarget.CustomValue || mapping.IsPlayerStat
+                ? Visibility.Visible : Visibility.Collapsed;
+            custom.ToolTip = mapping.IsPlayerStat ? "Stat name to write on that player" : "Custom value name (text or number)";
+            FillPlayers(choice.Target);
             SaveConfig();
         };
-        custom.Visibility = mapping.Target == DataFeedTarget.CustomValue ? Visibility.Visible : Visibility.Collapsed;
+        custom.Visibility = mapping.Target == DataFeedTarget.CustomValue || mapping.IsPlayerStat
+            ? Visibility.Visible : Visibility.Collapsed;
+        custom.ToolTip = mapping.IsPlayerStat ? "Stat name to write on that player" : "Custom value name (text or number)";
+        FillPlayers(mapping.Target);
         row.Child = grid;
         return row;
+    }
+
+    sealed record PlayerChoice(string Id, string Label) { public override string ToString() => Label; }
+
+    static string SafeExportName(string? gameName)
+    {
+        var text = (gameName ?? "").Trim();
+        foreach (var bad in Path.GetInvalidFileNameChars()) text = text.Replace(bad, '-');
+        text = text.Replace(' ', '-').Trim('-');
+        return "scoreplus" + (text.Length == 0 ? "" : "-" + text);
+    }
+
+    void ExportCsv_Click(object sender, RoutedEventArgs e) => Export(csv: true);
+
+    void ExportJson_Click(object sender, RoutedEventArgs e) => Export(csv: false);
+
+    /// <summary>
+    /// Writes the whole game out for a spreadsheet or another system: every value the console holds,
+    /// both rosters with their stats and the event timeline, not just the custom values on screen.
+    /// </summary>
+    void Export(bool csv)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Filter = csv ? "CSV files (*.csv)|*.csv|All files (*.*)|*.*" : "JSON files (*.json)|*.json|All files (*.*)|*.*",
+            FileName = SafeExportName(_engine.State.GameName) + $"-{DateTime.Now:yyyyMMdd-HHmm}" + (csv ? ".csv" : ".json"),
+            Title = csv ? "Export game data as CSV" : "Export game data as JSON"
+        };
+        if (dialog.ShowDialog() != true) return;
+        try
+        {
+            var rows = GameDataExport.Rows(_engine.State);
+            File.WriteAllText(dialog.FileName, csv ? GameDataExport.Csv(_engine.State) : GameDataExport.Json(_engine.State));
+            StatusText.Text = $"Exported {rows.Count} values · {Path.GetFileName(dialog.FileName)}";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Export failed · {ex.Message}";
+        }
     }
 
     static TextBox Field(string text, string tooltip) => new()

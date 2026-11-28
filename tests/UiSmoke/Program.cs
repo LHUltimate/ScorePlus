@@ -410,6 +410,111 @@ internal static class Program
                 throw new Exception("FAIL: the animation maker does not offer score-specific takes");
             animationMaker.Close();
             Console.WriteLine("PASS: the transition timeline draws every item and adds temporary pieces; the animation maker offers score takes");
+
+            // Stage 6.5's timeline workspace: a shared ruler with frames, zoom, direct keying on the
+            // stage and a graph editor one toggle away.
+            {
+                var remadeClip = MotionClip.TransitionPreset("Wipe left");
+                remadeClip.Name = "Smoke remade clip";
+                remadeClip.TimelineLayoutId = motionCatalog.Layout.Id;
+                var remadeMaker = new MotionMakerWindow(MotionKind.Transition, motionCatalog, motionEngine, "Dark", remadeClip);
+                ShowForSmoke(remadeMaker);
+                remadeMaker.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(160));
+                if (!FindAll<CheckBox>(remadeMaker).Any(box => (box.Content as string) == "Frames")
+                    || !FindAll<CheckBox>(remadeMaker).Any(box => (box.Content as string) == "Graph editor"))
+                    throw new Exception("FAIL: the timeline has no frames or graph toggle");
+                var graphToggle = FindAll<CheckBox>(remadeMaker).First(box => (box.Content as string) == "Graph editor");
+                graphToggle.IsChecked = true;
+                remadeMaker.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(80));
+                if (!FindAll<System.Windows.Shapes.Polyline>(remadeMaker).Any(line => line.Points.Count > 50))
+                    throw new Exception("FAIL: the graph editor drew no interpolation curve");
+                FindAll<Button>(remadeMaker).First(button => (button.Content as string) == "+")
+                    .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                remadeMaker.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(60));
+                if (!FindAll<Canvas>(remadeMaker).Any(canvas => canvas.Width > 1100))
+                    throw new Exception("FAIL: zooming the timeline did not widen it");
+                // Dragging on the stage writes a position key at the playhead.
+                var remadeClipField = typeof(MotionMakerWindow).GetField("_clip", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var remadeWrite = typeof(MotionMakerWindow).GetMethod("WritePositionKey", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?? throw new Exception("FAIL: the stage cannot write a position key");
+                remadeWrite.Invoke(remadeMaker, [120.0, -40.0]);
+                var remadeLive = (MotionClip)remadeClipField.GetValue(remadeMaker)!;
+                var remadeHasPosition = remadeLive.Phases.Any(phase => phase.Tracks.Any(track =>
+                    track.Target == MotionTarget.X && track.Keys.Any(key => Math.Abs(key.Value - 120) < 0.01)));
+                if (!remadeHasPosition)
+                    throw new Exception("FAIL: a stage drag did not key the item's position");
+                // Every key of the item, motion and colour, is listed in one panel.
+                var keysPanel = (ListBox?)typeof(MotionMakerWindow)
+                    .GetField("_allKeys", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(remadeMaker)
+                    ?? throw new Exception("FAIL: the timeline has no single keys panel");
+                remadeLive.Phases[0].Colors.Add(new ColorTrack(MotionColorRole.Text,(0,"#FF101010"),(0.3,"#FFFF0000")));
+                typeof(MotionMakerWindow).GetMethod("RefreshAll", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.Invoke(remadeMaker, null);
+                var listedKeys = keysPanel.Items.OfType<object>().Select(row => row.ToString() ?? "").ToList();
+                if (!listedKeys.Any(row => row.Contains("= 120")) || !listedKeys.Any(row => row.Contains("#FF101010")))
+                    throw new Exception($"FAIL: one keys panel did not hold both motion and colour keys ({string.Join(" | ", listedKeys)})");
+                var listedColour = keysPanel.Items.OfType<object>().First(row => (row.ToString() ?? "").Contains("#FF101010"));
+                keysPanel.SelectedItem = listedColour;
+                Pump(TimeSpan.FromMilliseconds(60));
+                var loadedColour = (TextBox?)typeof(MotionMakerWindow)
+                    .GetField("_colorValue", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(remadeMaker);
+                if (loadedColour is null || !loadedColour.Text.Contains("101010"))
+                    throw new Exception($"FAIL: picking a colour key in the one panel did not load it ({loadedColour?.Text})");
+                // A sideways slide of a row stores that item's own start time.
+                var timelineRows = (System.Collections.IEnumerable?)typeof(MotionMakerWindow)
+                    .GetField("_timelineItems", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(remadeMaker);
+                var slidId = timelineRows?.Cast<object>()
+                    .Select(row => row.GetType().GetProperty("Id")?.GetValue(row) as string)
+                    .FirstOrDefault(id => !string.IsNullOrEmpty(id))
+                    // This clip's layout may be empty; the slide itself only needs an item id.
+                    ?? "smoke-slide-item";
+                typeof(MotionMakerWindow).GetField("_timelineDragId", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, slidId);
+                typeof(MotionMakerWindow).GetField("_timelineDragStartX", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, 200.0);
+                typeof(MotionMakerWindow).GetField("_timelineSlideStart", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, 0.0);
+                typeof(MotionMakerWindow).GetMethod("SlideItemTo", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(remadeMaker, [280.0]);
+                if (!remadeLive.ItemStarts.TryGetValue(slidId, out var slidStart) || slidStart <= 0.01)
+                    throw new Exception("FAIL: dragging a timeline row sideways did not start that item later");
+                if (Math.Abs(remadeLive.StartFor(slidId,0)-slidStart)>0.001)
+                    throw new Exception("FAIL: the renderer would not use the item's own start time");
+                // Starting an item later than the take is long adds the time it needs, and the end
+                // grip trims a leg, so the clip no longer stays at one fixed length.
+                var slidePhase = remadeLive.Phases[0];
+                var beforeSlide = slidePhase.Seconds;
+                typeof(MotionMakerWindow).GetField("_timelineDragId", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, slidId);
+                typeof(MotionMakerWindow).GetField("_timelineDragStartX", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, 0.0);
+                typeof(MotionMakerWindow).GetField("_timelineSlideStart", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, 0.0);
+                typeof(MotionMakerWindow).GetMethod("SlideItemTo", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(remadeMaker, [900.0]);
+                if (slidePhase.Seconds <= beforeSlide)
+                    throw new Exception("FAIL: starting an item later did not add time to the take");
+                var afterSlide = slidePhase.Seconds;
+                typeof(MotionMakerWindow).GetField("_endDragPhase", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, slidePhase);
+                typeof(MotionMakerWindow).GetField("_endDragStartX", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, 200.0);
+                typeof(MotionMakerWindow).GetField("_endDragStartSeconds", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, afterSlide);
+                typeof(MotionMakerWindow).GetField("_endDragSecondsPerPixel", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(remadeMaker, 0.01);
+                typeof(MotionMakerWindow).GetMethod("ResizePhaseTo", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(remadeMaker, [100.0]);
+                if (slidePhase.Seconds >= afterSlide || slidePhase.Seconds < 0.05)
+                    throw new Exception($"FAIL: the end grip did not remove time ({afterSlide:0.##}s to {slidePhase.Seconds:0.##}s)");
+                Console.WriteLine("PASS: a row start adds take time and the end grip trims a leg");
+                Console.WriteLine("PASS: one keys panel lists motion and colour keys, and a row slides to start later");
+                remadeMaker.Close();
+                Console.WriteLine("PASS: the remade timeline has frames, zoom, a graph editor, one keys panel and direct stage keying");
+            }
             GameEngine.NewSeriesLiveEnabled = true;
             smokeEngine.NewSeries();
             if (!smokeEngine.TakePublishRequest()) throw new Exception("FAIL: New series did not ask to publish");
@@ -7860,6 +7965,21 @@ internal static class Program
                 || controlRoom.FindName("MultiviewCard") is not Button roomMultiviewCard
                 || controlRoom.FindName("VenueCard") is not Button venueCard)
                 throw new Exception("FAIL: the Show Control Map is missing one of its twelve surface cards");
+            // Every card is one size, so none of them clip into the next.
+            var hubCards = FindAll<Button>(controlRoom)
+                .Where(button => button.Name.EndsWith("Card", StringComparison.Ordinal)).ToList();
+            if (hubCards.Count != 14)
+                throw new Exception($"FAIL: the Control Room lost cards ({hubCards.Count} found)");
+            var cardWidth = hubCards[0].ActualWidth;
+            var cardHeight = hubCards[0].ActualHeight;
+            if (cardWidth < 120 || cardHeight < 120)
+                throw new Exception($"FAIL: a Control Room card measured {cardWidth:0}x{cardHeight:0}");
+            var uneven = hubCards.FirstOrDefault(button =>
+                Math.Abs(button.ActualWidth - cardWidth) > 1 || Math.Abs(button.ActualHeight - cardHeight) > 1);
+            if (uneven is not null)
+                throw new Exception($"FAIL: the Control Room cards are not equal ({uneven.Name} is " +
+                    $"{uneven.ActualWidth:0}x{uneven.ActualHeight:0}, expected {cardWidth:0}x{cardHeight:0})");
+            Console.WriteLine("PASS: the Control Room cards share one size and do not clip into each other");
             var displayStatus = (TextBlock)controlRoom.FindName("DisplayStatus")!;
             var contentStatus = (TextBlock)controlRoom.FindName("ContentStatus")!;
             var showStatus = (TextBlock)controlRoom.FindName("ShowStatus")!;
@@ -7888,6 +8008,127 @@ internal static class Program
             var reopenedSwitch = Application.Current.Windows.OfType<LiveSwitchWindow>().LastOrDefault()
                 ?? throw new Exception("FAIL: Live Switch could not be reopened without restarting Control Room");
             reopenedSwitch.Close();
+
+            // Groups act as layers in Live Switch, and a saved state takes a whole look with its hand-over.
+            var stateFile = Path.Combine(Path.GetTempPath(), $"sp-switch-states-{Guid.NewGuid():N}.json");
+            var layerFile = Path.Combine(Path.GetTempPath(), $"sp-layer-macro-{Guid.NewGuid():N}.json");
+            try
+            {
+                var stateCatalog = new ScorebugCatalog(stateFile);
+                var stateLayout = stateCatalog.Layout;
+                stateLayout.Elements[0].GroupId = "smoke-group";
+                stateLayout.GroupNames["smoke-group"] = "Stat panel";
+                stateLayout.Elements[0].Visible = false;
+                if (!stateCatalog.SaveLayoutState(stateLayout.Id, "Clock only"))
+                    throw new Exception("FAIL: a layout could not save a state");
+                // Put the layer back, so taking the state has something to change.
+                stateLayout.Elements[0].Visible = true;
+                var stateSwitch = new LiveSwitchWindow(stateCatalog, smokeEngine, "Dark");
+                ShowForSmoke(stateSwitch);
+                stateSwitch.UpdateLayout();
+                Pump(TimeSpan.FromMilliseconds(150));
+                var groupPanel = (WrapPanel)stateSwitch.FindName("GroupPanel")!;
+                var statePanel = (WrapPanel)stateSwitch.FindName("StatePanel")!;
+                if (!groupPanel.Children.OfType<Button>().Any(button => (button.Content as string) == "Stat panel"))
+                    throw new Exception("FAIL: a Display Studio group did not appear as a Live Switch layer");
+                var stateChip = statePanel.Children.OfType<Button>()
+                    .FirstOrDefault(button => (button.Content as string) == "Clock only")
+                    ?? throw new Exception("FAIL: a saved layout state did not appear in Live Switch");
+                stateChip.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Pump(TimeSpan.FromMilliseconds(150));
+                if (stateLayout.Elements[0].Visible)
+                    throw new Exception("FAIL: taking a state did not restore its hidden layer");
+                var groupChip = groupPanel.Children.OfType<Button>()
+                    .FirstOrDefault(button => (button.Content as string) == "Stat panel")
+                    ?? throw new Exception("FAIL: the group layer disappeared after taking a state");
+                groupChip.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Pump(TimeSpan.FromMilliseconds(150));
+                if (!stateLayout.Elements[0].Visible || !stateLayout.Elements[1].Visible)
+                    throw new Exception("FAIL: the group layer did not turn every member on");
+                ((TextBox)stateSwitch.FindName("StateNameBox")!).Text = "Stats too";
+                typeof(LiveSwitchWindow).GetMethod("SaveState_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(stateSwitch, [null!, new RoutedEventArgs()]);
+                if (stateLayout.States.Count != 2)
+                    throw new Exception($"FAIL: saving from Live Switch did not add a state ({stateLayout.States.Count})");
+                stateSwitch.Close();
+                Console.WriteLine("PASS: Live Switch lists groups as layers and saves and takes layout states");
+
+                // A macro can hide a layer or group, then take a state that brings the look back.
+                var layerCatalog = new ScorebugCatalog(layerFile);
+                var layerLayout = layerCatalog.Layout;
+                layerLayout.Elements[0].GroupId = "macro-group";
+                if (!layerCatalog.SaveLayoutState(layerLayout.Id, "Base"))
+                    throw new Exception("FAIL: the macro probe could not save a state");
+                var layerEngine = new GameEngine();
+                layerEngine.NewGame("football");
+                var layerSession = new MediaSession(PreferencesStore.Load());
+                layerEngine.StoreMacros([
+                    new SavedMacro
+                    {
+                        Label = "Hide stat panel",
+                        Actions =
+                        [
+                            new MacroAction { Kind = MacroActionKind.LayoutGroup, LayoutId = layerLayout.Id, Path = "macro-group", Home = false },
+                            new MacroAction { Kind = MacroActionKind.LayoutLayer, LayoutId = layerLayout.Id, Path = layerLayout.Elements[1].Id, Home = false }
+                        ]
+                    },
+                    new SavedMacro
+                    {
+                        Label = "Base look",
+                        Actions = [new MacroAction { Kind = MacroActionKind.LayoutState, LayoutId = layerLayout.Id, Path = layerLayout.States[0].Id }]
+                    }
+                ]);
+                var layerRunner = new MacroRunner(layerEngine, layerSession, null, layerCatalog);
+                RunMacro(layerRunner, layerEngine.State.Macros[0]);
+                if (layerLayout.Elements[0].Visible || layerLayout.Elements[1].Visible)
+                    throw new Exception("FAIL: a macro could not switch a layer and a group off");
+                RunMacro(layerRunner, layerEngine.State.Macros[1]);
+                if (!layerLayout.Elements[0].Visible || !layerLayout.Elements[1].Visible)
+                    throw new Exception("FAIL: a macro could not take a state back on");
+                Console.WriteLine("PASS: a macro can enable and disable layers, layer groups and layout states");
+            }
+            finally
+            {
+                try { if (File.Exists(stateFile)) File.Delete(stateFile); } catch { }
+                try { if (File.Exists(layerFile)) File.Delete(layerFile); } catch { }
+            }
+
+            // A hand-over saved in the Transition Builder appears on the switcher and takes with it.
+            var switchClip = MotionClip.TransitionPreset("Wipe left");
+            switchClip.Name = "Smoke custom wipe";
+            smokeCatalog.SaveTransition(switchClip);
+            var customSwitch = new LiveSwitchWindow(smokeCatalog, smokeEngine, "Dark");
+            ShowForSmoke(customSwitch);
+            customSwitch.UpdateLayout();
+            Pump(TimeSpan.FromMilliseconds(140));
+            var customTransitionBox = (ComboBox)customSwitch.FindName("TransitionBox")!;
+            var customChoice = customTransitionBox.Items.OfType<object>().FirstOrDefault(item =>
+                (item.ToString() ?? "").StartsWith("Custom · Smoke custom wipe", StringComparison.Ordinal));
+            if (customChoice is null)
+                throw new Exception("FAIL: Live Switch does not list a transition saved in the builder");
+            customTransitionBox.SelectedItem = customChoice;
+            customSwitch.UpdateLayout();
+            FindAll<Button>(customSwitch).First(button => (button.Content as string) == "TAKE")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(120));
+            if (!smokeCatalog.ActiveDisplay.Layouts.Any(layout => layout.TransitionClip?.Name == "Smoke custom wipe"))
+                throw new Exception("FAIL: taking with a custom transition did not apply it to the published layout");
+            customSwitch.Close();
+
+            // The makers live in the Control Room now, not on the main window's production header.
+            if (controlRoom.FindName("AnimationMakerCard") is not Button animationCard
+                || controlRoom.FindName("TransitionMakerCard") is not Button transitionCard)
+                throw new Exception("FAIL: Control Room has no Animation Maker or Transition Builder card");
+            animationCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(160));
+            if (Application.Current.Windows.OfType<MotionMakerWindow>().LastOrDefault() is null)
+                throw new Exception("FAIL: the Animation Maker card opened no maker");
+            Application.Current.Windows.OfType<MotionMakerWindow>().Last().Close();
+            transitionCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(TimeSpan.FromMilliseconds(160));
+            if (Application.Current.Windows.OfType<MotionMakerWindow>().LastOrDefault() is null)
+                throw new Exception("FAIL: the Transition Builder card opened no builder");
+            Application.Current.Windows.OfType<MotionMakerWindow>().Last().Close();
             if (controlRoom.FindName("RoomTabs") is not null)
                 throw new Exception("FAIL: Control Room still hosts surfaces as tabs");
             controlRoom.Close();
@@ -7916,6 +8157,14 @@ internal static class Program
             if (dataDock.FindName("CloudFeedBox") is not TextBox || dataDock.FindName("CloudEnabledBox") is not CheckBox
                 || dataDock.FindName("TickerNewsBox") is not TextBox || dataDock.FindName("TickerGamesPanel") is not StackPanel)
                 throw new Exception("FAIL: the DATA tab does not own the League Cloud and ticker controls");
+            if (!FindAll<Button>(dataDock).Any(button => (button.Content as string) == "Export CSV…")
+                || !FindAll<Button>(dataDock).Any(button => (button.Content as string) == "Export JSON…"))
+                throw new Exception("FAIL: the DATA tab has no full-game export");
+            if (!FindAll<ComboBox>(dataDock).Any(box => box.Items.OfType<object>().Any(item =>
+                    (item.ToString() ?? "") == DataFeedLabels.Target(DataFeedTarget.HomePlayerStat)))
+                || !FindAll<ComboBox>(dataDock).Any(box => box.Items.OfType<object>().Any(item =>
+                    (item.ToString() ?? "") == DataFeedLabels.Target(DataFeedTarget.CustomValue))))
+                throw new Exception("FAIL: value mapping does not offer player-stat and custom-value targets");
             FindAll<Button>(dataDock).First(button => button.Content as string == "Apply mapped values")
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Pump(TimeSpan.FromMilliseconds(120));

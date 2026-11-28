@@ -698,7 +698,10 @@ public partial class LiveChannelWindow : Window
         var scene = new StoryboardScene
         {
             Name = layout.Name, LayoutId = layout.Id,
-            Transition = layout.Transition, TransitionSeconds = layout.TransitionSeconds
+            Transition = layout.Transition, TransitionSeconds = layout.TransitionSeconds,
+            // A hand-over built for this layout travels with it; taking from Live Channel must not
+            // quietly replace it with the preset.
+            TransitionClip = layout.TransitionClip?.Snapshot()
         };
         if (!_catalog.PublishStoryboardScene(scene)) return;
         _displayId = displayId;

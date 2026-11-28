@@ -583,6 +583,76 @@ public sealed class LayoutHandover
     public bool Arrives { get; set; } = true;
 }
 
+/// <summary>One element's look inside a layout state: whether it is up, and where it sits.</summary>
+public sealed class LayoutStateLayer
+{
+    public string ElementId { get; set; } = "";
+    public bool Visible { get; set; } = true;
+
+    /// <summary>This state's position; null keeps the element where the design put it.</summary>
+    public double? X { get; set; }
+    public double? Y { get; set; }
+}
+
+/// <summary>
+/// A saved look for one layout: which layers are up, where they sit, and the hand-over used when
+/// the state is taken. This is how a play clock can dissolve away while the game clock moves into
+/// its place, and come back later, without touching the designed layout.
+/// </summary>
+public sealed class LayoutState
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "State";
+
+    /// <summary>The hand-over used when this state is taken: a dissolve by default.</summary>
+    public LayoutTransition Transition { get; set; } = LayoutTransition.Fade;
+    public double Seconds { get; set; } = 0.35;
+
+    /// <summary>A transition built in the Transition Builder; replaces the preset while it is set.</summary>
+    public MotionClip? TransitionClip { get; set; }
+
+    public List<LayoutStateLayer> Layers { get; set; } = [];
+
+    public LayoutState Copy() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Transition = Transition,
+        Seconds = Seconds,
+        TransitionClip = TransitionClip?.Snapshot(),
+        Layers = (Layers ?? []).Select(layer => new LayoutStateLayer
+        {
+            ElementId = layer.ElementId, Visible = layer.Visible, X = layer.X, Y = layer.Y
+        }).ToList()
+    };
+
+    public void Normalize(IReadOnlyCollection<string> elementIds)
+    {
+        if (string.IsNullOrWhiteSpace(Id)) Id = Guid.NewGuid().ToString("N");
+        if (string.IsNullOrWhiteSpace(Name)) Name = "State";
+        Name = Name.Trim();
+        if (Name.Length > 60) Name = Name[..60];
+        if (!Enum.IsDefined(Transition)) Transition = LayoutTransition.Fade;
+        Seconds = Math.Clamp(double.IsFinite(Seconds) ? Seconds : 0.35, 0, 5);
+        TransitionClip?.Normalize();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Layers = (Layers ?? [])
+            .Where(layer => layer is not null)
+            .Select(layer => new LayoutStateLayer
+            {
+                ElementId = (layer.ElementId ?? "").Trim(),
+                Visible = layer.Visible,
+                X = layer.X is { } x && double.IsFinite(x) ? x : null,
+                Y = layer.Y is { } y && double.IsFinite(y) ? y : null
+            })
+            .Where(layer => layer.ElementId.Length > 0
+                && elementIds.Contains(layer.ElementId, StringComparer.OrdinalIgnoreCase)
+                && seen.Add(layer.ElementId))
+            .Take(200)
+            .ToList();
+    }
+}
+
 public sealed class ScorebugLayout
 {
     public int Version { get; set; } = 4;
@@ -704,6 +774,38 @@ public sealed class ScorebugLayout
     ];
     public List<ScorebugElement> Elements { get; set; } = [];
 
+    /// <summary>
+    /// Saved looks for this layout. Taking a state applies its layers and publishes with that
+    /// state's hand-over, so one layout can cover "scorebug", "scorebug + stats" and "clock only".
+    /// </summary>
+    public List<LayoutState> States { get; set; } = [];
+
+    /// <summary>Names for element groups, so a group reads as a layer in Live Switch.</summary>
+    public Dictionary<string, string> GroupNames { get; set; } = [];
+
+    /// <summary>The friendly name of a group: a saved name first, else its first member.</summary>
+    public string GroupNameOf(string? groupId)
+    {
+        if (string.IsNullOrWhiteSpace(groupId)) return "";
+        if (GroupNames is { } names && names.TryGetValue(groupId, out var saved) && !string.IsNullOrWhiteSpace(saved))
+            return saved.Trim();
+        var members = Elements.Where(element => string.Equals(element.GroupId, groupId, StringComparison.OrdinalIgnoreCase)).ToList();
+        var first = members.FirstOrDefault()?.Name ?? "Group";
+        return members.Count > 1 ? $"{first} +{members.Count - 1}" : first;
+    }
+
+    /// <summary>Every group in this layout, in element order, with its display name.</summary>
+    public IReadOnlyList<(string Id, string Name)> Groups() => Elements
+        .Where(element => !string.IsNullOrWhiteSpace(element.GroupId))
+        .Select(element => element.GroupId!.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Select(id => (id, GroupNameOf(id)))
+        .ToArray();
+
+    public LayoutState? StateFor(string? id) => id is null ? null : States.FirstOrDefault(state =>
+        string.Equals(state.Id, id, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(state.Name, id, StringComparison.OrdinalIgnoreCase));
+
     public static ScorebugLayout Default() => new()
     {
         Elements =
@@ -731,6 +833,9 @@ public sealed class ScorebugLayout
         var freshIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var element in copy.Elements) freshIds[element.Id] = Guid.NewGuid().ToString("N");
         foreach (var element in copy.Elements) element.Id = freshIds[element.Id];
+        foreach (var state in copy.States ?? [])
+            foreach (var layer in state.Layers ?? [])
+                if (freshIds.TryGetValue(layer.ElementId, out var freshLayerId)) layer.ElementId = freshLayerId;
         // Every clip in the layout was keyed against the old ids. Remap them in the same breath, or
         // per-item keys silently vanish the moment a layout is duplicated or imported.
         copy.RemapMotionReferences(Id, copy.Id, freshIds);
@@ -1366,6 +1471,21 @@ public sealed class ScorebugCatalog
                 layout.Handover ??= [];
                 layout.Handover = layout.Handover.Where(entry => entry is not null).Take(200).ToList();
                 foreach (var entry in layout.Handover) entry.ElementId = (entry.ElementId ?? "").Trim();
+                layout.States ??= [];
+                layout.States = layout.States.Where(state => state is not null).Take(24).ToList();
+                var elementIds = layout.Elements.Select(element => element.Id).ToList();
+                var seenStates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var state in layout.States)
+                {
+                    state.Normalize(elementIds);
+                    if (!seenStates.Add(state.Id)) state.Id = Guid.NewGuid().ToString("N");
+                }
+                layout.GroupNames ??= [];
+                layout.GroupNames = layout.GroupNames
+                    .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+                    .Take(120)
+                    .ToDictionary(pair => pair.Key.Trim(), pair => pair.Value.Trim().Length > 60
+                        ? pair.Value.Trim()[..60] : pair.Value.Trim());
                 foreach (var item in layout.Elements)
                 {
                     item.NestedLayoutId = string.IsNullOrWhiteSpace(item.NestedLayoutId) ? null : item.NestedLayoutId.Trim();
@@ -1904,8 +2024,15 @@ public sealed class ScorebugCatalog
         var index = display.Layouts.FindIndex(layout => string.Equals(layout.Id, scene.LayoutId, StringComparison.OrdinalIgnoreCase));
         if (index < 0) return false;
         var layout = display.Layouts[index];
+        // A scene may carry a hand-over built in the Transition Builder; it replaces the preset for
+        // this take, so a custom wipe survives the storyboard, the Live Switch and a macro alike.
+        var clip = scene.TransitionClip is { Kind: MotionKind.Transition } custom && !custom.IsEmpty
+            ? custom.Snapshot()
+            : null;
+        if (clip is not null) clip.Normalize();
+        layout.TransitionClip = clip;
         layout.Transition = scene.Transition;
-        layout.TransitionSeconds = scene.TransitionSeconds;
+        layout.TransitionSeconds = clip is null ? scene.TransitionSeconds : clip.TotalSeconds;
         display.PublishedIndex = index;
         display.PublishedAtUtc = DateTime.UtcNow;
         Save();
@@ -2155,6 +2282,114 @@ public sealed class ScorebugCatalog
             element.EffectColor = IsColor(color) ? color.Trim() : element.EffectColor;
         Save();
         Changed?.Invoke();
+        return true;
+    }
+
+    // ---------- layout states and layer groups ----------
+
+    /// <summary>Shows or hides one layer of a layout, the same change the Live Switch chips make.</summary>
+    public bool SetElementVisible(string? layoutId, string? elementId, bool visible)
+    {
+        var layout = FindLayout(layoutId);
+        var element = layout?.Elements.FirstOrDefault(item =>
+            string.Equals(item.Id, elementId, StringComparison.OrdinalIgnoreCase));
+        if (element is null) return false;
+        if (element.Visible == visible) return true;
+        element.Visible = visible;
+        Save();
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>Shows or hides every layer of a Display Studio group in one press.</summary>
+    public bool SetGroupVisible(string? layoutId, string? groupId, bool visible)
+    {
+        if (string.IsNullOrWhiteSpace(groupId)) return false;
+        var layout = FindLayout(layoutId);
+        if (layout is null) return false;
+        var members = layout.Elements.Where(element =>
+            string.Equals(element.GroupId, groupId, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (members.Count == 0) return false;
+        foreach (var element in members) element.Visible = visible;
+        Save();
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// Captures the layout as it looks right now — every layer's visibility and position, plus the
+    /// hand-over it would use — as a named state. A state is a look, not a copy of the layout.
+    /// </summary>
+    public bool SaveLayoutState(string? layoutId, string? name)
+    {
+        var layout = FindLayout(layoutId);
+        if (layout is null) return false;
+        if (layout.States.Count >= 24) layout.States.RemoveAt(0);
+        var label = string.IsNullOrWhiteSpace(name) ? $"State {layout.States.Count + 1}" : name.Trim();
+        layout.States.Add(new LayoutState
+        {
+            Name = label,
+            Transition = layout.Transition,
+            Seconds = layout.TransitionSeconds > 0 ? layout.TransitionSeconds : 0.35,
+            TransitionClip = layout.TransitionClip?.Snapshot(),
+            Layers = layout.Elements.Select(element => new LayoutStateLayer
+            {
+                ElementId = element.Id, Visible = element.Visible, X = element.X, Y = element.Y
+            }).ToList()
+        });
+        layout.States[^1].Normalize(layout.Elements.Select(element => element.Id).ToList());
+        Save();
+        Changed?.Invoke();
+        return true;
+    }
+
+    public bool RemoveLayoutState(string? layoutId, string? stateId)
+    {
+        var layout = FindLayout(layoutId);
+        if (layout is null) return false;
+        return layout.States.RemoveAll(state =>
+            string.Equals(state.Id, stateId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(state.Name, stateId, StringComparison.OrdinalIgnoreCase)) > 0 && Dirty();
+    }
+
+    bool Dirty() { Save(); Changed?.Invoke(); return true; }
+
+    /// <summary>
+    /// Takes a layout state on air: every layer is set to that state's look and the layout is
+    /// published with the state's hand-over, so a hidden play clock dissolves and the clock that
+    /// replaces it slides in on the same transition.
+    /// </summary>
+    public bool ApplyLayoutState(string? layoutId, string? stateId, bool publish = true)
+    {
+        var layout = FindLayout(layoutId);
+        var state = layout?.StateFor(stateId);
+        if (layout is null || state is null) return false;
+        foreach (var layer in state.Layers)
+        {
+            var element = layout.Elements.FirstOrDefault(item =>
+                string.Equals(item.Id, layer.ElementId, StringComparison.OrdinalIgnoreCase));
+            if (element is null) continue;
+            element.Visible = layer.Visible;
+            if (layer.X is { } x) element.X = Math.Clamp(x, 0, layout.Width);
+            if (layer.Y is { } y) element.Y = Math.Clamp(y, 0, layout.Height);
+        }
+        layout.Transition = state.Transition;
+        layout.TransitionSeconds = Math.Clamp(state.Seconds, 0, 5);
+        if (state.TransitionClip is { } clip) layout.TransitionClip = clip.Snapshot();
+        Save();
+        if (!publish) { Changed?.Invoke(); return true; }
+        var display = FindDisplayOfLayout(layout.Id) ?? ActiveDisplay;
+        var index = display.Layouts.FindIndex(candidate =>
+            string.Equals(candidate.Id, layout.Id, StringComparison.OrdinalIgnoreCase));
+        if (index < 0) index = display.ActiveIndex;
+        // Taking the look that is already on air still has to animate, so this publishes explicitly
+        // instead of going through PublishLayout's same-index shortcut.
+        display.ActiveIndex = index;
+        display.PublishedIndex = index;
+        display.PublishedAtUtc = DateTime.UtcNow;
+        Save();
+        Changed?.Invoke();
+        ShowBus.Shared.Publish(ShowEventKind.Layout, "Layout state", $"{display.Name} · {layout.Name} · {state.Name}");
         return true;
     }
 

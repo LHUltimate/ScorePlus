@@ -847,16 +847,18 @@ public sealed class ScorebugCanvasView : Grid
         if(clip.PieceOrder is not null)
             foreach(var id in clip.PieceOrder)
                 if(!ranks.ContainsKey(id))ranks[id]=ranks.Count;
+        // An item with its own start time keeps it; every other item follows the order and gap, so
+        // a clip authored before per-item starts plays exactly as it used to.
         var ordered=steps
-            .Select((step,index)=>(step.Id,step.Play,index,Rank:ranks.TryGetValue(step.Id,out var rank)?rank:int.MaxValue))
-            .OrderBy(step=>step.Rank).ThenBy(step=>step.index)
+            .Select((step,index)=>(step.Id,step.Play,index,Delay:clip.StartFor(step.Id,
+                ranks.TryGetValue(step.Id,out var rank)?rank:-1)))
+            .OrderBy(step=>step.Delay).ThenBy(step=>step.index)
             .ToList();
-        var gap=StaggerFor(steps,clip)/(ordered.Count>1?ordered.Count-1:1);
-        for(var index=0;index<ordered.Count;index++)
+        foreach(var step in ordered)
         {
-            var play=ordered[index].Play;
-            if(index==0||gap<=0.001){play();continue;}
-            var timer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(gap*index)};
+            var play=step.Play;
+            if(step.Delay<=0.001){play();continue;}
+            var timer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(step.Delay)};
             timer.Tick+=(_,_)=>{timer.Stop();play();};
             timer.Start();
         }

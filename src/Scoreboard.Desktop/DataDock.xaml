@@ -254,6 +254,13 @@
           <TextBlock Text="Pin a source value to a custom value" Style="{StaticResource DataTitle}"/>
           <TextBox x:Name="PinNameBox" Style="{StaticResource DataField}" Text="Feed value" ToolTip="The custom value name shown on the graphic"/>
           <Button Content="Send selected value to graphic" Style="{StaticResource DataAction}" Click="SendStat_Click" Margin="0,0,0,6"/>
+          <TextBlock Text="Export the game" Style="{StaticResource DataTitle}"/>
+          <TextBlock Text="Every scoreboard value, sport value, custom value, both selected players, every roster player and stat, and the event timeline."
+                     FontSize="9" Foreground="{DynamicResource DataMuted}" TextWrapping="Wrap" Margin="0,0,0,4"/>
+          <WrapPanel Margin="0,0,0,6">
+            <Button Content="Export CSV…" Style="{StaticResource DataAction}" Click="ExportCsv_Click"/>
+            <Button Content="Export JSON…" Style="{StaticResource DataAction}" Click="ExportJson_Click"/>
+          </WrapPanel>
           <ListBox x:Name="ValueList" Height="220" Background="{DynamicResource DataSurface}" Foreground="{DynamicResource DataText}"
                    BorderBrush="{DynamicResource DataBorder}" SelectionChanged="Value_Selected" Margin="0,6,0,0">
           <ListBox.ItemTemplate>

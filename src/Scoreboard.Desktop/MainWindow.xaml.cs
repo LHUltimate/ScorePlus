@@ -1066,28 +1066,6 @@ public partial class MainWindow : Window, IControlPanelHost, IRemoteDisplayHost
         _venueWindow.Show();
     }
 
-    /// <summary>
-    /// Opens one of the two motion makers on the display and layout this window is previewing, so
-    /// what the operator builds applies to the graphic they are looking at.
-    /// </summary>
-    void OpenMotionMaker(MotionKind kind)
-    {
-        var displayIndex = _scorebug.Displays.FindIndex(display => string.Equals(display.Id, _program.DisplayId, StringComparison.OrdinalIgnoreCase));
-        if (displayIndex >= 0) _scorebug.SelectDisplay(displayIndex);
-        _scorebug.SelectLayout(_program.LayoutIndex);
-        var maker = new MotionMakerWindow(kind, _scorebug, _engine, _preferences.Theme, layoutId: _program.Layout.Id) { Owner = this };
-        maker.ShowDialog();
-        _preview?.Rebuild();
-        RefreshLayoutIndicators();
-        _panel.Refresh();
-        foreach (var panel in _controlPanels.Where(p => p.IsVisible)) panel.Panel.Refresh();
-        _quickLayouts?.Refresh();
-    }
-
-    void TransitionMaker_Click(object sender, RoutedEventArgs e) => OpenMotionMaker(MotionKind.Transition);
-
-    void AnimationMaker_Click(object sender, RoutedEventArgs e) => OpenMotionMaker(MotionKind.Animation);
-
     void AdLog_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new AdLogWindow(_preferences.Theme) { Owner = this };

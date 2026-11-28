@@ -444,6 +444,13 @@ internal static class MotionPlayback
             var fraction = seconds <= 0.0001 ? 1 : Math.Clamp(key.Time / seconds, 0, 1);
             var value = Limit(key.Value);
             if (ceiling != 1) value = Math.Clamp(value, 0, 1) * ceiling;
+            // A step key holds the previous value and jumps at its own time, exactly as the editor's
+            // scrub and the graph show it.
+            if (key.Ease == MotionEase.Step)
+            {
+                animation.KeyFrames.Add(new DiscreteDoubleKeyFrame(value, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(fraction * seconds))));
+                continue;
+            }
             animation.KeyFrames.Add(new EasingDoubleKeyFrame(value, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(fraction * seconds)))
             {
                 EasingFunction = Ease(key.Ease)
@@ -461,6 +468,7 @@ internal static class MotionPlayback
         MotionEase.Back => new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.6 },
         MotionEase.Bounce => new BounceEase { EasingMode = EasingMode.EaseOut, Bounces = 2, Bounciness = 2 },
         MotionEase.Elastic => new ElasticEase { EasingMode = EasingMode.EaseOut, Oscillations = 2, Springiness = 6 },
+        MotionEase.Step => new CubicEase { EasingMode = EasingMode.EaseIn },
         _ => new QuadraticEase { EasingMode = EasingMode.EaseInOut }
     };
 

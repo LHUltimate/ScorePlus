@@ -32,6 +32,9 @@ public sealed class MotionMakerWindow : Window
     readonly ListBox _keyList = new() { Height = 84 };
     readonly ListBox _colorList = new() { Height = 92 };
     readonly ListBox _libraryList = new() { Height = 132 };
+    // One list for every key on the selected item: motion values and colours, across every take.
+    readonly ListBox _allKeys = new() { Height = 216 };
+    bool _keysLoading;
     readonly ComboBox _propertyPicker = new() { MinHeight = 28, Width = 176 };
     readonly ComboBox _easePicker = new() { MinHeight = 28, Width = 110 };
     readonly ComboBox _colorRolePicker = new() { MinHeight = 28, Width = 106 };
@@ -95,7 +98,24 @@ public sealed class MotionMakerWindow : Window
     string _pieceId = "";
     bool _pieceLoading;
     readonly Canvas _timeline = new() { Width = 560, Height = 104, Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x0F, 0x14)) };
-    readonly Border _stage = new() { Height = 226, CornerRadius = new CornerRadius(8), ClipToBounds = true, Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x0F, 0x14)) };
+    // The ruler is shared by both editors: seconds on the outside, frames on the inside, and the
+    // same playhead as the tracks so scrubbing reads the same in both places.
+    readonly Canvas _ruler = new() { Width = 1040, Height = 26, Background = new SolidColorBrush(Color.FromRgb(0x0E, 0x14, 0x1B)), ClipToBounds = true };
+    readonly Canvas _graph = new() { Width = 1040, Height = 148, Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x11, 0x18)), ClipToBounds = true };
+    readonly CheckBox _framesBox = new() { Content = "Frames", FontSize = 10, Margin = new Thickness(6, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center, ToolTip = "Show 30 fps frame numbers beside the seconds on the ruler" };
+    readonly CheckBox _graphBox = new() { Content = "Graph editor", FontSize = 10, Margin = new Thickness(6, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center, ToolTip = "Draw the selected property's value over time" };
+    readonly CheckBox _loopPlayBox = new() { Content = "Loop", FontSize = 10, Margin = new Thickness(6, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center };
+    readonly TextBlock _timecode = new() { FontSize = 11, FontFamily = new FontFamily("Consolas"), Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) };
+    readonly TextBlock _zoomText = new() { FontSize = 10, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center, MinWidth = 34, TextAlignment = TextAlignment.Center };
+    readonly TextBlock _graphHint = new() { FontSize = 10, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+    readonly Border _graphHost = new() { Margin = new Thickness(0, 6, 0, 0) };
+    const double FrameRate = 30;
+    double _zoom = 1;
+    readonly Border _stage = new() { Height = 226, CornerRadius = new CornerRadius(8), ClipToBounds = true, Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x0F, 0x14)), Cursor = Cursors.SizeAll, ToolTip = "Drag an item on the stage to write its position key at the playhead" };
+    Point? _stageDragOrigin;
+    double _stageDragBaseX, _stageDragBaseY;
+    object? _graphDragKey;
+    MotionTrack? _graphDragTrack;
     readonly Grid _previewGrid = new() { ClipToBounds = true };
     readonly Border _plate;
     readonly TextBlock _plateText;
@@ -132,6 +152,16 @@ public sealed class MotionMakerWindow : Window
     int _timelineDragTarget = -1;
     double _timelineDragStartY;
     bool _timelineDragMoved;
+    // A row drag is axis-locked: sideways slides that item to a later start, up/down reorders it.
+    bool _timelineSlideMode;
+    bool _timelineSlideHadOwnStart;
+    double _timelineDragStartX;
+    double _timelineSlideStart;
+    // The grip at a take's end: dragging it adds or removes time from that leg.
+    MotionPhase? _endDragPhase;
+    double _endDragStartX;
+    double _endDragStartSeconds;
+    double _endDragSecondsPerPixel;
 
     public MotionMakerWindow(MotionKind kind, ScorebugCatalog catalog, GameEngine engine, string theme, MotionClip? start = null, string? layoutId = null)
     {
@@ -220,6 +250,17 @@ public sealed class MotionMakerWindow : Window
                 _status.Text = "New here? Press Quick start in the top-right, or pick a style on the left. The three numbered steps are all you need.";
         };
         _ticker.Tick += (_, _) => TrackPlayhead();
+        _stage.MouseLeftButtonDown += StageDown;
+        _stage.MouseMove += StageMove;
+        _stage.MouseLeftButtonUp += StageUp;
+        _stage.LostMouseCapture += (_, _) => { _stageDragOrigin = null; };
+        _ruler.MouseLeftButtonDown += RulerDown;
+        _ruler.MouseMove += RulerMove;
+        _ruler.MouseLeftButtonUp += (_, _) => { _scrubbing = false; if (_ruler.IsMouseCaptured) _ruler.ReleaseMouseCapture(); };
+        _framesBox.Checked += (_, _) => DrawTimeline();
+        _framesBox.Unchecked += (_, _) => DrawTimeline();
+        _graphBox.Checked += (_, _) => { _graphHost.Visibility = Visibility.Visible; DrawGraph(); };
+        _graphBox.Unchecked += (_, _) => _graphHost.Visibility = Visibility.Collapsed;
         _previewTimer.Tick += (_, _) =>
         {
             _previewTimer.Stop();
@@ -349,6 +390,13 @@ public sealed class MotionMakerWindow : Window
         bar.Children.Add(ActionButton("🏠 Layout order", ResetTimeline));
         bar.Children.Add(ActionButton("▶  Play", Play));
         bar.Children.Add(ActionButton("■  Stop", () => { StopPlayback(); BuildStage(); }));
+        bar.Children.Add(ToolbarLabel("  ZOOM"));
+        bar.Children.Add(ActionButton("−", () => SetZoom(_zoom / 1.5)));
+        bar.Children.Add(_zoomText);
+        bar.Children.Add(ActionButton("+", () => SetZoom(_zoom * 1.5)));
+        bar.Children.Add(ActionButton("Fit", () => SetZoom(1)));
+        bar.Children.Add(_framesBox);
+        bar.Children.Add(_graphBox);
         toolbar.Child = bar;
         Grid.SetRow(toolbar, 1);
         root.Children.Add(toolbar);
@@ -369,7 +417,7 @@ public sealed class MotionMakerWindow : Window
 
         var footer = new TextBlock
         {
-            Text = "Click a track to select the item. Click or drag the ruler to scrub; double-click the ruler to add a key. Drag an item's name up or down to reorder it. A return key is just a key at the end of the phase carrying the item's designed value.",
+            Text = "Click a track to select the item. Drag an item's name up or down to reorder it, or sideways (and its green grip) to start it later — that adds time to the take. Drag the green grip at the end of a take's block to make that leg longer or shorter, so an enter can be trimmed on its own. Click or drag the ruler to scrub; double-click it to add a key at the playhead.",
             FontSize = 10,
             Opacity = 0.6,
             TextWrapping = TextWrapping.Wrap,
@@ -475,16 +523,21 @@ public sealed class MotionMakerWindow : Window
         return scroll;
     }
 
+    /// <summary>
+    /// The timeline workspace: the stage on top (drag an item to key its position), the shared ruler
+    /// and tracks underneath, and the graph editor one toggle away. Scrub by clicking either the
+    /// ruler or the tracks; the playhead is the same one in both.
+    /// </summary>
     UIElement BuildTimelineCentre()
     {
         var grid = new Grid { Margin = new Thickness(0, 0, 10, 0) };
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.RowDefinitions.Add(new RowDefinition());
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(238) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         var head = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
         var title = new StackPanel();
-        title.Children.Add(Section("LAYOUT TIMELINE"));
+        title.Children.Add(Section("TIMELINE"));
         title.Children.Add(_timelineSummary);
         head.Children.Add(title);
         var tools = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
@@ -493,6 +546,29 @@ public sealed class MotionMakerWindow : Window
         DockPanel.SetDock(tools, Dock.Right);
         head.Children.Add(tools);
         grid.Children.Add(head);
+
+        var body = new Grid();
+        body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(196) });
+        body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(body, 1);
+        grid.Children.Add(body);
+
+        // Stage first: the operator sees the artwork they are keying, not only its bars.
+        var stagePanel = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+        var stageHead = new DockPanel { Margin = new Thickness(0, 0, 0, 2) };
+        stageHead.Children.Add(Section("STAGE"));
+        var stageHint = new TextBlock
+        {
+            Text = "Drag the selected item to write its position key at the playhead",
+            FontSize = 9, Opacity = 0.55, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0)
+        };
+        stageHead.Children.Add(stageHint);
+        stagePanel.Children.Add(stageHead);
+        _stage.Height = 168;
+        stagePanel.Children.Add(_stage);
+        DockPanel.SetDock(stagePanel, Dock.Top);
+        body.Children.Add(stagePanel);
 
         var frame = new Border
         {
@@ -503,35 +579,59 @@ public sealed class MotionMakerWindow : Window
             Padding = new Thickness(0),
             ClipToBounds = true
         };
-        _timeline.Width = 1040;
         _timeline.Height = 330;
         _timeline.MouseLeftButtonDown += TimelineDown;
         _timeline.MouseMove += TimelineMove;
         _timeline.MouseLeftButtonUp += TimelineUp;
         _timeline.LostMouseCapture += (_, _) => EndDrag();
+        var stack = new StackPanel { Orientation = Orientation.Vertical };
+        stack.Children.Add(_ruler);
+        stack.Children.Add(_timeline);
         frame.Child = new ScrollViewer
         {
-            Content = _timeline,
+            Content = stack,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Background = new SolidColorBrush(Color.FromRgb(0x08, 0x0D, 0x13))
         };
-        grid.Children.Add(frame);
         Grid.SetRow(frame, 1);
+        body.Children.Add(frame);
 
-        var preview = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
-        var previewHead = new DockPanel();
-        previewHead.Children.Add(Section("LIVE PREVIEW"));
+        // The graph editor is a toggle, not a second window: the selected property's value over time.
+        var graphHead = new DockPanel { Margin = new Thickness(0, 0, 0, 0) };
+        graphHead.Children.Add(new TextBlock
+        {
+            Text = "GRAPH", FontSize = 9, FontWeight = FontWeights.Bold, Opacity = 0.6,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0)
+        });
+        graphHead.Children.Add(_graphHint);
+        var graphPanel = new StackPanel();
+        graphPanel.Children.Add(graphHead);
+        graphPanel.Children.Add(_graph);
+        _graphHost.Child = graphPanel;
+        _graphHost.Visibility = Visibility.Collapsed;
+        _graph.MouseLeftButtonDown += GraphDown;
+        _graph.MouseMove += GraphMove;
+        _graph.MouseLeftButtonUp += GraphUp;
+        _graph.LostMouseCapture += (_, _) => { _graphDragKey = null; _graphDragTrack = null; };
+        Grid.SetRow(_graphHost, 2);
+        body.Children.Add(_graphHost);
+
+        var previewHead = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
+        previewHead.Children.Add(Section("TRANSPORT"));
         var previewButtons = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
         previewButtons.Children.Add(ActionButton("▶  Play", Play));
         previewButtons.Children.Add(ActionButton("■  Stop", () => { StopPlayback(); BuildStage(); }));
+        previewButtons.Children.Add(ActionButton("⏮  Start", () => { PreviewAt(0); }));
+        previewButtons.Children.Add(_loopPlayBox);
         DockPanel.SetDock(previewButtons, Dock.Right);
         previewHead.Children.Add(previewButtons);
-        preview.Children.Add(previewHead);
-        _stage.Height = 184;
-        preview.Children.Add(_stage);
-        grid.Children.Add(preview);
-        Grid.SetRow(preview, 2);
+        previewHead.Children.Add(_timecode);
+        Grid.SetRow(previewHead, 2);
+        grid.RowDefinitions[2].Height = GridLength.Auto;
+        grid.Children.Add(previewHead);
+
+        _graphHost.Visibility = _graphBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         return grid;
     }
 
@@ -609,38 +709,49 @@ public sealed class MotionMakerWindow : Window
         panel.Children.Add(composeButtons);
         panel.Children.Add(_composeReadout);
 
-        panel.Children.Add(Section("MOTION KEYS"));
-        var trackTools = new WrapPanel();
+        // One keys panel. Every motion value, every colour and every return key on this item lives
+        // in this list, whichever take it belongs to; picking a row loads it for editing below.
+        panel.Children.Add(Section("KEYS"));
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Every key on this item — motion, scale, colour, return — in one list. Pick a row to edit it, or key a property at the playhead.",
+            FontSize = 10, Opacity = 0.65, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4)
+        });
+        _allKeys.SelectionChanged += (_, _) => SelectAllKey();
+        panel.Children.Add(_allKeys);
+
         _propertyPicker.Width = 156;
         _propertyPicker.ItemsSource = Enum.GetValues<MotionTarget>().Select(target => new TargetOption(target)).ToArray();
         if (_propertyPicker.SelectedIndex < 0) _propertyPicker.SelectedIndex = 0;
-        trackTools.Children.Add(_propertyPicker);
-        trackTools.Children.Add(ActionButton("+ Track", AddTrack));
-        trackTools.Children.Add(ActionButton("− Track", RemoveTrack));
-        panel.Children.Add(trackTools);
-        _trackList.Height = 100;
-        _trackList.SelectionChanged += (_, _) => { if (_trackList.SelectedIndex >= 0) { _trackIndex = _trackList.SelectedIndex; LoadTrack(); } };
-        panel.Children.Add(_trackList);
-        var keyFields = new WrapPanel();
+        var keyFields = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
+        keyFields.Children.Add(_propertyPicker);
         _keyTime.Width = 54; _keyValue.Width = 64;
         keyFields.Children.Add(FieldLabel("Time")); keyFields.Children.Add(_keyTime);
         keyFields.Children.Add(FieldLabel("  Value")); keyFields.Children.Add(_keyValue);
         _easePicker.ItemsSource = Enum.GetValues<MotionEase>().Select(ease => new EaseOption(ease, EaseLabel(ease))).ToArray();
         SelectEase(MotionEase.Out);
         keyFields.Children.Add(_easePicker);
+        keyFields.Children.Add(ActionButton("Use playhead", () =>
+        {
+            _propertyPicker.ItemsSource ??= Enum.GetValues<MotionTarget>().Select(target => new TargetOption(target)).ToArray();
+            _keyTime.Text = Math.Clamp(_scrubTime, 0, CurrentPhase?.Seconds ?? 0).ToString("0.##", CultureInfo.CurrentCulture);
+        }));
         panel.Children.Add(keyFields);
         var keyButtons = new WrapPanel();
+        keyButtons.Children.Add(ActionButton("+ Key at playhead", AddKeyAtPlayhead));
         keyButtons.Children.Add(ActionButton("Add key", AddKey));
-        keyButtons.Children.Add(ActionButton("Update key", UpdateKey));
-        keyButtons.Children.Add(ActionButton("Remove key", RemoveKey));
+        keyButtons.Children.Add(ActionButton("Update key", UpdateSelectedKey));
+        keyButtons.Children.Add(ActionButton("Remove key", RemoveSelectedKey));
         keyButtons.Children.Add(ActionButton("↩ Return key", AddReturnKey));
+        keyButtons.Children.Add(ActionButton("↩ Return all", AddReturnKeys));
         panel.Children.Add(keyButtons);
-        _keyList.Height = 82;
-        _keyList.SelectionChanged += (_, _) => { if (_keyList.SelectedIndex >= 0) { _keyIndex = _keyList.SelectedIndex; LoadKey(); } };
-        panel.Children.Add(_keyList);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "A shape can start small and grow: pick Scale, key 0.2 at 0s, then key 1 at the end of the take. The renderer interpolates every frame between them.",
+            FontSize = 10, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0)
+        });
 
-        panel.Children.Add(Section("COLOR KEYS"));
-        var colorFields = new WrapPanel();
+        var colorFields = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
         _colorRolePicker.ItemsSource = Enum.GetValues<MotionColorRole>().Select(role => new RoleOption(role, RoleLabel(role))).ToArray();
         SelectRole(MotionColorRole.Text);
         colorFields.Children.Add(_colorRolePicker);
@@ -655,9 +766,34 @@ public sealed class MotionMakerWindow : Window
         colorButtons.Children.Add(ActionButton("Remove color", RemoveColor));
         colorButtons.Children.Add(ActionButton("↩ Return color", AddReturnColor));
         panel.Children.Add(colorButtons);
-        _colorList.Height = 92;
+
+        // The per-track lists are the drill-down. They stay available, but the keys panel above is
+        // the one an operator normally uses.
+        var advanced = new Expander { Header = "Per-track editor", IsExpanded = false, Margin = new Thickness(0, 8, 0, 0) };
+        var advancedPanel = new StackPanel();
+        var trackTools = new WrapPanel();
+        trackTools.Children.Add(ActionButton("+ Track", AddTrack));
+        trackTools.Children.Add(ActionButton("− Track", RemoveTrack));
+        advancedPanel.Children.Add(trackTools);
+        _trackList.Height = 88;
+        _trackList.SelectionChanged += (_, _) => { if (_trackList.SelectedIndex >= 0) { _trackIndex = _trackList.SelectedIndex; LoadTrack(); } };
+        advancedPanel.Children.Add(_trackList);
+        _keyList.Height = 74;
+        _keyList.SelectionChanged += (_, _) => { if (_keyList.SelectedIndex >= 0) { _keyIndex = _keyList.SelectedIndex; LoadKey(); } };
+        advancedPanel.Children.Add(_keyList);
+        var rawKeyButtons = new WrapPanel();
+        rawKeyButtons.Children.Add(ActionButton("Update key", UpdateKey));
+        rawKeyButtons.Children.Add(ActionButton("Remove key", RemoveKey));
+        advancedPanel.Children.Add(rawKeyButtons);
+        _colorList.Height = 74;
         _colorList.SelectionChanged += (_, _) => { if (_colorList.SelectedIndex >= 0) { _colorIndex = _colorList.SelectedIndex; LoadColor(); } };
-        panel.Children.Add(_colorList);
+        advancedPanel.Children.Add(_colorList);
+        var rawColorButtons = new WrapPanel();
+        rawColorButtons.Children.Add(ActionButton("Update color", UpdateColor));
+        rawColorButtons.Children.Add(ActionButton("Remove color", RemoveColor));
+        advancedPanel.Children.Add(rawColorButtons);
+        advanced.Content = advancedPanel;
+        panel.Children.Add(advanced);
         panel.Children.Add(_status);
         scroll.Content = panel;
         return scroll;
@@ -1477,6 +1613,7 @@ public sealed class MotionMakerWindow : Window
     void ResetTimeline()
     {
         _clip.PieceOrder = [];
+        _clip.ItemStarts.Clear();
         RefreshTimeline();
         SelectTimelineItem();
         _status.Text = "Timeline cleared: every item starts together in layout order.";
@@ -1488,7 +1625,7 @@ public sealed class MotionMakerWindow : Window
         _staggerBox.Text = _clip.ItemStagger.ToString("0.##", CultureInfo.CurrentCulture);
         DrawTimeline();
         BuildStage();
-        _status.Text = $"Ordered items start {_clip.ItemStagger:0.##}s apart.";
+        _status.Text = $"Un-moved items start {_clip.ItemStagger:0.##}s apart; rows dragged sideways keep their own start.";
     }
 
     sealed record TimelineRow(int Position, string Id, string Label, bool Temporary = false)
@@ -1802,6 +1939,7 @@ public sealed class MotionMakerWindow : Window
             _keyList.ItemsSource = null;
         }
         DrawTimeline();
+        RefreshAllKeys();
     }
 
     void LoadTrack()
@@ -1886,6 +2024,99 @@ public sealed class MotionMakerWindow : Window
         _colorIndex = -1;
         _colorList.SelectedIndex = -1;
         DrawTimeline();
+        RefreshAllKeys();
+    }
+
+    // ---------- the one keys panel ----------
+
+    /// <summary>One row in the keys panel: a motion key, a colour key, or a return key, on any take.</summary>
+    sealed record KeyEntry(int PhaseIndex, string PhaseName, MotionTrack? Track, MotionKey? Key,
+        ColorTrack? ColorTrack, ColorKey? ColorKey)
+    {
+        public double Time => Key?.Time ?? ColorKey?.Time ?? 0;
+
+        public override string ToString()
+        {
+            var prefix = $"{PhaseName} · {Time:0.##}s · ";
+            if (Key is { } motion && Track is { } track)
+                return prefix + $"{MotionClip.TargetLabel(track.Target)} = {motion.Value:0.###} · {EaseLabel(motion.Ease)}";
+            if (ColorTrack is { } colors && ColorKey is { } colour)
+                return prefix + $"{RoleLabel(colors.Role)} {colour.Color}";
+            return prefix + "key";
+        }
+    }
+
+    /// <summary>
+    /// Every key that applies to the selected item, in time order across all of its takes, motion
+    /// and colour alike. The list is the single place an operator looks; the per-track lists under
+    /// the advanced expander stay for drilling into one property.
+    /// </summary>
+    void RefreshAllKeys()
+    {
+        if (_keysLoading) return;
+        var selected = _allKeys.SelectedItem as KeyEntry;
+        var entries = new List<KeyEntry>();
+        for (var index = 0; index < _clip.Phases.Count; index++)
+        {
+            var phase = _clip.Phases[index];
+            foreach (var track in phase.Tracks.Where(track => IsPiece(track.PieceId)))
+                foreach (var key in track.Keys)
+                    entries.Add(new KeyEntry(index, phase.Name, track, key, null, null));
+            foreach (var track in phase.Colors.Where(track => IsPiece(track.PieceId)))
+                foreach (var key in track.Keys)
+                    entries.Add(new KeyEntry(index, phase.Name, null, null, track, key));
+        }
+        var ordered = entries
+            .OrderBy(entry => entry.PhaseIndex)
+            .ThenBy(entry => entry.Time)
+            .ThenBy(entry => entry.Track is null ? 1 : 0)
+            .ToList();
+        _keysLoading = true;
+        try
+        {
+            _allKeys.ItemsSource = ordered;
+            _allKeys.SelectedItem = selected is null ? null : ordered.FirstOrDefault(entry =>
+                (selected.Key is not null && ReferenceEquals(entry.Key, selected.Key))
+                || (selected.ColorKey is not null && ReferenceEquals(entry.ColorKey, selected.ColorKey)));
+        }
+        finally { _keysLoading = false; }
+    }
+
+    void SelectAllKey()
+    {
+        if (_keysLoading || _allKeys.SelectedItem is not KeyEntry entry) return;
+        if (entry.PhaseIndex != _phaseIndex)
+        {
+            _phaseIndex = entry.PhaseIndex;
+            _phaseList.SelectedIndex = entry.PhaseIndex;
+            LoadPhase();
+        }
+        if (entry.Track is { } track && entry.Key is { } key)
+        {
+            SelectKeyForEditing(track, key);
+            _status.Text = $"{MotionClip.TargetLabel(track.Target)} = {key.Value:0.###} at {key.Time:0.##}s · {EaseLabel(key.Ease)}. Edit it above and press Update key.";
+            PreviewAt(key.Time);
+        }
+        else if (entry.ColorTrack is { } colors && entry.ColorKey is { } colour)
+        {
+            SelectColorForEditing(colors, colour);
+            _status.Text = $"{RoleLabel(colors.Role)} {colour.Color} at {colour.Time:0.##}s. Edit it above and press Update color.";
+            PreviewAt(colour.Time);
+        }
+    }
+
+    void UpdateSelectedKey()
+    {
+        if (_allKeys.SelectedItem is KeyEntry { ColorKey: not null }) UpdateColor();
+        else UpdateKey();
+        RefreshAllKeys();
+    }
+
+    void RemoveSelectedKey()
+    {
+        if (_allKeys.SelectedItem is KeyEntry { ColorKey: not null }) RemoveColor();
+        else RemoveKey();
+        RefreshAllKeys();
     }
 
     void LoadKey()
@@ -2906,8 +3137,15 @@ public sealed class MotionMakerWindow : Window
 
     void TrackPlayhead()
     {
-        Canvas.SetLeft(_playhead, XForGlobal(_clock.Elapsed.TotalSeconds));
-        if (_clock.Elapsed.TotalSeconds > _clip.TotalSeconds + 0.15) _ticker.Stop();
+        var elapsed = _clock.Elapsed.TotalSeconds;
+        Canvas.SetLeft(_playhead, XForGlobal(elapsed));
+        if (_clock.Elapsed.TotalSeconds > _clip.TotalSeconds + 0.15)
+        {
+            // The transport's loop checkbox is for auditioning a loop or a hand-over; it restarts
+            // the same clip rather than silently stopping at the end.
+            if (_loopPlayBox.IsChecked == true) Play();
+            else _ticker.Stop();
+        }
     }
 
     void StopPlayback()
@@ -2954,11 +3192,10 @@ public sealed class MotionMakerWindow : Window
             string.Equals(candidate, id, StringComparison.OrdinalIgnoreCase)) ?? -1;
     }
 
-    double DelayFor(string id)
-    {
-        var order = OrderOf(id);
-        return order <= 0 ? 0 : order * Math.Max(0, _clip.ItemStagger);
-    }
+    /// <summary>The item's start offset: what the row was dragged to, else its ordered slot × gap.</summary>
+    double DelayFor(string id) => id.Length == 0 ? 0 : _clip.StartFor(id, OrderOf(id));
+
+    bool HasOwnStart(string id) => id.Length > 0 && _clip.ItemStarts.ContainsKey(id);
 
     double PhaseStartFor(int phaseIndex) =>
         _clip.Phases.Take(Math.Max(0, phaseIndex)).Sum(phase => phase.Seconds);
@@ -2976,9 +3213,27 @@ public sealed class MotionMakerWindow : Window
         return Math.Max(0, _clip.Phases.Count - 1);
     }
 
+    /// <summary>The whole clip plus its delays, at the zoom the operator chose.</summary>
+    double CanvasWidth => 1040 * Math.Clamp(_zoom, 1, 6);
+
+    void SetZoom(double zoom)
+    {
+        _zoom = Math.Clamp(zoom, 1, 6);
+        _zoomText.Text = $"{_zoom:0.#}×";
+        DrawTimeline();
+    }
+
+    /// <summary>Fit shows the whole clip: the base 1040px ruler is the clip's full width.</summary>
+    void FitZoom() => SetZoom(1);
+
     void DrawTimeline()
     {
         _timeline.Children.Clear();
+        _timeline.Width = CanvasWidth;
+        // The ruler and the graph stop one pixel short so a canvas lookup for the track surface does
+        // not pick them up by width; they share the timeline's time mapping regardless.
+        _ruler.Width = CanvasWidth - 1;
+        _graph.Width = CanvasWidth - 1;
         var total = TimelineTotalSeconds;
         var rows = _timelineItems;
         var height = TimelineHeader + rows.Count * TimelineRowHeight + 14;
@@ -3022,6 +3277,18 @@ public sealed class MotionMakerWindow : Window
             Canvas.SetLeft(block, left);
             Canvas.SetTop(block, 2);
             _timeline.Children.Add(block);
+            // The take's end grip: dragging it makes this leg longer or shorter, so an enter can be
+            // trimmed on its own instead of only ever changing the exit.
+            var endGrip = new Border
+            {
+                Width = 8, Height = TimelineHeader - 6, CornerRadius = new CornerRadius(3),
+                Background = new SolidColorBrush(Color.FromArgb(0xCC, 0x38, 0xD7, 0xA3)),
+                Cursor = Cursors.SizeWE, IsHitTestVisible = false,
+                ToolTip = $"Drag to change how long {phase.Name} runs ({phase.Seconds:0.##}s)"
+            };
+            Canvas.SetLeft(endGrip, Math.Max(1, right - 4));
+            Canvas.SetTop(endGrip, 3);
+            _timeline.Children.Add(endGrip);
             var label = new TextBlock
             {
                 Text = $"{phase.Name} · {phase.Seconds:0.##}s",
@@ -3094,9 +3361,11 @@ public sealed class MotionMakerWindow : Window
                 Canvas.SetTop(grip, y + 9);
                 _timeline.Children.Add(grip);
             }
+            var rowDelay = DelayFor(row.Id);
             var name = new TextBlock
             {
-                Text = row.Label, FontSize = 10, FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal,
+                Text = rowDelay > 0.001 ? $"{row.Label}  +{rowDelay:0.##}s" : row.Label,
+                FontSize = 10, FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal,
                 Foreground = selected ? Brushes.White : new SolidColorBrush(Color.FromRgb(0xB8, 0xC4, 0xD0)),
                 Width = TimelineGutter - 36, TextTrimming = TextTrimming.CharacterEllipsis,
                 Cursor = row.Id.Length == 0 ? Cursors.Arrow : Cursors.SizeAll,
@@ -3108,6 +3377,21 @@ public sealed class MotionMakerWindow : Window
             Canvas.SetTop(name, y + 8);
             _timeline.Children.Add(name);
             var delay = DelayFor(row.Id);
+            if (row.Id.Length > 0)
+            {
+                // A clip-like grip at the item's start: drag it sideways to start that item later.
+                var handleX = XForGlobal(delay);
+                var handle = new Border
+                {
+                    Width = 7, Height = 18, CornerRadius = new CornerRadius(3),
+                    Background = new SolidColorBrush(Color.FromArgb(0xAA, 0x38, 0xD7, 0xA3)),
+                    Cursor = Cursors.SizeWE, IsHitTestVisible = false,
+                    ToolTip = $"Drag sideways to start {row.Label} later"
+                };
+                Canvas.SetLeft(handle, handleX - 3);
+                Canvas.SetTop(handle, y + 9);
+                _timeline.Children.Add(handle);
+            }
             start = 0;
             for (var phaseIndex = 0; phaseIndex < _clip.Phases.Count; phaseIndex++)
             {
@@ -3202,6 +3486,321 @@ public sealed class MotionMakerWindow : Window
             _timeline.Children.Add(cap);
         }
         _timelineSummary.Text = $"{TimelineLayout.Name} · {TimelineLayout.Elements.Count} items · {_clip.Pieces.Count} temporary · {_clip.Phases.Count} takes · {_clip.ItemStagger:0.##}s gap";
+        DrawRuler();
+        if (_graphHost.Visibility == Visibility.Visible) DrawGraph();
+        UpdateTimecode();
+    }
+
+    // ---------- shared ruler ----------
+
+    /// <summary>
+    /// The ruler both editors share: seconds and, when asked, frame numbers at 30 fps, with the same
+    /// playhead the tracks use. It scrolls with the tracks because it lives above them.
+    /// </summary>
+    void DrawRuler()
+    {
+        _ruler.Children.Clear();
+        var total = TimelineTotalSeconds;
+        _ruler.Children.Add(new Rectangle
+        {
+            Width = TimelineGutter, Height = _ruler.Height,
+            Fill = new SolidColorBrush(Color.FromRgb(0x11, 0x18, 0x20))
+        });
+        var legend = new TextBlock
+        {
+            Text = _framesBox.IsChecked == true ? "TIME · FRAME" : "TIME",
+            FontSize = 8, FontWeight = FontWeights.Bold, Opacity = 0.55,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Canvas.SetLeft(legend, 8);
+        Canvas.SetTop(legend, 7);
+        _ruler.Children.Add(legend);
+
+        var frames = _framesBox.IsChecked == true;
+        if (frames)
+        {
+            // One tick per frame is the whole point of the toggle: a 0.35s hand-over is ten frames.
+            for (var tick = 0.0; tick <= total + 0.0001; tick += 1.0 / FrameRate)
+            {
+                var x = XForGlobal(tick);
+                _ruler.Children.Add(new Line
+                {
+                    X1 = x, X2 = x, Y1 = _ruler.Height - 5, Y2 = _ruler.Height,
+                    Stroke = new SolidColorBrush(Color.FromRgb(0x2A, 0x36, 0x44)), StrokeThickness = 1
+                });
+            }
+        }
+        var step = total <= 1.5 ? 0.1 : total <= 3 ? 0.25 : total <= 8 ? 0.5 : total <= 20 ? 1 : 2;
+        for (var tick = 0.0; tick <= total + 0.0001; tick += step)
+        {
+            var x = XForGlobal(tick);
+            _ruler.Children.Add(new Line
+            {
+                X1 = x, X2 = x, Y1 = _ruler.Height - 10, Y2 = _ruler.Height,
+                Stroke = new SolidColorBrush(Color.FromRgb(0x54, 0x66, 0x7A)), StrokeThickness = 1
+            });
+            var label = new TextBlock
+            {
+                Text = frames ? $"{tick:0.##}s · {Math.Round(tick * FrameRate):0}f" : $"{tick:0.##}s",
+                FontSize = 8, Opacity = 0.7, Foreground = new SolidColorBrush(Color.FromRgb(0xB8, 0xC4, 0xD0))
+            };
+            Canvas.SetLeft(label, x + 2);
+            Canvas.SetTop(label, 2);
+            _ruler.Children.Add(label);
+        }
+
+        var playhead = new Line
+        {
+            X1 = XForGlobal(PhaseStart + DelayFor(_pieceId) + _scrubTime),
+            X2 = XForGlobal(PhaseStart + DelayFor(_pieceId) + _scrubTime),
+            Y1 = _ruler.Height - 12, Y2 = _ruler.Height,
+            Stroke = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)), StrokeThickness = 2,
+            IsHitTestVisible = false
+        };
+        _ruler.Children.Add(playhead);
+        _rulerPlayheadX = playhead.X1;
+    }
+
+    double _rulerPlayheadX;
+
+    // ---------- graph editor ----------
+
+    double _graphMin, _graphMax = 1;
+
+    /// <summary>
+    /// The selected property's value over time. Every frame between two keys is the interpolated
+    /// value the renderer will play, so a curve that reads smoothly is a move that will play smoothly.
+    /// </summary>
+    void DrawGraph()
+    {
+        _graph.Children.Clear();
+        var phase = CurrentPhase;
+        var track = SelectedTrack ?? PieceTracks().FirstOrDefault();
+        if (phase is null || track is null || track.Keys.Count == 0)
+        {
+            _graphHint.Text = "Pick a property track with keys — its curve is drawn here, and a dot can be dragged to change the value.";
+            return;
+        }
+        _graphHint.Text = $"{MotionClip.TargetLabel(track.Target)} · {PieceLabel} · {track.Keys.Count} key{(track.Keys.Count == 1 ? "" : "s")} · drag a dot to change its value";
+        var width = CanvasWidth;
+        var height = _graph.Height;
+        var left = TimelineGutter;
+        var tracked = track.Keys.Select(key => key.Value).ToList();
+        _graphMin = tracked.Min();
+        _graphMax = tracked.Max();
+        if (Math.Abs(_graphMax - _graphMin) < 0.0001) { _graphMin -= 1; _graphMax += 1; }
+        var top = 14.0;
+        var bottom = height - 16;
+        double X(double time) => left + Math.Clamp(time / Math.Max(0.0001, phase.Seconds), 0, 1) * (width - left - 18);
+        double Y(double value) => bottom - (value - _graphMin) / (_graphMax - _graphMin) * (bottom - top);
+
+        // A faint baseline at the first key's value makes a flat stretch obvious.
+        var zero = Y(track.Keys[0].Value);
+        _graph.Children.Add(new Line
+        {
+            X1 = left, X2 = width - 12, Y1 = zero, Y2 = zero,
+            Stroke = new SolidColorBrush(Color.FromRgb(0x24, 0x30, 0x3C)), StrokeThickness = 1, IsHitTestVisible = false
+        });
+        var points = new PointCollection();
+        const int samples = 180;
+        for (var index = 0; index <= samples; index++)
+        {
+            var time = phase.Seconds * index / samples;
+            points.Add(new Point(X(time), Y(track.ValueAt(time) ?? 0)));
+        }
+        _graph.Children.Add(new Polyline
+        {
+            Points = points, Stroke = new SolidColorBrush(Color.FromRgb(0x38, 0xD7, 0xA3)),
+            StrokeThickness = 2, IsHitTestVisible = false
+        });
+        foreach (var key in track.Keys)
+        {
+            var dot = new Ellipse
+            {
+                Width = 10, Height = 10, Tag = key, Cursor = Cursors.SizeNS,
+                Fill = new SolidColorBrush(ReferenceEquals(key, SelectedKey) ? Color.FromRgb(0xF9, 0xE7, 0x9B) : Color.FromRgb(0xFF, 0xFF, 0xFF)),
+                Stroke = new SolidColorBrush(Color.FromRgb(0x0B, 0x0F, 0x14)), StrokeThickness = 1.5,
+                ToolTip = $"{key.Time:0.##}s · {key.Value:0.###} · {EaseLabel(key.Ease)}"
+            };
+            Canvas.SetLeft(dot, X(key.Time) - 5);
+            Canvas.SetTop(dot, Y(key.Value) - 5);
+            _graph.Children.Add(dot);
+        }
+        var readout = new TextBlock
+        {
+            Text = $"{_graphMax:0.###}", FontSize = 8, Opacity = 0.55, Foreground = Brushes.White
+        };
+        Canvas.SetLeft(readout, left - 40);
+        Canvas.SetTop(readout, top - 4);
+        _graph.Children.Add(readout);
+        var low = new TextBlock { Text = $"{_graphMin:0.###}", FontSize = 8, Opacity = 0.55, Foreground = Brushes.White };
+        Canvas.SetLeft(low, left - 40);
+        Canvas.SetTop(low, bottom - 8);
+        _graph.Children.Add(low);
+    }
+
+    void GraphDown(object sender, MouseButtonEventArgs e)
+    {
+        if (CurrentPhase is null) return;
+        var point = e.GetPosition(_graph);
+        var dot = _graph.Children.OfType<Ellipse>().FirstOrDefault(candidate =>
+            candidate.Tag is MotionKey && Math.Abs(point.X - (Canvas.GetLeft(candidate) + 5)) < 9
+            && Math.Abs(point.Y - (Canvas.GetTop(candidate) + 5)) < 9);
+        if (dot?.Tag is not MotionKey key) return;
+        _graphDragKey = key;
+        _graphDragTrack = SelectedTrack ?? PieceTracks().FirstOrDefault();
+        _graph.CaptureMouse();
+    }
+
+    void GraphMove(object sender, MouseEventArgs e)
+    {
+        if (_graphDragKey is not MotionKey key || _graphDragTrack is not { } track || CurrentPhase is not { } phase) return;
+        var height = _graph.Height;
+        var bottom = height - 16;
+        var top = 14.0;
+        var point = e.GetPosition(_graph);
+        var amount = Math.Clamp((bottom - point.Y) / Math.Max(1, bottom - top), 0, 1);
+        key.Value = Math.Clamp(_graphMin + amount * (_graphMax - _graphMin), -100000, 100000);
+        track.Normalize(phase.Seconds);
+        DrawGraph();
+        PreviewAt(key.Time);
+        _status.Text = $"{MotionClip.TargetLabel(track.Target)} = {key.Value:0.###} at {key.Time:0.##}s.";
+    }
+
+    void GraphUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_graphDragKey is null) return;
+        _graphDragKey = null;
+        _graphDragTrack = null;
+        if (_graph.IsMouseCaptured) _graph.ReleaseMouseCapture();
+        RefreshTracks();
+        DrawTimeline();
+    }
+
+    // ---------- the ruler's own scrub ----------
+
+    void RulerDown(object sender, MouseButtonEventArgs e)
+    {
+        if (CurrentPhase is null) return;
+        _ticker.Stop();
+        var point = e.GetPosition(_ruler);
+        var phaseIndex = PhaseIndexAt(point.X);
+        if (phaseIndex != _phaseIndex)
+        {
+            _phaseIndex = phaseIndex;
+            _phaseList.SelectedIndex = phaseIndex;
+            LoadPhase();
+        }
+        _scrubbing = true;
+        _ruler.CaptureMouse();
+        ScrubRuler(point.X);
+        if (e.ClickCount == 2) AddKeyAtPlayhead();
+    }
+
+    void RulerMove(object sender, MouseEventArgs e)
+    {
+        if (!_scrubbing) return;
+        ScrubRuler(e.GetPosition(_ruler).X);
+    }
+
+    void ScrubRuler(double x)
+    {
+        var phase = CurrentPhase;
+        if (phase is null) return;
+        var global = Math.Clamp((x - TimelineGutter) / TimelineTrackWidth, 0, 1) * TimelineTotalSeconds;
+        _scrubTime = Math.Clamp(global - PhaseStart - DelayFor(_pieceId), 0, phase.Seconds);
+        _keyTime.Text = _scrubTime.ToString("0.##", CultureInfo.CurrentCulture);
+        DrawTimeline();
+        PreviewAt(_scrubTime);
+    }
+
+    // ---------- direct manipulation on the stage ----------
+
+    void StageDown(object sender, MouseButtonEventArgs e)
+    {
+        // The whole-graphic row keys every item together, so an empty piece id is a real selection.
+        if (CurrentPhase is null) return;
+        _stageDragOrigin = e.GetPosition(_stage);
+        _stageDragBaseX = ComposerValue(MotionTarget.X, _scrubTime);
+        _stageDragBaseY = ComposerValue(MotionTarget.Y, _scrubTime);
+        _stage.CaptureMouse();
+        _status.Text = "Dragging " + PieceLabel + " — the position key follows the pointer at the playhead.";
+    }
+
+    double StageScale => _previewGrid.Width > 0 && _stageView.ActualWidth > 0
+        ? Math.Max(0.01, _stageView.ActualWidth / _previewGrid.Width) : 1;
+
+    void StageMove(object sender, MouseEventArgs e)
+    {
+        if (_stageDragOrigin is not { } origin || CurrentPhase is null) return;
+        var point = e.GetPosition(_stage);
+        var scale = StageScale;
+        var x = _stageDragBaseX + (point.X - origin.X) / scale;
+        var y = _stageDragBaseY + (point.Y - origin.Y) / scale;
+        WritePositionKey(x, y);
+        _composeX.Text = x.ToString("0.##", CultureInfo.CurrentCulture);
+        _composeY.Text = y.ToString("0.##", CultureInfo.CurrentCulture);
+        PreviewAt(_scrubTime);
+    }
+
+    void StageUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_stageDragOrigin is null) return;
+        _stageDragOrigin = null;
+        if (_stage.IsMouseCaptured) _stage.ReleaseMouseCapture();
+        RefreshTracks();
+        DrawTimeline();
+        _status.Text = $"Keyed {PieceLabel} position at {_scrubTime:0.##}s · X {_composeX.Text}, Y {_composeY.Text}.";
+    }
+
+    /// <summary>
+    /// Grabs the start grip on a row so the item can be dragged later in the take. The grip sits at
+    /// the item's own start, so a second slide begins from where the first one ended.
+    /// </summary>
+    bool TryStartItemSlide(Point point, TimelineEntry entry)
+    {
+        if (entry.Id.Length == 0) return false;
+        var rowIndex = _timelineItems.IndexOf(entry);
+        if (rowIndex < 0) return false;
+        var rowTop = TimelineHeader + rowIndex * TimelineRowHeight;
+        if (point.Y < rowTop + 4 || point.Y > rowTop + 30) return false;
+        var handleX = XForGlobal(DelayFor(entry.Id));
+        if (Math.Abs(point.X - handleX) > 8) return false;
+        _timelineList.SelectedIndex = rowIndex;
+        SelectTimelineItem();
+        _timelineDragId = entry.Id;
+        _timelineDragTarget = -1;
+        _timelineDragStartX = point.X;
+        _timelineSlideStart = DelayFor(entry.Id);
+        _timelineSlideHadOwnStart = HasOwnStart(entry.Id);
+        _timelineSlideMode = true;
+        _timelineDragMoved = true;
+        _timeline.CaptureMouse();
+        _status.Text = $"Sliding {entry.Label} — drag sideways to start it later, or back to 0s to follow the order.";
+        return true;
+    }
+
+    /// <summary>Writes X and Y keys at the playhead; a second drag at the same time replaces them.</summary>
+    void WritePositionKey(double x, double y)
+    {
+        var phase = CurrentPhase;
+        if (phase is null) return;
+        var time = Math.Clamp(_scrubTime, 0, phase.Seconds);
+        foreach (var (target, value) in new[] { (MotionTarget.X, x), (MotionTarget.Y, y) })
+        {
+            var track = phase.Track(target, _pieceId);
+            track.Keys.RemoveAll(key => Math.Abs(key.Time - time) < 0.005);
+            track.Keys.Add(new MotionKey(time, value, MotionEase.InOut));
+            track.Normalize(phase.Seconds);
+        }
+    }
+
+    void UpdateTimecode()
+    {
+        var phase = CurrentPhase;
+        var time = phase is null ? 0 : Math.Clamp(_scrubTime, 0, phase.Seconds);
+        var frames = Math.Max(1, (int)Math.Round((phase?.Seconds ?? 0) * FrameRate));
+        _timecode.Text = $"{time:0.00}s · f{Math.Round(time * FrameRate):00}/{frames:00}";
     }
 
     /// <summary>Where the selected phase begins on the whole clip's ruler.</summary>
@@ -3212,6 +3811,7 @@ public sealed class MotionMakerWindow : Window
         if (CurrentPhase is null) return;
         _ticker.Stop();
         var point = e.GetPosition(_timeline);
+        if (TryStartPhaseEnd(point)) return;
         if (point.Y < TimelineHeader)
         {
             var phaseIndex = PhaseIndexAt(point.X);
@@ -3245,6 +3845,10 @@ public sealed class MotionMakerWindow : Window
                     _timelineDragId = item.Id;
                     _timelineDragTarget = -1;
                     _timelineDragStartY = point.Y;
+                    _timelineDragStartX = point.X;
+                    _timelineSlideStart = DelayFor(item.Id);
+                    _timelineSlideHadOwnStart = HasOwnStart(item.Id);
+                    _timelineSlideMode = false;
                     _timelineDragMoved = false;
                     _timeline.CaptureMouse();
                 }
@@ -3260,6 +3864,8 @@ public sealed class MotionMakerWindow : Window
         // A key dot wins over scrubbing. Hit-testing happens here, on the canvas, rather than on
         // each tiny dot, so a key can be grabbed even when the playhead or another lane covers it.
         if (TryStartKeyDrag(point)) return;
+        // Next comes the grip at a row's start: it slides that item in time without touching keys.
+        if (onRow && TryStartItemSlide(point, _timelineItems[row])) return;
         var atPhase = PhaseIndexAt(point.X);
         if (atPhase != _phaseIndex)
         {
@@ -3287,9 +3893,28 @@ public sealed class MotionMakerWindow : Window
     {
         if (e.LeftButton != MouseButtonState.Pressed) { EndDrag(); return; }
         var point = e.GetPosition(_timeline);
+        if (_endDragPhase is not null)
+        {
+            ResizePhaseTo(point.X);
+            return;
+        }
         if (_timelineDragId is not null)
         {
-            if (!_timelineDragMoved && Math.Abs(point.Y - _timelineDragStartY) >= 4) _timelineDragMoved = true;
+            if (!_timelineDragMoved)
+            {
+                var dx = Math.Abs(point.X - _timelineDragStartX);
+                var dy = Math.Abs(point.Y - _timelineDragStartY);
+                if (dx < 4 && dy < 4) return;
+                // Sideways wins over up/down: dragging a row to the right puts that item later in
+                // the take without disturbing the order of the rest.
+                _timelineSlideMode = dx > dy;
+                _timelineDragMoved = true;
+            }
+            if (_timelineSlideMode)
+            {
+                SlideItemTo(point.X);
+                return;
+            }
             if (_timelineDragMoved)
             {
                 var insert = Math.Clamp((int)Math.Round((point.Y - TimelineHeader) / TimelineRowHeight), 1, _timelineItems.Count);
@@ -3318,16 +3943,36 @@ public sealed class MotionMakerWindow : Window
 
     void TimelineUp(object sender, MouseButtonEventArgs e)
     {
+        if (_endDragPhase is not null)
+        {
+            _endDragPhase = null;
+            _timeline.ReleaseMouseCapture();
+            DrawTimeline();
+            BuildStage();
+            _status.Text = $"Take length kept · the clip is {_clip.TotalSeconds:0.##}s.";
+            return;
+        }
         if (_timelineDragId is not null)
         {
             var id = _timelineDragId;
             var target = _timelineDragTarget;
             var moved = _timelineDragMoved;
+            var slid = _timelineSlideMode;
             _timelineDragId = null;
             _timelineDragTarget = -1;
             _timelineDragMoved = false;
+            _timelineSlideMode = false;
             _timeline.ReleaseMouseCapture();
-            if (moved && target >= 0) CommitTimelineDrop(id, target);
+            if (slid)
+            {
+                // A click that only wobbled sideways leaves the item exactly as it was.
+                if (!_timelineSlideHadOwnStart && Math.Abs(DelayFor(id) - _timelineSlideStart) < 0.03)
+                    _clip.ItemStarts.Remove(id);
+                DrawTimeline();
+                BuildStage();
+                _status.Text = $"{TimelineLabelOf(id)} now starts {DelayFor(id):0.##}s into the take.";
+            }
+            else if (moved && target >= 0) CommitTimelineDrop(id, target);
             else DrawTimeline();
             return;
         }
@@ -3392,13 +4037,83 @@ public sealed class MotionMakerWindow : Window
         _dragColorKey = null;
         _dragColorTrack = null;
         _dragDiamond = null;
+        _endDragPhase = null;
         if (_timelineDragId is not null)
         {
             _timelineDragId = null;
             _timelineDragTarget = -1;
             _timelineDragMoved = false;
+            _timelineSlideMode = false;
             DrawTimeline();
         }
+    }
+
+    /// <summary>The time at the end of a take, in the timeline's global seconds.</summary>
+    double PhaseEndGlobal(int index)
+    {
+        var time = 0.0;
+        for (var i = 0; i <= index && i < _clip.Phases.Count; i++) time += _clip.Phases[i].Seconds;
+        return time;
+    }
+
+    /// <summary>Grabs the end grip above a take so its length can be dragged directly.</summary>
+    bool TryStartPhaseEnd(Point point)
+    {
+        if (point.Y > TimelineHeader) return false;
+        for (var index = 0; index < _clip.Phases.Count; index++)
+        {
+            if (Math.Abs(point.X - XForGlobal(PhaseEndGlobal(index))) > 8) continue;
+            if (index != _phaseIndex)
+            {
+                _phaseIndex = index;
+                _phaseList.SelectedIndex = index;
+                LoadPhase();
+            }
+            _endDragPhase = _clip.Phases[index];
+            _endDragStartX = point.X;
+            _endDragStartSeconds = _endDragPhase.Seconds;
+            _endDragSecondsPerPixel = TimelineTotalSeconds / Math.Max(1, TimelineTrackWidth);
+            _timeline.CaptureMouse();
+            _status.Text = $"Resizing {_endDragPhase.Name} — drag the end grip to add or remove time.";
+            return true;
+        }
+        return false;
+    }
+
+    void ResizePhaseTo(double x)
+    {
+        if (_endDragPhase is not { } phase) return;
+        var seconds = Math.Clamp(_endDragStartSeconds + (x - _endDragStartX) * _endDragSecondsPerPixel, 0.05, 30);
+        phase.Seconds = Math.Round(seconds, 3);
+        DrawTimeline();
+        _status.Text = $"{phase.Name} is {phase.Seconds:0.##}s · the clip is now {_clip.TotalSeconds:0.##}s.";
+    }
+
+    string TimelineLabelOf(string id) =>
+        _clip.Pieces.FirstOrDefault(piece => IsPiece(piece.Id))?.Name
+        ?? TimelineLayout.Elements.FirstOrDefault(item => string.Equals(item.Id, id, StringComparison.OrdinalIgnoreCase))?.Name
+        ?? "The item";
+
+    /// <summary>
+    /// Slides one row in time. The value is stored against the item, so a later drag picks it up
+    /// from where the previous one left off; zero hands the item back to the order and gap.
+    /// </summary>
+    void SlideItemTo(double x)
+    {
+        if (_timelineDragId is not { Length: > 0 } id) return;
+        var delta = (x - _timelineDragStartX) / TimelineTrackWidth * TimelineTotalSeconds;
+        var start = Math.Clamp(_timelineSlideStart + delta, 0, 30);
+        if (start < 0.01) _clip.ItemStarts.Remove(id);
+        else _clip.ItemStarts[id] = Math.Round(start, 3);
+        // Starting an item later than its take is long enough adds the time it needs, so the whole
+        // layout really grows instead of the item falling off the end of a fixed leg.
+        if (start > 0.01 && CurrentPhase is { } phase)
+        {
+            var needed = Math.Min(30, Math.Round(start + 0.2, 3));
+            if (phase.Seconds < needed) phase.Seconds = needed;
+        }
+        DrawTimeline();
+        _status.Text = $"{TimelineLabelOf(id)} starts {DelayFor(id):0.##}s into the take.";
     }
 
     /// <summary>
@@ -3601,7 +4316,19 @@ public sealed class MotionMakerWindow : Window
         Canvas.SetLeft(_playhead, XForGlobal(PhaseStart + DelayFor(_pieceId) + _scrubTime));
         Canvas.SetTop(_playhead, TimelineHeader - 3);
         _playhead.Y2 = _timeline.Height;
+        if (_rulerPlayheadX is var _ && _ruler.Children.Count > 0)
+        {
+            // Keep the ruler marker with the tracks without redrawing the whole ruler per frame.
+            var marker = _ruler.Children.OfType<Line>().LastOrDefault(line =>
+                line.Stroke is SolidColorBrush brush && brush.Color == Color.FromRgb(0xFF, 0x6B, 0x6B));
+            if (marker is not null)
+            {
+                marker.X1 = marker.X2 = XForGlobal(PhaseStart + DelayFor(_pieceId) + _scrubTime);
+                _rulerPlayheadX = marker.X1;
+            }
+        }
         RefreshComposerReadout();
+        UpdateTimecode();
     }
 
     /// <summary>While scrubbing, show the surface the selected phase belongs to.</summary>
@@ -3750,6 +4477,7 @@ public sealed class MotionMakerWindow : Window
         MotionEase.InOut => "Ease in-out",
         MotionEase.Back => "Back (overshoot)",
         MotionEase.Bounce => "Bounce",
+        MotionEase.Step => "Step (hold, then jump)",
         _ => "Elastic"
     };
 

@@ -17,7 +17,11 @@ public enum MotionTarget
     Width, Height, FontSize, BorderThickness, TextOpacity, BackgroundOpacity, BorderOpacity
 }
 
-public enum MotionEase { Linear, In, Out, InOut, Back, Bounce, Elastic }
+/// <summary>
+/// How a value approaches a key. <see cref="Step"/> holds the previous value and jumps at the key,
+/// which is how an operator asks for a deliberate cut inside an otherwise smooth move.
+/// </summary>
+public enum MotionEase { Linear, In, Out, InOut, Back, Bounce, Elastic, Step }
 
 /// <summary>Which part of an element a colour keyframe paints.</summary>
 public enum MotionColorRole { Text, Background, Border }
@@ -402,6 +406,22 @@ public sealed class MotionClip
     /// </summary>
     public List<string> PieceOrder { get; set; } = [];
 
+    /// <summary>
+    /// Where an individual item starts, in seconds after its phase begins. A value here replaces
+    /// the order × gap default, so dragging one row later on the timeline moves that item alone and
+    /// the renderer starts it at exactly the time the builder shows.
+    /// </summary>
+    public Dictionary<string, double> ItemStarts { get; set; } = [];
+
+    /// <summary>The start offset for an item: an explicit start first, else its slot in the order.</summary>
+    public double StartFor(string? id, int order)
+    {
+        if (!string.IsNullOrWhiteSpace(id) && ItemStarts is { } starts
+            && starts.TryGetValue(id, out var start) && double.IsFinite(start))
+            return Math.Clamp(start, 0, 30);
+        return order <= 0 ? 0 : order * Math.Clamp(ItemStagger, 0, 1.5);
+    }
+
     /// <summary>A short line for lists: how many phases, tracks and colour keys the clip holds.</summary>
     public string Summary
     {
@@ -485,6 +505,11 @@ public sealed class MotionClip
         ItemStagger = Math.Clamp(double.IsFinite(ItemStagger) ? ItemStagger : 0.08, 0, 1.5);
         PieceOrder ??= [];
         PieceOrder = PieceOrder.Take(60).Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        ItemStarts ??= [];
+        ItemStarts = ItemStarts
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && double.IsFinite(pair.Value))
+            .Take(60)
+            .ToDictionary(pair => pair.Key.Trim(), pair => Math.Clamp(pair.Value, 0, 30));
         Pieces ??= [];
         Pieces = Pieces.Take(24).Where(piece => piece is not null).ToList();
         var seenPieces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -748,6 +773,7 @@ public static class MotionCurves
             MotionEase.Back => Back(amount),
             MotionEase.Bounce => Bounce(amount),
             MotionEase.Elastic => Elastic(amount),
+            MotionEase.Step => amount >= 1 ? 1 : 0,
             _ => amount
         };
     }

@@ -65,7 +65,8 @@ public sealed class MacroRunner
         or MacroActionKind.PutOnAir or MacroActionKind.TakeOffAir or MacroActionKind.SwitchLayout
         or MacroActionKind.Wait or MacroActionKind.Note or MacroActionKind.RunMacro
         or MacroActionKind.MediaVolume or MacroActionKind.Replay
-        or MacroActionKind.StoryboardScene or MacroActionKind.LayerEffect;
+        or MacroActionKind.StoryboardScene or MacroActionKind.LayerEffect
+        or MacroActionKind.LayoutLayer or MacroActionKind.LayoutGroup or MacroActionKind.LayoutState;
 
     async Task RunStepsAsync(IEnumerable<MacroAction> steps, RunScope scope, int depth)
     {
@@ -163,6 +164,12 @@ public sealed class MacroRunner
                 return PublishStoryboardScene(action);
             case MacroActionKind.LayerEffect:
                 return ApplyLayerEffect(action);
+            case MacroActionKind.LayoutLayer:
+                return ApplyLayoutLayer(action);
+            case MacroActionKind.LayoutGroup:
+                return ApplyLayoutGroup(action);
+            case MacroActionKind.LayoutState:
+                return ApplyLayoutState(action);
             case MacroActionKind.PenaltyFlag:
                 _engine.SetPenalty(action.Value != 0, action.Path, action.Home);
                 return true;
@@ -263,6 +270,33 @@ public sealed class MacroRunner
         var effect = (LayerEffectKind)Math.Clamp(action.Value, 0, 2);
         var amount = action.Amount > 0 ? action.Amount / 100.0 : 0.5;
         return _catalog.SetLayerEffect(action.DisplayId, action.LayoutId, action.Path, effect, amount, action.Text);
+    }
+
+    /// <summary>The layout a layer step targets: the named one, else the display's on-air layout.</summary>
+    string? LayerTargetLayout(MacroAction action)
+    {
+        if (_catalog is null) return null;
+        var named = _catalog.FindLayout(action.LayoutId);
+        if (named is not null) return named.Id;
+        return _catalog.PublishedLayoutOf(string.IsNullOrWhiteSpace(action.DisplayId) ? null : action.DisplayId)?.Id;
+    }
+
+    bool ApplyLayoutLayer(MacroAction action)
+    {
+        if (_catalog is null || string.IsNullOrWhiteSpace(action.Path)) return false;
+        return _catalog.SetElementVisible(LayerTargetLayout(action), action.Path, action.Home);
+    }
+
+    bool ApplyLayoutGroup(MacroAction action)
+    {
+        if (_catalog is null || string.IsNullOrWhiteSpace(action.Path)) return false;
+        return _catalog.SetGroupVisible(LayerTargetLayout(action), action.Path, action.Home);
+    }
+
+    bool ApplyLayoutState(MacroAction action)
+    {
+        if (_catalog is null || string.IsNullOrWhiteSpace(action.Path)) return false;
+        return _catalog.ApplyLayoutState(LayerTargetLayout(action), action.Path);
     }
 
     bool SwitchLayout(MacroAction action)

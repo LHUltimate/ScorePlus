@@ -46,7 +46,10 @@ public partial class LiveSwitchWindow : Window
     GraphicsOutputWindow? _graphicsWindow;
 
     sealed record DisplayChoice(string Id, string Label) { public override string ToString() => Label; }
-    sealed record TransitionChoice(LayoutTransition Kind, string Label) { public override string ToString() => Label; }
+    sealed record TransitionChoice(LayoutTransition Kind, string Label, MotionClip? Clip = null)
+    {
+        public override string ToString() => Label;
+    }
     sealed record LayoutPick(string Id, string Label) { public override string ToString() => Label; }
     sealed record StandardPick(string Key, string Label) { public override string ToString() => Label; }
     sealed record DisplayPick(string Id, string Label) { public override string ToString() => Label; }
@@ -100,8 +103,7 @@ public partial class LiveSwitchWindow : Window
         ThemeManager.Apply(this, theme);
         _displayId = _catalog.ActiveDisplay.Id;
         _previewIndex = _catalog.ActiveDisplay.PublishedIndex;
-        TransitionBox.ItemsSource = Transitions;
-        TransitionBox.SelectedIndex = 1;
+        RefreshTransitions();
         _catalog.Changed += CatalogChanged;
         _engine.Changed += EngineChanged;
         _colourWatch.Tick += (_, _) => RefreshColoursIfChanged();
@@ -164,6 +166,7 @@ public partial class LiveSwitchWindow : Window
             ProgramLabel.Text = $"PROGRAM · {program.Name}";
             PreviewLabel.Text = $"PREVIEW · {preview.Name}";
 
+            RefreshTransitions();
             SetHost(ProgramHost, program);
             SetHost(PreviewHost, preview, showAllLayers: true);
             BuildMultiview(layouts, publishedIndex);
@@ -724,9 +727,14 @@ public partial class LiveSwitchWindow : Window
         Refresh();
     }
 
+    string _stateLayoutId = "";
+
     void BuildLayers(ScorebugLayout layout)
     {
+        _stateLayoutId = layout.Id;
         LayerPanel.Children.Clear();
+        GroupPanel.Children.Clear();
+        StatePanel.Children.Clear();
         foreach (var element in Enumerable.Reverse(layout.Elements).Take(14))
         {
             var item = element;
@@ -748,6 +756,77 @@ public partial class LiveSwitchWindow : Window
             };
             LayerPanel.Children.Add(button);
         }
+        // Display Studio groups behave as layers: one chip shows or hides the whole group.
+        foreach (var (groupId, name) in layout.Groups().Take(12))
+        {
+            var id = groupId;
+            var members = layout.Elements.Where(element =>
+                string.Equals(element.GroupId, id, StringComparison.OrdinalIgnoreCase)).ToList();
+            var visible = members.Count > 0 && members.All(element => element.Visible);
+            var button = new Button
+            {
+                Content = name,
+                Opacity = visible ? 1 : 0.45,
+                ToolTip = visible
+                    ? $"Group {name} is on · click to hide all {members.Count} layers"
+                    : $"Group {name} is off · click to show all {members.Count} layers"
+            };
+            button.SetResourceReference(StyleProperty, "LayerChip");
+            button.Click += (_, _) =>
+            {
+                _catalog.SetGroupVisible(layout.Id, id, !visible);
+                StatusText.Text = $"GROUP · {name} {(visible ? "hidden" : "shown")}";
+                Refresh();
+            };
+            GroupPanel.Children.Add(button);
+        }
+        if (GroupPanel.Children.Count == 0)
+            GroupPanel.Children.Add(new TextBlock
+            {
+                Text = "No groups — group layers in Display Studio to expose them here",
+                FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E)),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+        // Saved states are whole looks: taking one dissolves/animates to its layers and positions.
+        foreach (var state in layout.States.Take(12))
+        {
+            var stateId = state.Id;
+            var button = new Button
+            {
+                Content = state.Name,
+                ToolTip = $"Take {state.Name} with a {state.Transition} hand-over over {state.Seconds:0.##}s",
+                Opacity = 1
+            };
+            button.SetResourceReference(StyleProperty, "LayerChip");
+            button.Click += (_, _) =>
+            {
+                if (_catalog.ApplyLayoutState(layout.Id, stateId))
+                    StatusText.Text = $"STATE · {state.Name} on air · {state.Transition} {state.Seconds:0.##}s";
+                Refresh();
+            };
+            StatePanel.Children.Add(button);
+        }
+        if (StatePanel.Children.Count == 0)
+            StatePanel.Children.Add(new TextBlock
+            {
+                Text = "No states yet — name one and press Save state",
+                FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(0x5C, 0x6B, 0x7E)),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+    }
+
+    void SaveState_Click(object sender, RoutedEventArgs e)
+    {
+        if (_stateLayoutId.Length == 0) return;
+        var name = (StateNameBox.Text ?? "").Trim();
+        if (!_catalog.SaveLayoutState(_stateLayoutId, name))
+        {
+            StatusText.Text = "STATE · no layout is previewed";
+            return;
+        }
+        StatusText.Text = $"STATE · saved {(name.Length == 0 ? "the current look" : name)} · take it from the STATES row";
+        StateNameBox.Text = "";
+        Refresh();
     }
 
     ImageSource Thumbnail(ScorebugLayout layout, int width, int height)
@@ -879,9 +958,38 @@ public partial class LiveSwitchWindow : Window
         Refresh();
     }
 
+    /// <summary>
+    /// The transition list is the built-in presets plus every hand-over saved in the Transition
+    /// Builder, so a custom wipe is one pick away on the switcher rather than only on a layout.
+    /// </summary>
+    void RefreshTransitions()
+    {
+        var selected = TransitionBox.SelectedItem as TransitionChoice;
+        var choices = new List<TransitionChoice>(Transitions);
+        choices.AddRange(_catalog.Transitions
+            .Where(clip => clip is not null && !clip.IsEmpty)
+            .Select(clip => new TransitionChoice(LayoutTransition.Fade, $"Custom · {clip.Name}", clip)));
+        var signature = string.Join("|", choices.Select(choice => choice.Label));
+        if (signature == _transitionSignature && TransitionBox.Items.Count == choices.Count) return;
+        _transitionSignature = signature;
+        var wasRefreshing = _refreshing;
+        _refreshing = true;
+        try
+        {
+            TransitionBox.ItemsSource = choices;
+            TransitionBox.SelectedItem = choices.FirstOrDefault(choice => choice.Label == selected?.Label)
+                ?? choices[Math.Min(1, choices.Count - 1)];
+        }
+        finally { _refreshing = wasRefreshing; }
+    }
+
+    string _transitionSignature = "";
+
     void Transition_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (!_refreshing) SwitchStatus.Text = "Transition selected. TAKE publishes the preview.";
+        if (!_refreshing) SwitchStatus.Text = TransitionBox.SelectedItem is TransitionChoice { Clip: { } clip }
+            ? $"Custom transition “{clip.Name}” selected. TAKE publishes the preview."
+            : "Transition selected. TAKE publishes the preview.";
     }
 
     void Duration_Changed(object sender, TextChangedEventArgs e)
@@ -903,11 +1011,13 @@ public partial class LiveSwitchWindow : Window
         var transition = cut
             ? new TransitionChoice(LayoutTransition.Cut, "Cut")
             : TransitionBox.SelectedItem as TransitionChoice ?? Transitions[1];
-        var seconds = cut ? 0 : double.TryParse(DurationInput.Text, out var value) ? Math.Clamp(value, 0, 5) : 0.5;
+        // A custom hand-over carries its own length; the duration box is for the built-in presets.
+        var seconds = cut ? 0 : transition.Clip is { } custom ? custom.TotalSeconds
+            : double.TryParse(DurationInput.Text, out var value) ? Math.Clamp(value, 0, 5) : 0.5;
         var scene = new StoryboardScene
         {
             Name = display.Layouts[index].Name, LayoutId = display.Layouts[index].Id,
-            Transition = transition.Kind, TransitionSeconds = seconds
+            Transition = transition.Kind, TransitionSeconds = seconds, TransitionClip = transition.Clip
         };
         if (!_catalog.PublishStoryboardScene(scene)) return;
         _previewIndex = index;

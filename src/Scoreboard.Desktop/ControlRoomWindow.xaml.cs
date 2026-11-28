@@ -33,6 +33,8 @@ public partial class ControlRoomWindow : Window
     LiveBookWindow? _liveBook;
     GraphicsOutputWindow? _graphics;
     CameraSwitchWindow? _cameraSwitch;
+    MotionMakerWindow? _animationMaker;
+    MotionMakerWindow? _transitionMaker;
     Window? _ownerWindow;
     WindowState? _ownerState;
 
@@ -79,6 +81,8 @@ public partial class ControlRoomWindow : Window
             _liveBook?.Close();
             _graphics?.Close();
             _cameraSwitch?.Close();
+            _animationMaker?.Close();
+            _transitionMaker?.Close();
             Dispatcher.BeginInvoke(new Action(RestoreOwnerIfMinimized));
         };
     }
@@ -123,6 +127,8 @@ public partial class ControlRoomWindow : Window
             : $"{stream.Provider} · {(stream.DisplayId.Length > 0 ? _catalog.FindDisplay(stream.DisplayId)?.Name ?? "assigned display" : "venue programme")}";
         CameraSwitchStatus.Text = $"{cameras} cameras · Fill A / Fill B";
         MultiviewStatus.Text = $"{cameras} cameras · preview, audience, replay";
+        AnimationStatus.Text = $"{_catalog.Animations.Count} saved animation{(_catalog.Animations.Count == 1 ? "" : "s")}";
+        TransitionStatus.Text = $"{_catalog.Transitions.Count} saved transition{(_catalog.Transitions.Count == 1 ? "" : "s")}";
         StatusText.Text = $"CONTROL ROOM READY · {display.Name} · {program?.Name ?? "no layout"}";
     }
 
@@ -215,6 +221,26 @@ public partial class ControlRoomWindow : Window
         _graphics.Closed += (_, _) => { _graphics = null; Refresh(); };
         _graphics.Show();
         StatusText.Text = "GRAPHICS OUTPUT opened · fill + key";
+    }
+
+    void AnimationMaker_Click(object sender, RoutedEventArgs e)
+    {
+        if (_animationMaker is { IsVisible: true }) { _animationMaker.Activate(); return; }
+        _animationMaker = new MotionMakerWindow(MotionKind.Animation, _catalog, _engine, _theme,
+            layoutId: _catalog.Layout.Id) { Owner = this };
+        _animationMaker.Closed += (_, _) => { _animationMaker = null; Refresh(); };
+        _animationMaker.Show();
+        StatusText.Text = "ANIMATION MAKER opened · keyframes, easing and the graph editor";
+    }
+
+    void TransitionMaker_Click(object sender, RoutedEventArgs e)
+    {
+        if (_transitionMaker is { IsVisible: true }) { _transitionMaker.Activate(); return; }
+        _transitionMaker = new MotionMakerWindow(MotionKind.Transition, _catalog, _engine, _theme,
+            layoutId: _catalog.Layout.Id) { Owner = this };
+        _transitionMaker.Closed += (_, _) => { _transitionMaker = null; Refresh(); };
+        _transitionMaker.Show();
+        StatusText.Text = "TRANSITION BUILDER opened · exit and enter legs on one timeline";
     }
 
     void LiveChannel_Click(object sender, RoutedEventArgs e)

@@ -1860,3 +1860,131 @@ finally
     selection.SetTags("Highlight, highlight; Save | ");
     Check(selection.Tags.SequenceEqual(["Highlight","Save"]),"replay tags are de-duplicated and split consistently");
 }
+
+// Stage 6.5: step keys hold their value, a storyboard scene can carry a hand-over built in the
+// Transition Builder, feeds can write a named player's stat, and the data export carries the
+// whole game rather than only the score.
+{
+    var stepTrack=new MotionTrack(MotionTarget.X,(0,0),(1,400));
+    stepTrack.Keys[1].Ease=MotionEase.Step;
+    Check(Math.Abs((stepTrack.ValueAt(0.5)??-1))<0.001&&Math.Abs((stepTrack.ValueAt(1)??-1)-400)<0.001,
+        "a step key holds the previous value and jumps at its own time");
+    Check(Math.Abs(MotionCurves.Apply(0.5,MotionEase.Linear)-0.5)<0.001&&Math.Abs(MotionCurves.Apply(0.5,MotionEase.Step))<0.001,
+        "linear easing still interpolates while a step stays on the previous key");
+
+    var sceneCatalog=new ScorebugCatalog();
+    var sceneLayout=sceneCatalog.Layout;
+    var customClip=MotionClip.TransitionPreset("Wipe left");
+    customClip.Name="Custom wipe";
+    var scene=new StoryboardScene{Name="Hand-over",LayoutId=sceneLayout.Id,Transition=LayoutTransition.Fade,TransitionSeconds=0.5,TransitionClip=customClip};
+    Check(sceneCatalog.PublishStoryboardScene(scene),"a storyboard scene with a custom hand-over publishes");
+    var published=sceneCatalog.Displays.SelectMany(display=>display.Layouts)
+        .First(layout=>layout.Id==sceneLayout.Id);
+    Check(published.TransitionClip is { } applied&&applied.Name=="Custom wipe"
+        &&Math.Abs(published.TransitionSeconds-customClip.TotalSeconds)<0.001,
+        "a custom transition reaches the published layout with its own length");
+    sceneCatalog.PublishStoryboardScene(new StoryboardScene{LayoutId=sceneLayout.Id,Transition=LayoutTransition.Cut,TransitionSeconds=0});
+    Check(published.TransitionClip is null,"choosing a built-in transition clears the layout's custom hand-over");
+
+    var playerMapping=new DataFeedMapping{Key="player.yards",Target=DataFeedTarget.HomePlayerStat,CustomName="Yards"};
+    Check(playerMapping.IsPlayerStat&&DataFeedLabels.TouchesPlayer(playerMapping.Target)
+        &&DataFeedLabels.Targets.Contains(DataFeedTarget.HomePlayerStat)
+        &&playerMapping.Label.Contains("Yards"),
+        "value mapping offers a named player stat as a target");
+
+    var exportEngine=new GameEngine();
+    exportEngine.NewGame("basketball");
+    exportEngine.SetScore(home:true,21);
+    var exportStat=exportEngine.AddStat("Turnovers");
+    exportEngine.SetStatText(exportStat.Id,"7");
+    var exportRoster=Roster.Create("Export roster");
+    var exportPlayer=exportRoster.AddPlayer();
+    exportPlayer.Number=9;
+    exportPlayer.Name="Jones";
+    exportPlayer.SetStat("Yards",184);
+    var exportRows=GameDataExport.Rows(exportEngine.State,[exportRoster]);
+    Check(exportRows.Any(row=>row.Group=="Custom values"&&row.Key=="Turnovers"&&row.Value=="7"),
+        "the data export carries every custom value");
+    Check(exportRows.Any(row=>row.Group.Contains("Jones")&&row.Key=="Yards"&&row.Value=="184"),
+        "the data export carries each player's stats");
+    Check(exportRows.Any(row=>row.Group=="Sport values"),"the data export carries the sport's own values");
+    var exportCsv=GameDataExport.Csv(exportEngine.State,[exportRoster]);
+    Check(exportCsv.StartsWith("Group,Key,Value")&&exportCsv.Contains("Jones"),
+        "the CSV export has a header and roster rows");
+    var exportJson=GameDataExport.Json(exportEngine.State,[exportRoster]);
+    Check(exportJson.Contains("\"Custom values\"")&&exportJson.Contains("Yards"),
+        "the JSON export groups the same rows");
+}
+
+// The remade timeline: each item can carry its own start time instead of only its slot in the
+// order, and a scale track grows a shape from a small first key to a full last one.
+{
+    var timelineClip=MotionClip.TransitionPreset("Slide");
+    timelineClip.ItemStagger=0.2;
+    timelineClip.PieceOrder=["a","b","c"];
+    Check(Math.Abs(timelineClip.StartFor("a",0))<0.001&&Math.Abs(timelineClip.StartFor("b",1)-0.2)<0.001,
+        "an item without its own start keeps the order and gap");
+    timelineClip.ItemStarts["b"]=1.4;
+    Check(Math.Abs(timelineClip.StartFor("b",1)-1.4)<0.001&&Math.Abs(timelineClip.StartFor("c",2)-0.4)<0.001,
+        "an item with its own start ignores its ordered slot while the others keep theirs");
+    timelineClip.ItemStarts["late"]=99;
+    timelineClip.ItemStarts[" "]=3;
+    timelineClip.Normalize();
+    Check(timelineClip.ItemStarts.Count==2&&!timelineClip.ItemStarts.Keys.Any(id=>id.Trim().Length==0)
+        &&Math.Abs(timelineClip.ItemStarts["late"]-30)<0.001,
+        "per-item start times are clamped to the timeline and blank ids are dropped");
+    var timelineCopy=timelineClip.Copy();
+    Check(timelineCopy.ItemStarts.TryGetValue("late",out var copiedStart)&&Math.Abs(copiedStart-30)<0.001,
+        "per-item start times survive a copy, and so a save");
+    var scaleTrack=new MotionTrack(MotionTarget.Scale,(0,0.2),(1,1));
+    var halfScale=scaleTrack.ValueAt(0.5)??-1;
+    Check(Math.Abs((scaleTrack.ValueAt(0)??0)-0.2)<0.001&&Math.Abs((scaleTrack.ValueAt(1)??0)-1)<0.001
+        &&halfScale>0.2&&halfScale<1,
+        "a scale track expands a shape from its first key to its last");
+}
+
+// Layout states and groups: one layout can hold several looks, a group behaves as one layer, and a
+// state carries the hand-over it was captured with, so a clock can dissolve out and the next move in.
+{
+    var stateFile=Path.Combine(Path.GetTempPath(),$"sp-states-{Guid.NewGuid():N}.spd");
+    try
+    {
+        var catalog=new ScorebugCatalog(stateFile);
+        var layout=catalog.Layout;
+        layout.Elements[0].GroupId="stat-group";
+        layout.Elements[1].GroupId="stat-group";
+        layout.GroupNames["stat-group"]="Stat panel";
+        Check(layout.Groups().Count==1&&layout.GroupNameOf("stat-group")=="Stat panel",
+            "a Display Studio group reads as one named layer");
+        layout.Elements[0].Visible=false;
+        layout.Elements[1].X=40;
+        layout.Elements[1].Y=60;
+        layout.Transition=LayoutTransition.Fade;
+        layout.TransitionSeconds=0.4;
+        Check(catalog.SaveLayoutState(layout.Id,"Clock only"),"a layout state captures the current look");
+        var state=layout.States[0];
+        Check(state.Layers.Count==layout.Elements.Count&&state.Name=="Clock only"&&state.Seconds>0.3,
+            "a state keeps a layer entry for every item, its name and its dissolve time");
+        layout.Elements[0].Visible=true;
+        layout.Elements[1].X=500;
+        layout.Transition=LayoutTransition.Cut;
+        Check(catalog.ApplyLayoutState(layout.Id,state.Id),"a layout state can be taken");
+        Check(!layout.Elements[0].Visible&&Math.Abs(layout.Elements[1].X-40)<0.001&&Math.Abs(layout.Elements[1].Y-60)<0.001,
+            "taking a state restores visibility and the moved clock position");
+        Check(layout.Transition==LayoutTransition.Fade&&Math.Abs(layout.TransitionSeconds-0.4)<0.001,
+            "a state brings back the hand-over it was saved with");
+        Check(catalog.SetGroupVisible(layout.Id,"stat-group",true)
+            &&layout.Elements[0].Visible&&layout.Elements[1].Visible,
+            "a group can be turned on as one layer");
+        var copy=layout.Copy("State copy");
+        Check(copy.States.Count==1&&copy.States[0].Layers.Count==copy.Elements.Count
+            &&copy.States[0].Layers.All(layer=>copy.Elements.Any(element=>element.Id==layer.ElementId)),
+            "a duplicated layout remaps its state layers to the fresh element ids");
+        var reopened=new ScorebugCatalog(stateFile);
+        var reopenedLayout=reopened.Layout;
+        Check(reopenedLayout.States.Count==1&&reopenedLayout.States[0].Name=="Clock only"
+            &&reopenedLayout.GroupNames.ContainsKey("stat-group"),
+            "states and group names survive a save and reopen");
+    }
+    finally { try{if(File.Exists(stateFile))File.Delete(stateFile);}catch{} }
+}

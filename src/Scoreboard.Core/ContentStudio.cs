@@ -366,10 +366,17 @@ public sealed class StoryboardScene
     public double TransitionSeconds { get; set; } = 0.5;
     public double HoldSeconds { get; set; } = 5;
 
+    /// <summary>
+    /// A hand-over built in the Transition Builder. When it is set it replaces the preset for this
+    /// scene, so a storyboard, the Live Switch and a macro all take with the same custom motion.
+    /// </summary>
+    public MotionClip? TransitionClip { get; set; }
+
     public StoryboardScene Copy() => new()
     {
         Id = Id, Name = Name, LayoutId = LayoutId, Transition = Transition,
-        TransitionSeconds = TransitionSeconds, HoldSeconds = HoldSeconds
+        TransitionSeconds = TransitionSeconds, HoldSeconds = HoldSeconds,
+        TransitionClip = TransitionClip?.Snapshot()
     };
 }
 
@@ -399,6 +406,11 @@ public sealed class Storyboard
             scene.LayoutId = (scene.LayoutId ?? "").Trim();
             scene.TransitionSeconds = Math.Clamp(double.IsFinite(scene.TransitionSeconds) ? scene.TransitionSeconds : 0.5, 0, 5);
             scene.HoldSeconds = Math.Clamp(double.IsFinite(scene.HoldSeconds) ? scene.HoldSeconds : 5, 0.25, 3600);
+            if (scene.TransitionClip is { } clip)
+            {
+                if (clip.Kind != MotionKind.Transition || clip.IsEmpty) scene.TransitionClip = null;
+                else { clip.Normalize(); scene.TransitionClip = clip.Snapshot(); }
+            }
         }
     }
 
